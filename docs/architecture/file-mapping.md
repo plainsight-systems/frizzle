@@ -89,6 +89,7 @@ slice 1 and the TypeScript rules from slice 3.
 | `core/capture/` | O | [N] | The store, a slot per layer, its layout |
 | `core/edit/` | Q | [N] | Edit kinds and what each does as a plain function; the first layer where two sets differ; `edit.wgsl` and its launcher |
 | `core/diagnostics.h` | U | [P] | The build's instrumentation gate |
+| `ported.json` | V | [N] | Each ported file's SHA-256 as ported, written by `scripts/port_charlotte.py`; tells unchanged files from changed ones |
 | `wasm/bindings.cpp` | R | [N] | The four operations for the worker; the only Emscripten-aware C++ |
 | `shaders/vector_add.wgsl` | D | [P] | The device self-check |
 

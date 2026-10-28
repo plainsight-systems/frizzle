@@ -17,8 +17,12 @@ reads the manifest to tell ported-unchanged files from changed ones.
 
     python3 scripts/port_charlotte.py --charlotte <Charlotte checkout> [--verify]
 
---verify writes nothing: it redoes the port in memory and fails unless every
-file and the manifest match it exactly. Nothing is downloaded or installed.
+A file that has changed since it was ported (its hash no longer matches the
+manifest) is never overwritten; it is listed and left as it is.
+
+--verify writes nothing: it redoes the port in memory and fails unless the
+manifest matches it exactly, then lists the files that have changed since
+porting. Nothing is downloaded or installed.
 """
 import argparse
 import hashlib
@@ -69,6 +73,9 @@ INVENTORY = [
     'core/kernels/attention/', 'core/kernels/gather/', 'core/kernels/matmul/', 'core/kernels/norm/',
     'core/kernels/rope/rope.h', 'core/kernels/rope/rope.cpp', 'core/kernels/rope/rope.wgsl',
     'core/kernels/rope/rope_cache.wgsl', 'core/kernels/topk/',
+    # rope.cpp builds the encoder form too, so its shader comes over with it,
+    # unused by Gemma 3 (docs/research/2026-10-27-charlotte-inventory.md).
+    'core/kernels/rope/rope_encode.wgsl',
     # Cache
     'core/cache/kv.h', 'core/cache/kv.cpp', 'core/cache/prefix.h', 'core/cache/prefix.cpp',
     # Sampling and the turn
@@ -145,28 +152,36 @@ def main():
         'commit': COMMIT,
         'files': {},
     }
-    mismatched = []
+    recorded = json.loads(MANIFEST.read_text())['files'] if MANIFEST.is_file() else {}
+    changed = []
     for path in paths:
         data = port(args.charlotte, path, clang_format)
         manifest['files'][path] = hashlib.sha256(data).hexdigest()
         target = ROOT / path
-        if args.verify:
-            if not target.is_file() or target.read_bytes() != data:
-                mismatched.append(path)
-        else:
+        if target.is_file() and target.read_bytes() != data:
+            current = hashlib.sha256(target.read_bytes()).hexdigest()
+            if path in recorded and current != recorded[path]:
+                changed.append(path)
+                continue
+            if args.verify:
+                raise ValueError(f'{path} differs from a fresh port but matches its recorded hash; '
+                                 'the manifest is wrong')
+        if not args.verify:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
     text = json.dumps(manifest, indent=1) + '\n'
+    unchanged = len(paths) - len(changed)
     if args.verify:
         if not MANIFEST.is_file() or MANIFEST.read_text() != text:
-            mismatched.append(str(MANIFEST.relative_to(ROOT)))
-        if mismatched:
-            print('Differs from a fresh port of Charlotte ' + COMMIT[:7] + ':', *mismatched, sep='\n  ')
+            print(f'{MANIFEST.relative_to(ROOT)} differs from a fresh port of Charlotte {COMMIT[:7]}')
             return 1
-        print(f'All {len(paths)} files and the manifest match a fresh port of Charlotte {COMMIT[:7]}')
-        return 0
-    MANIFEST.write_text(text)
-    print(f'Ported {len(paths)} files from Charlotte {COMMIT[:7]}; manifest: {MANIFEST.relative_to(ROOT)}')
+        print(f'The manifest matches a fresh port of Charlotte {COMMIT[:7]}; '
+              f'{unchanged} of {len(paths)} files are as ported')
+    else:
+        MANIFEST.write_text(text)
+        print(f'Ported {len(paths)} files from Charlotte {COMMIT[:7]}; manifest: {MANIFEST.relative_to(ROOT)}')
+    if changed:
+        print('Changed since porting, left as they are:', *changed, sep='\n  ')
     return 0
 
 

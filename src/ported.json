@@ -89,6 +89,7 @@
   "src/core/kernels/topk/topk.cpp": "154ff1419f65fcfb5ad51a460bae83b876990f549191a0cdf52c786b9d1a4316",
   "src/core/kernels/topk/topk.h": "b73e80eca046e3d95a3215a79ec7237602e5a519e65b5f1395341535cee7f0b0",
   "src/core/kernels/topk/topk.wgsl": "38abf9ad0dd01a631ccf4161931be48fcf1d0d47182551cc70ae54d5e82b907d",
+  "src/core/kernels/rope/rope_encode.wgsl": "b2101ed3067723ddc6fa4cf344709362ebbd4d1747f022fea762686a874786cd",
   "src/core/cache/kv.h": "16a1bf7e826e8891cc857cbe29c6476a9c37aba7d682cfdea9a28a7811f87e26",
   "src/core/cache/kv.cpp": "13e352eaa4d8ec1a5cc543045055f0dad14ef9de42918acabea140c98e0bba26",
   "src/core/cache/prefix.h": "4a6938b2248bf08f5725e970e47c8c87933f5f2ed00407a74111b2900ba0a584",

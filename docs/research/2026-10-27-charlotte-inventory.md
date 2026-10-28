@@ -73,3 +73,8 @@ Left behind: the chat, picker, catalog, drawer, model, cache and status views; s
 - **The correctness oracle:** `tests/gpu/reference_test.cpp` with `tools/reference_logits/` and `make_reference_logits.sh`, which compare the model's logits with llama.cpp. Frizzle's "no edits reproduces the original exactly" requirement builds on this.
 - **Tools:** `fetch_dawn.py`, `fetch_test_data.py` (Gemma 3 only), `gguf_header.py`, `make_tokenizer_fixtures.py`, `make_unicode_tables.py`, `tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.inc`, and `tests/web/template.test.js` with its Gemma template fixture.
 - **Left behind:** media, encoder, embedder, Q6_K, Gemma 4 and other-model tests and fixtures; the site, boundary and review shell checks, which are Charlotte's own.
+
+## Addendum, 2026-10-28: found while porting
+
+- **`kernels/rope/rope_encode.wgsl` comes over too.** `rope.cpp` builds the encoder form of the rope kernel as well as the decoder's, so it does not compile without that shader. It is ported unused, like the other families' branches in the shared kernels, and leaves with them.
+- **Preflight goes entirely.** Its only caller is Charlotte's `wasm/bindings.cpp`, which Frizzle rewrites, and the context is already sized to the device in `residency/plan`, which comes over whole; nothing needs to be found in preflight and kept.
