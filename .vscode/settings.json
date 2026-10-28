@@ -1,0 +1,19 @@
+{
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/native-debug/compile_commands.json",
+  "C_Cpp.default.cppStandard": "c++23",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/src",
+    "${workspaceFolder}/build/native-debug/generated"
+  ],
+  "C_Cpp.clang_format_path": "${workspaceFolder}/scripts/clang-format",
+  "C_Cpp.clang_format_style": "file",
+  "[cpp]": {
+    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.formatOnSave": true
+  },
+  "files.associations": {
+    "*.wgsl": "wgsl"
+  },
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": false
+}
