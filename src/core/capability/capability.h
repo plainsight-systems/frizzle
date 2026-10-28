@@ -6,50 +6,88 @@
 
 namespace frizzle::arch {
 struct Architecture;
-struct MediaEncoder;
-enum class MediaKind;
 }  // namespace frizzle::arch
 namespace frizzle::formats {
 class Format;
-}
+}  // namespace frizzle::formats
 namespace frizzle::tokenizer {
 struct Algorithm;
-struct PreTokenizer;
 }  // namespace frizzle::tokenizer
 
 namespace frizzle::capability {
 
-// Axis I: changes when the harness gains or loses an implementation, and for
-// no other reason.
+// Axis I: the capability table. Changes when Frizzle gains or loses an
+// implementation, and for no other reason.
 //
-// Contract 3. One table from each identifier a GGUF file carries to the
-// implementation that runs it. Supported means present here. Preflight, format
-// dispatch, tokenizer selection and graph selection all find implementations
-// through these lookups, so what the picker reports and what the loader runs
-// cannot disagree. There is no second list.
+// Contract
+//   - Three lookups, from an identifier a GGUF file carries to the
+//     implementation that runs it: general.architecture to an Architecture,
+//     a tensor's type to a Format, tokenizer.ggml.model to a tokenizer
+//     Algorithm.
+//   - Supported means present in the table. A lookup returns the
+//     implementation, or null when Frizzle has none. Null is not an error
+//     here: the caller decides what an unsupported identifier means, and
+//     names it.
+//   - A returned pointer is non-owning, to an immutable object of static
+//     storage duration, valid for the life of the program.
+//   - No allocation, no I/O, no exceptions. Read-only, so safe from any
+//     thread.
+//   - What the table holds: the architecture "gemma3"; the formats F32, F16,
+//     Q4_0, Q4_1 and Q8_0; the tokenizer model "llama", SentencePiece BPE,
+//     which is what Gemma 3's file names. The F16 row is kept as the
+//     inventory decided, beside the F16 format the KV cache is stored in;
+//     no weight in the pinned file is F16, and no lookup in the ported code
+//     asks for it today.
 //
-// Several identifiers may name one implementation (principle 2). A lookup
-// returns the implementation, or null if the harness has none; null is not an
-// error here, and preflight turns it into a blocker that names what is
-// missing.
+// Algorithm
+//   1. A lookup scans its table in order and returns the implementation of
+//      the first row whose identifier equals the argument.
+//   2. If no row matches, it returns null.
+//
+// Design and cost
+//   - Changed from Charlotte e003048: the media-encoder and pre-tokenizer
+//     lookups, and every row for an architecture, format or tokenizer the
+//     pinned model does not use, are removed. Nothing in the ported code
+//     calls the removed lookups.
+//   - The tables are constexpr arrays of an identifier and a pointer to a
+//     constant: constant-initialized read-only data, with no work at startup
+//     and no dependence on another translation unit's initialization order.
+//   - A lookup is a linear scan of at most five rows: at most five
+//     comparisons of a short string or an enum, no allocation.
+//   - Every format row is checked at compile time to name its Format's own
+//     type, so the table and the formats cannot disagree.
+//
+// Corpus guidance
+//   C++ Core Guidelines
+//     F.60   Prefer T* over T& when "no argument" is a valid option: each
+//            lookup returns a pointer, null for "Frizzle has none".
+//     F.6    If your function must not throw, declare it noexcept: the
+//            lookups only compare and return.
+//     P.5    Prefer compile-time checking to run-time checking: the format
+//            rows' types are checked by a static_assert.
+//     Con.5  Use constexpr for values that can be computed at compile time:
+//            the tables.
+//     ES.71  Prefer a range-for: the scan reads each row once, by const
+//            reference.
+//   C++ performance guidelines
+//     EMB.6   Push computation to compile time: the tables are constant data,
+//             with no startup work.
+//     CDSA.27 Scan flat before building an index: five rows at most.
+//     CDSA.11 Pick a trie or a hash by query shape: these are point lookups,
+//             which favour a hash at scale; not applied at five rows, per
+//             CDSA.27.
+//     COPY.7  Eliminate hidden copies: rows are read by const auto&, and the
+//             identifiers (a string_view, an enum) are passed by value.
+//     LIFE.6  The static-initialization-order fiasco: not at risk, since the
+//             rows point at constants and are constant-initialized.
 
 [[nodiscard]] const arch::Architecture* find_architecture(
     std::string_view general_architecture) noexcept;
 
-// A companion file's media encoder of `kind`, by the value of that kind's
-// projector key (arch/media_encoder.h): clip.vision.projector_type or
-// clip.audio.projector_type, the identifier that names the encoder, where
-// its general.architecture, "clip", names none. A type the table holds for
-// the other kind is not found.
-[[nodiscard]] const arch::MediaEncoder* find_media_encoder(
-    arch::MediaKind kind, std::string_view projector_type) noexcept;
 [[nodiscard]] const formats::Format* find_format(
     gguf::TensorType type) noexcept;
 
 [[nodiscard]] const tokenizer::Algorithm* find_tokenizer(
     std::string_view tokenizer_model) noexcept;
-
-[[nodiscard]] const tokenizer::PreTokenizer* find_pretokenizer(
-    std::string_view tokenizer_pre) noexcept;
 
 }  // namespace frizzle::capability
