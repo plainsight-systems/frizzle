@@ -34,10 +34,10 @@ namespace frizzle::capability {
 //     thread.
 //   - What the table holds: the architecture "gemma3"; the formats F32, F16,
 //     Q4_0, Q4_1 and Q8_0; the tokenizer model "llama", SentencePiece BPE,
-//     which is what Gemma 3's file names. The F16 row is kept as the
-//     inventory decided, beside the F16 format the KV cache is stored in;
-//     no weight in the pinned file is F16, and no lookup in the ported code
-//     asks for it today.
+//     which is what Gemma 3's file names. No weight in the pinned file is
+//     F16; the F16 row is for the KV cache, whose format whoever builds the
+//     graph looks up by the plan's cache type, F16 by default
+//     (runtime/engine.h).
 //
 // Algorithm
 //   1. A lookup scans its table in order and returns the implementation of
