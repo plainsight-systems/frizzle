@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.venv-tools/
+node_modules/
+build/
+dist/
+.cache/
+/models/
+# Internal planning stays local, following Serenity and Dolittle.
+/brief.md
+/CLAUDE.local.md
+/.local/
+/CMakeUserPresets.json
+/compile_commands.json
+.env
+.env.*
+!.env.example

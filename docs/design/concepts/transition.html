@@ -1,0 +1,99 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frizzle site to app</title>
+<style>
+@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:"Plex Mono";src:url(../../../../dolittle/web/static/fonts/PlexMono-Regular.woff2) format('woff2')}
+:root{--ivory:#fafaf5;--ink:#222826;--muted:#5b6059;--rule:#d4d0ca;--night:#0e1524;--night-ink:#f1ebdc;--brass:#d4ad5a;--copper:#79551b;
+  --n-page:#0d1422;--n-panel:#121b2c;--n-ink:#eee6d3;--n-muted:#9aa0a8;--n-rule:#253247;--glow:#f2b54f;--edit:#ffcf73;--paper:#efe6cf}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Plex Serif",Georgia,serif;background:var(--ivory);color:var(--ink);transition:background-color .6s ease}
+body.in-app{background:var(--n-page);color:var(--n-ink)}
+.masthead{background:var(--night);color:var(--night-ink);position:sticky;top:0;z-index:3}
+.mast{display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:auto;padding:0 28px;min-height:72px}
+.brand{font-size:28px;font-weight:500;letter-spacing:-.05em;cursor:pointer}
+.mast nav{display:flex;gap:28px;font:12px "Plex Mono",monospace;letter-spacing:.13em;text-transform:uppercase}
+.mast nav a{color:inherit;text-decoration:none;cursor:pointer;padding:8px 0}
+.mast nav a[aria-current]{text-decoration:underline;text-underline-offset:.5em;text-decoration-color:var(--brass)}
+.mast nav a:hover{color:var(--brass)}
+.hero{background:var(--night);overflow:hidden;position:relative}
+.hero img{display:block;width:100%;max-height:420px;object-fit:contain;transform-origin:47% 40%}
+.wrap{max-width:1180px;margin:auto;padding:0 28px}
+.intro{display:grid;grid-template-columns:1.3fr 1fr;gap:40px;padding:44px 0 56px}
+.eyebrow{font:12px/1.7 "Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:84px;font-weight:500;letter-spacing:-.06em;line-height:1;margin:6px 0 14px}
+.deck{font-size:23px;line-height:1.5;max-width:30ch;margin:0}
+.note{align-self:end;font-size:17px;line-height:1.7;margin:0}
+.try{display:inline-block;margin-top:16px;font:13px "Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;background:var(--night);color:var(--night-ink);border:0;padding:12px 18px;cursor:pointer}
+.try:hover{color:var(--brass)}
+.article{max-width:720px;margin:0 auto;padding:48px 28px 64px;font-size:18px;line-height:1.75}
+.article h2{font-size:38px;font-weight:400;letter-spacing:-.03em;line-height:1.15;margin:0 0 18px}
+.article p{margin:0 0 18px}
+.print{background:var(--paper);padding:10px;margin:28px -40px;box-shadow:0 0 0 1px #d8cdb0}
+.print figcaption{font:12px "Plex Mono",monospace;color:#6d655a;padding:8px 2px 0}
+/* The app: night glass */
+.app{background:var(--n-page);color:var(--n-ink)}
+.appbar{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--n-rule);font:12px "Plex Mono",monospace;color:var(--n-muted)}
+.appbar b{font:16px "Plex Serif",serif;color:var(--n-ink);font-weight:400}
+.btn{font:13px "Plex Mono",monospace;background:transparent;color:var(--n-ink);border:1px solid var(--n-rule);border-radius:3px;padding:5px 11px}
+.appgrid{display:grid;grid-template-columns:minmax(0,1fr) 280px}
+.appgrid .l{padding:16px;min-width:0}.appgrid .r{border-left:1px solid var(--n-rule);padding:16px}
+canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+h3{font:12px "Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--n-muted);margin:0 0 10px;font-weight:400}
+.row{display:grid;grid-template-columns:64px 1fr 72px;gap:8px;align-items:center;margin:5px 0;font-size:14px}
+.row .t{font:13px "Plex Mono",monospace}
+.bar{height:9px;background:#2f3b50}.bar i{display:block;height:100%;background:#c9a253}.bar i.e{background:var(--edit)}
+.edited{color:var(--edit)}
+.prompt{border:1px solid var(--n-rule);padding:10px 12px;margin-bottom:14px;background:var(--n-panel)}
+.prompt small{display:block;font:11px "Plex Mono",monospace;color:var(--n-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.view{display:none}.view.on{display:block}
+#app-view{opacity:0;transition:opacity .5s ease .1s}#app-view.on.shown{opacity:1}
+@media (prefers-reduced-motion:no-preference){.zooming .intro{opacity:0;transition:opacity .35s ease}.zooming .hero img{transition:transform .9s cubic-bezier(.5,0,.75,0),opacity .5s ease .5s;transform:scale(4.2);opacity:0}}
+@media(max-width:820px){.intro{grid-template-columns:1fr}h1{font-size:60px}.appgrid{grid-template-columns:1fr}.appgrid .r{border-left:0;border-top:1px solid var(--n-rule)}.print{margin:24px -10px}}
+</style>
+<div class="masthead"><div class="mast"><span class="brand" data-go="home">Frizzle</span><nav>
+  <a data-go="home" aria-current="page">Home</a><a data-go="app">Try it</a><a data-go="writing">Writing</a><a>About</a></nav></div></div>
+
+<section class="view on" id="home-view">
+  <div class="hero"><img src="../../assets/frizzle-readme.png" alt="A tiny vintage coach drives through glowing grid panes; one point has been dialled up."></div>
+  <div class="wrap"><div class="intro">
+    <div><div class="eyebrow">Plainsight Systems · tech demo</div><h1>Frizzle</h1><p class="deck">Reach inside a language model, pin one neuron, and see what it says instead.</p></div>
+    <p class="note">Gemma 3 1B runs entirely in your browser on WebGPU. Pick a layer, change a value, and watch the reply change.<br><button class="try" data-go="app">Try it</button></p>
+  </div></div>
+</section>
+
+<section class="view" id="writing-view">
+  <article class="article">
+    <div class="eyebrow">Exploration</div>
+    <h2>What one neuron knows about Paris</h2>
+    <p>Layer 14 has a neuron that lights up whenever the model is about to name a French city. Here it is, live, for the question below. Turn it off and watch the first word of the reply change.</p>
+    <figure class="print"><div class="app" id="mini"></div><figcaption>Live: Gemma 3 1B in this page. Layer 14, neuron #1768.</figcaption></figure>
+    <p>The surrounding text stays on ivory; the live figure is a framed print of the app, cream border and all, so the night never leaks into the reading.</p>
+  </article>
+</section>
+
+<section class="view" id="app-view"><div class="app" id="full"></div></section>
+
+<script>
+function rng(s){return function(){s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const r=rng(3),vals=new Float32Array(6912);for(let i=0;i<6912;i++)vals[i]=Math.pow(r(),14)*1.7;vals[1768]=0;
+function appHTML(compact){return `<div class="appbar"><b>Layer 14</b><span>MLP · 6,912 neurons</span><span style="margin-left:auto">Gemma 3 1B · WebGPU</span></div>
+<div class="appgrid" ${compact?'style="grid-template-columns:minmax(0,1fr) 230px"':''}><div class="l"><div class="prompt"><small>Your prompt</small>What's the capital of France?</div><canvas width="672" height="504"></canvas></div>
+<div class="r"><h3>First word of the reply</h3>
+<div class="row"><span class="t">▁The</span><div class="bar"><i style="width:38%"></i></div><span>71→<span class="edited">38%</span></span></div>
+<div class="row"><span class="t">▁Lyon</span><div class="bar"><i class="e" style="width:41%"></i></div><span>1→<span class="edited">41%</span></span></div>
+<div class="row"><span class="t">▁Paris</span><div class="bar"><i style="width:9%"></i></div><span>22→<span class="edited">9%</span></span></div>
+<h3 style="margin-top:18px">Your edits</h3><div style="font-size:14px">L14 · #1768 × 0</div></div></div>`}
+function draw(cv){const c=cv.getContext('2d'),S=7;c.fillStyle='#141e30';c.fillRect(0,0,cv.width,cv.height);
+  for(let i=0;i<6912;i++){const x=(i%96)*S+3.5,y=Math.floor(i/96)*S+3.5,a=Math.min(1,vals[i]/1.7);c.fillStyle='#24324a';c.beginPath();c.arc(x,y,.8,0,7);c.fill();
+    if(a>.02){c.fillStyle=`rgb(${90+a*165|0},${74+a*121|0},${42+a*48|0})`;c.beginPath();c.arc(x,y,.9+a*2.4,0,7);c.fill()}}
+  const ex=(1768%96)*S,ey=Math.floor(1768/96)*S;c.strokeStyle='#ffcf73';c.lineWidth=2;c.strokeRect(ex-1.5,ey-1.5,S+3,S+3)}
+document.getElementById('full').innerHTML=appHTML(false);document.getElementById('mini').innerHTML=appHTML(true);
+document.querySelectorAll('canvas').forEach(draw);
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function show(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('on','shown'));const v=document.getElementById(id+'-view');v.classList.add('on');requestAnimationFrame(()=>v.classList.add('shown'));
+  document.body.classList.toggle('in-app',id==='app');document.querySelectorAll('.mast nav a').forEach(a=>a.toggleAttribute('aria-current',a.dataset.go===id));scrollTo(0,0)}
+function go(id){
+  if(id==='app'&&document.getElementById('home-view').classList.contains('on')&&!reduce){document.body.classList.add('zooming','in-app');setTimeout(()=>{document.body.classList.remove('zooming');show('app')},950);return}
+  document.body.classList.remove('zooming');show(id)}
+document.querySelectorAll('[data-go]').forEach(e=>e.addEventListener('click',()=>go(e.dataset.go)));
+</script>

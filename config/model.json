@@ -1,0 +1,8 @@
+{
+  "$comment": "The one model Frizzle runs. The URL follows the repository's main branch; the size and SHA-256 are what pin the file, and a download that does not match them is refused. The same file Charlotte serves; its hash was checked against a local copy on 2026-10-27.",
+  "id": "gemma-3-1b-it-q4_0",
+  "name": "Gemma 3 1B",
+  "url": "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_0.gguf",
+  "sizeBytes": 721918496,
+  "sha256": "27ee88e03be02e9ba73def9a819d570d8ad73716e50769e87f374ae394b0276e"
+}

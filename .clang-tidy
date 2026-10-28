@@ -1,0 +1,12 @@
+# LLVM 21.1.8, on the native build's compilation database; use python3 scripts/check.py tidy.
+# Adapted from Bullet Witch: the same check families, every finding fatal.
+Checks: >
+  -*,
+  google-*,
+  cppcoreguidelines-*,
+  bugprone-*,
+  performance-*,
+  clang-analyzer-*
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(src|tests|tools)/.*'
+ExcludeHeaderFilterRegex: '.*/(build|_deps|\.cache)/.*'

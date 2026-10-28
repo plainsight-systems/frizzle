@@ -1,0 +1,18 @@
+Frizzle
+Copyright 2026 Plainsight Systems LLC
+
+The original README illustration in docs/assets/frizzle-readme.png was
+generated with OpenAI's built-in image generation tool. Its prompt and
+provenance are recorded in docs/assets/README.md. The illustration is offered
+under CC BY 4.0. Suggested attribution:
+"Frizzle — Plainsight Systems, CC BY 4.0."
+
+Third-party components and weights
+=================================
+
+Model weights are not bundled. The browser downloads the pinned file in
+config/model.json, unsloth/gemma-3-1b-it-GGUF, which is distributed under
+Google's Gemma terms of use.
+
+No third-party code is included yet. Each dependency added later is recorded
+here with its version, license and role.

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Editor adapter forwarding arguments/stdin to the same pinned formatter as checks."""
+import os
+import sys
+from tooling import find_tool
+
+try:
+    binary = find_tool('clang-format')
+    os.execv(binary, [binary, *sys.argv[1:]])
+except (OSError, ValueError) as error:
+    print(f'clang-format: {error}', file=sys.stderr)
+    sys.exit(2)

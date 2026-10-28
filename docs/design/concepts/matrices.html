@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Frizzle matrices concept</title>
+<style>
+:root{--bg:#FAF9F5;--ink:#2C2C2A;--muted:#73726C;--line:#D3D1C7}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--ink);display:grid;grid-template-columns:1fr 300px;grid-template-rows:auto 1fr;height:100vh}
+header{grid-column:1/3;display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:13px}
+header .layer{display:flex;align-items:center;gap:8px;font-size:15px}
+header button{font:inherit;background:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer}
+header .kind{color:var(--muted)}
+#stage{position:relative;overflow:hidden}
+#labels{position:absolute;inset:0;pointer-events:none}
+#labels div{position:absolute;font-size:11px;line-height:1.3;color:var(--muted);white-space:nowrap;transform:translate(-50%,0);text-align:center}
+#labels div b{font-weight:500;color:var(--ink)}
+#labels div.once b{color:var(--muted)}
+aside{border-left:1px solid var(--line);padding:16px;overflow:auto;font-size:13px;line-height:1.55}
+aside h2{font-size:15px;font-weight:500;margin:0 0 2px}
+aside .shape{color:var(--muted);margin:0 0 12px;font-variant-numeric:tabular-nums}
+aside code{font-size:12px;background:#EFEEE8;padding:1px 4px;border-radius:3px}
+aside .hint{color:var(--muted);font-size:12px;margin-top:16px}
+aside button{font:inherit;background:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer;margin-top:10px}
+</style>
+<header>
+  <div class="layer"><button id="prev" aria-label="Previous layer">‹</button><span id="layerName">Layer 14</span><button id="next" aria-label="Next layer">›</button></div>
+  <span class="kind" id="layerKind"></span>
+  <span class="kind" style="margin-left:auto">6 tokens: &lt;bos&gt; The ▁capital ▁of ▁France ▁is</span>
+</header>
+<div id="stage"><div id="labels"></div></div>
+<aside id="panel"></aside>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="matrices.js"></script>
