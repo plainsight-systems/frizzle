@@ -1,0 +1,15 @@
+{
+ "$comment": "Native Dawn, prebuilt by its own release CI, pinned by SHA-256. The same release the browser build's emdawnwebgpu port comes from, so both builds compile against one webgpu.h. scripts/fetch_dawn.py downloads and verifies it into .cache/dawn/<release>/<platform>/; CMakeLists.txt reads this file to find it there. Moving this pin moves the Emscripten pin too.",
+ "release": "v20260423.175430",
+ "commit": "31e25af254ab572c77054edec4946d2244e184dd",
+ "platforms": {
+  "Darwin-arm64": {
+   "asset": "Dawn-31e25af254ab572c77054edec4946d2244e184dd-macos-latest-Release.tar.gz",
+   "sha256": "8d1db80315ab55ad2c61857d1c7ae4c242a9cc67d0639c709a052fc6af3a7bac"
+  },
+  "Linux-x86_64": {
+   "asset": "Dawn-31e25af254ab572c77054edec4946d2244e184dd-ubuntu-latest-Release.tar.gz",
+   "sha256": "ac76fac090162dc1ecea5ed0f28a557bb8f49efc47faab01886105ace82b7b64"
+  }
+ }
+}

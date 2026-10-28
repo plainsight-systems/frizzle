@@ -36,3 +36,16 @@ open.
 
 `scripts/clang-format` is the editor's formatter: it forwards to the same
 pinned binary and fails if it is missing.
+
+## Building
+
+```sh
+python3 scripts/fetch_dawn.py
+CXX=$(brew --prefix llvm@21)/bin/clang++ cmake --preset native-debug
+docker run --rm -v "$PWD":/src -w /src emscripten/emsdk:6.0.8 emcmake cmake --preset wasm-release
+```
+
+`fetch_dawn.py` downloads the Dawn release pinned in `cmake/dawn.json`,
+checks its SHA-256 and unpacks it into ignored `.cache/dawn/`; an archive
+that does not match is not unpacked. CMake refuses any native compiler but
+LLVM clang 21.1.8 and any Emscripten but 6.0.8, rather than substituting one.
