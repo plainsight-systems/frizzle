@@ -95,8 +95,9 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 ## Engine operations
 
 - Hosts call the engine's operations alone (`src/core/runtime/engine.h`):
-  `load` in three calls, and `generate`, which gains the edit set in slice
-  2. The engine composes the ported pieces unchanged.
+  `load` in three calls, and `generate`, which takes the edit set. The
+  engine composes the ported pieces; edits changed three of them: the graph
+  gained the edit launch, and the runtime and generator gained `rewind`.
 - `generate` runs the model over the rendered text and streams its reply.
   The turn loop reuses the prefix of the prompt the cache already holds.
 - The engine renders no chat template; it reads text already rendered.
@@ -117,3 +118,9 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   from the same seed.
 - With no edits, or Scale × 1, the edited reply is the original reply, bit
   for bit.
+- Between runs the cache holds only entries computed without edits: a run
+  with edits rewinds it, when it ends, to just before the edits began.
+- Edits cost something when they are off, by decision (2026-10-28): the edit
+  kernel runs once a layer in every step that scores a token, edits or not.
+  About 40 µs a token, from Charlotte's 1.5 µs a dispatch on one machine; an
+  estimate, not measured on Gemma 3. Speed is not this demo's aim.

@@ -1,8 +1,14 @@
+// Axis M: changes with a new stage in the generation loop.
+//
+// Contract, algorithm, cost and corpus guidance: generator.h. This file defines
+// what that header states.
+
 #include "core/runtime/generator.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -37,10 +43,18 @@ namespace {
 constexpr std::uint64_t kNfcShrinkFrom = 7;
 constexpr std::uint64_t kNfcShrinkTo = 2;
 
+// The reply's UTF-8 stream, made at construction; none is a broken
+// precondition.
+tokenizer::Detokenizer& stream(Generator::State& s) {
+  if (!s.text.has_value()) std::abort();
+  return *s.text;
+}
+
 void on_token(tokenizer::TokenId token, void* userdata) {
   Generator::State& s = *static_cast<Generator::State*>(userdata);
-  if (const std::string_view text = s.text->push(token); !text.empty())
+  if (const std::string_view text = stream(s).push(token); !text.empty()) {
     s.on_text(text, s.userdata);
+  }
 }
 
 void on_turn(const TurnResult& result, void* userdata) {
@@ -50,7 +64,7 @@ void on_turn(const TurnResult& result, void* userdata) {
   const TextCallback on_text = s.on_text;
   const EndCallback on_end = s.on_end;
   void* const caller = s.userdata;
-  const std::string_view text = s.text->finish();
+  const std::string_view text = stream(s).finish();
   const std::shared_ptr<Generator::State> keep = std::move(s.in_flight);
   // Bytes still pending, the turn stopped inside a character: U+FFFD.
   if (!text.empty()) on_text(text, caller);
@@ -81,8 +95,9 @@ GenerateResult Generator::start(std::string_view text,
                                 TextCallback on_text, EndCallback on_end,
                                 void* userdata) {
   State& s = *state_;
-  if (s.runtime == nullptr || s.in_flight != nullptr)
+  if (s.runtime == nullptr || s.in_flight != nullptr) {
     return {{}, {StartError::Busy, "a turn is running"}};
+  }
   // A token covers at most `longest` bytes of normalized text, and
   // normalizing shrinks text at most 7/2-fold, so text longer than 7/2 ×
   // the context × that makes more tokens than the context holds: refused
@@ -127,6 +142,12 @@ GenerateResult Generator::start(std::string_view text,
 
 void Generator::cancel() noexcept {
   if (state_->runtime) state_->runtime->cancel();
+}
+
+bool Generator::rewind(std::uint32_t tokens) noexcept {
+  const State& s = *state_;
+  if (s.runtime == nullptr || s.in_flight != nullptr) return false;
+  return s.runtime->rewind(tokens);
 }
 
 #if FRIZZLE_DIAGNOSTICS_ENABLED

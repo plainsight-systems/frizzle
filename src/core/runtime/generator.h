@@ -12,11 +12,12 @@ namespace frizzle::runtime {
 
 // Axis M: changes with a new stage in the generation loop.
 //
-// A loaded model as the page uses it: the rendered conversation in, the
+// A loaded model as the engine uses it: the rendered conversation in, the
 // reply's text out. The runtime (runtime.h) works on identifiers alone; this
 // puts the model's tokenizer (tokenizer.h) on either side of it, so the
-// boundary (src/wasm/bindings.cpp) only translates.
+// engine (engine.h) and the hosts above it handle text only.
 //
+// Contract
 //   - A turn: the text, UTF-8, is encoded whole — the chat template wrote
 //     the special tokens as text, and they encode as their identifiers —
 //     into tokens held for the generator's life, reserved at the context
@@ -48,8 +49,8 @@ namespace frizzle::runtime {
 //     completes are passed to the text callback; a token that completes
 //     none — the first bytes of a character another token finishes — passes
 //     nothing. Stop tokens are never emitted, so never decoded; any other
-//     control token's text, as written, is, since the page reads the reply's
-//     structure from it, as Qwen3's <think> (web/conversation.js).
+//     control token's text, as written, is, since a reader may take the
+//     reply's structure from it.
 //   - When the turn finishes, the stream is finished: bytes still pending,
 //     the turn having stopped inside a character, are passed as U+FFFD
 //     rather than dropped unseen. Then the end callback, with the runtime's
@@ -58,8 +59,19 @@ namespace frizzle::runtime {
 //     state, held while a turn runs, as the runtime's are: destroying a
 //     generator with a turn running destroys the runtime, which finishes the
 //     turn Cancelled (runtime.h), and its end callback is still called.
+//   - rewind(tokens): the runtime's rewind (runtime.h), between turns;
+//     refused, false, while a turn runs. The end callback runs after the
+//     turn has ended, so it may rewind.
 //
-// What it costs, counted:
+// Algorithm, a turn
+//   1. Refuse text too long to fit, by its bytes; encode it, with the
+//      context as the limit; start the runtime's turn over the tokens.
+//   2. Each emitted token: decode it, push its bytes through the stream,
+//      and pass the characters it completes to the text callback.
+//   3. The end: finish the stream, passing what is pending as U+FFFD; then
+//      the end callback with the runtime's result.
+//
+// Design and cost
 //   - A turn, once: the text's bytes encoded, 28.8 to 30.4 ns a byte for
 //     byte-level BPE with its piece cache warm, 43.3 for SentencePiece (their
 //     headers) — 4.6 to 5.6 ms for a conversation of a listed model's whole
@@ -75,25 +87,22 @@ namespace frizzle::runtime {
 //     one text callback — the boundary's one crossing a token (WASM.2).
 //     Nothing is allocated a token.
 //
-// Verification the implementation is held to, on the GPU with Qwen3's file:
-//   - A turn over a rendered chat prompt streams text whose concatenation is
-//     the tokenizer's decoding of the tokens the runtime emitted, through one
-//     stream; a token ending mid-character passes nothing until the next
-//     completes it; the end callback follows the last text.
-//   - A turn stopped inside a character ends with U+FFFD.
-//   - Text that is not UTF-8 is refused, named, and no callback is called.
-//   - Destroying a generator mid-turn calls the end callback, Cancelled.
+//   - Verification: Charlotte's generator tests were not ported. In Frizzle
+//     the tokenizer suite (tests/contracts/tokenizer/) locks the encoding,
+//     and the replay and edits suite, planned (tests/README.md), runs turns
+//     through the engine; until it is built, only the native tool exercises
+//     the streaming.
 //
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     I.11   Never transfer ownership by a raw pointer — the tokenizer and the
+//     I.11   Never transfer ownership by a raw pointer: the tokenizer and the
 //            runtime owned, by unique_ptr.
-//     E.27   Use error codes systematically — GenerateResult.
+//     E.27   Use error codes systematically: GenerateResult.
 //   C++ performance guidelines
-//     WASM.2 Batch work across the JS boundary — the conversation crosses
+//     WASM.2 Batch work across the JS boundary: the conversation crosses
 //            once a turn, as bytes; text, once a token that completes some.
-//     WASM.4 Reduce indirect dispatch in hot paths — one decode a token.
-//     MEM.9  Allocate at init — the tokens, the decode buffer and the stream,
+//     WASM.4 Reduce indirect dispatch in hot paths: one decode a token.
+//     MEM.9  Allocate at init: the tokens, the decode buffer and the stream,
 //            at load; a token's path allocates nothing.
 
 // Each piece of the reply's text, whole characters, in order. Valid only
@@ -135,6 +144,10 @@ class Generator {
   // nothing.
   void cancel() noexcept;
 
+  // The runtime's rewind (runtime.h): between turns, keeps at most the
+  // first `tokens` of the cache. False, changing nothing, while a turn runs.
+  [[nodiscard]] bool rewind(std::uint32_t tokens) noexcept;
+
 #if FRIZZLE_DIAGNOSTICS_ENABLED
   // The runtime's step observer (runtime.h): false, changing nothing,
   // while a turn runs.
@@ -144,6 +157,8 @@ class Generator {
   ~Generator();
   Generator(const Generator&) = delete;
   Generator& operator=(const Generator&) = delete;
+  Generator(Generator&&) = delete;
+  Generator& operator=(Generator&&) = delete;
 
   // What the generator and its in-flight callbacks share; defined only
   // where the generator is.

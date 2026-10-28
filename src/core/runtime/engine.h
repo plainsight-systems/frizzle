@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include "core/edit/edit.h"
 #include "core/gguf/byte_source.h"
 #include "core/gpu/device.h"
 #include "core/policy/policy.h"
@@ -49,15 +50,28 @@ namespace frizzle::runtime {
 //        cache and the turn loop. `done` reports Ok or a named failure.
 //     write and finish_load are refused at once, NotLoading, outside a load,
 //     and Busy while the previous call's callback is pending.
-//   generate(text, policy, on_text, on_end)
+//   generate(text, edits, policy, on_text, on_end)
 //     - `text` is exactly what the model reads: Gemma's chat template already
 //       applied. The engine renders no template (the worker does; T).
+//     - Precondition, the caller's: `text` is the template's rendering,
+//       which begins with <bos> and wraps each message in its turn markers.
+//       The renderer owns that and its tests lock it; the engine checks
+//       nothing of the template. Text wrapped otherwise still runs, and the
+//       reply is what the model makes of it.
 //     - Runs the model over `text` and streams the reply as text, under
 //       `policy`: its sampling settings, seed and token limit; then calls
 //       back once with the turn's result (runtime.h).
+//     - `edits` (edit/edit.h) applies to this run only: at the last prompt
+//       position and every generated token, never earlier. No edits, or
+//       Scale × 1 edits, give the run without edits, bit for bit, from the
+//       same seed.
 //     - Refused at once, named (OperationError): not loaded; a turn running;
-//       and what the generator refuses (generator.h): text the tokenizer
-//       cannot encode, an empty or too long prompt.
+//       an invalid edit set (Edits, with edit::check's result); and what the
+//       generator refuses (generator.h): text the tokenizer cannot encode, an
+//       empty or too long prompt. `edits` is not read after the call.
+//     - Invariant, between runs: the cache holds only entries computed
+//       without edits. So a later prompt that contains an edited run's reply
+//       (a conversation) never reuses that reply's edited entries.
 //   - One operation at a time. Callbacks run on the thread that processes
 //     the device's events, and a callback may run before the call that
 //     started it returns: the upload refuses some files and accepts a first
@@ -70,14 +84,24 @@ namespace frizzle::runtime {
 //     has run.
 //
 // Algorithm, generate
-//   1. Start a turn on the generator with the text and the caller's policy.
+//   1. Check the edit set (edit::check); refuse an invalid one.
+//   2. Write its table (edit::table) into the plan's `edit_table` buffer
+//      (graph/graph.h) with one queue write on the device's queue, which
+//      orders it before the turn's first step. No turn is in flight, so no
+//      step reads the table while it changes.
+//   3. Start a turn on the generator with the text and the caller's policy.
 //      The turn loop reuses whatever prefix of the text the cache already
 //      holds from the turn before, and recomputes the rest (runtime.h).
-//   2. Stream its text; call back once at the end with how it ended.
+//   4. Stream its text. When it ends, however it ends, and the set had
+//      edits: rewind the cache to just before the edits began, the turn's
+//      prompt tokens less one (Generator::rewind, runtime.h). Then call back
+//      once with how it ended.
 //
 // Design and cost
-//   - Nothing ported changes. The engine is the composition Charlotte's
-//     browser bindings made inline, as a class every host shares.
+//   - The engine is the composition Charlotte's browser bindings made
+//     inline, as a class every host shares. It changes nothing ported but
+//     where the ported header says (runtime.h's and generator.h's rewind,
+//     graph.h's edit launch).
 //   - The tokenizer and stops load before the upload begins, on the CPU,
 //     so every refusal begin_load names comes at once. Charlotte overlapped
 //     them with the device's buffer creation (20 to 56 ms, its bindings);
@@ -88,8 +112,27 @@ namespace frizzle::runtime {
 //   - State shared with in-flight callbacks (F.27), as the runtime's is: each
 //     callback carries a record holding it, so destroying the engine leaves
 //     a live state for the callback to land on, and the last holder frees it.
-//   - A turn costs what the turn loop's does (runtime.h); the engine adds one
-//     record a call and nothing a token.
+//   - Edits: the engine keeps no edit state between runs. Each run writes
+//     its whole table, and the rewind leaves the cache holding no edited
+//     entry, so a run is a function of its text, edits and policy. Whether
+//     a run had edits rides in its call's record.
+//   - The cache: positions before the last prompt position are never
+//     edited, so the original and the edited run of one prompt share them,
+//     in either order; each recomputes only the last prompt position, as
+//     the turn loop already does.
+//   - A conversation after an edited reply prefills that reply again, and
+//     the position before it: the reply's tokens plus one. A rewind deeper
+//     than the cache's rollback reserve (policy.h, 4,096 tokens by default)
+//     empties it instead (cache/kv.h), and the next run prefills from the
+//     first token. Any set with edits rewinds, including Scale × 1, which
+//     changes no bits; telling them apart is not worth a rule.
+//   - The table write cannot fail validation: the buffer is a scratch
+//     buffer, made with CopyDst (residency/upload.cpp), planned at the
+//     table's largest size, and the table is whole u32 words.
+//   - A turn costs what the turn loop's does (runtime.h). The engine adds a
+//     record a call, the edit set's check and table, at most 48 KiB, and one
+//     queue write (GPU.1): nothing a token. The edit kernel runs in every
+//     scoring step, edits or not (edit/edit_kernel.h).
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -109,7 +152,9 @@ namespace frizzle::runtime {
 //            compile warning, not a silent fallthrough.
 //   C++ performance guidelines
 //     MEM.9  Allocate at init: the cache and the program at load; a turn
-//            allocates only the engine's record for it.
+//            allocates only the engine's record for it and its edit table.
+//     GPU.1  Keep data on the device: the edit table is written once a run;
+//            nothing is read back.
 
 enum class LoadError : std::uint8_t {
   Ok,
@@ -138,12 +183,14 @@ enum class OperationError : std::uint8_t {
   Ok,
   NotLoaded,
   Busy,   // a turn is running
+  Edits,  // the edit set is invalid; `edits` says why
   Start,  // the generator refused; `start` says why
 };
 
 struct OperationStart {
   OperationError error = OperationError::Ok;
-  GenerateResult start;  // for Start
+  edit::EditCheck edits;  // for Edits
+  GenerateResult start;   // for Start
   [[nodiscard]] bool ok() const noexcept { return error == OperationError::Ok; }
 };
 
@@ -171,8 +218,10 @@ class Engine {
   [[nodiscard]] LoadResult finish_load(LoadCallback done, void* userdata);
 
   // On ok(), `on_text` is called for each piece of the reply and `on_end`
-  // once, both with `userdata`. `text` is not read after the call.
+  // once, both with `userdata`. `text` and `edits` are not read after the
+  // call.
   [[nodiscard]] OperationStart generate(std::string_view text,
+                                        std::span<const edit::Edit> edits,
                                         const policy::TurnPolicy& policy,
                                         TextCallback on_text,
                                         EndCallback on_end, void* userdata);

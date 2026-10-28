@@ -24,6 +24,7 @@ set(FRIZZLE_MODEL_FILE "${PROJECT_SOURCE_DIR}/.cache/models/gemma-3-1b-it-q4_0.g
 
 add_executable(frizzle_tests
     support/main.cpp
+    contracts/edits/edit_specs_test.cpp
     contracts/gguf/model_file_test.cpp
     contracts/tokenizer/tokenizer_test.cpp
 )

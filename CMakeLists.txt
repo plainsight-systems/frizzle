@@ -76,6 +76,8 @@ add_library(frizzle_core STATIC
     src/core/cache/kv.cpp
     src/core/cache/prefix.cpp
     src/core/capability/capability.cpp
+    src/core/edit/edit.cpp
+    src/core/edit/edit_kernel.cpp
     src/core/gguf/arrays.cpp
     src/core/gguf/index.cpp
     src/core/gguf/reader.cpp
@@ -134,6 +136,7 @@ frizzle_embed_shaders(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/kernels/rope/rope_encode.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/kernels/topk/topk.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/sampler/draw.wgsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/core/edit/edit.wgsl"
 )
 
 # ---------------------------------------------------------------------------

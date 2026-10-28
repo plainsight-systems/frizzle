@@ -32,8 +32,8 @@
 //      file at an offset on demand, so nothing holds the whole file in
 //      memory; write the file in 16 MiB chunks, each accepted before the
 //      next; finish_load. Pump events throughout.
-//   4. generate(text, policy), printing text as it streams; print how it
-//      ended.
+//   4. generate(text, no edits, policy), printing text as it streams; print
+//      how it ended.
 //
 // Design and cost
 //   - The file-backed byte source lives here, not in the core: the browser
@@ -363,6 +363,8 @@ std::string refusal(const runtime::OperationStart& start) {
       return "no model is loaded";
     case runtime::OperationError::Busy:
       return "a turn is running";
+    case runtime::OperationError::Edits:
+      return start.edits.subject;
     case runtime::OperationError::Start:
       break;
   }
@@ -535,8 +537,9 @@ int run(const Options& options, const std::string& text) {
   // The reply.
   put(stdout, "reply:\n");
   Reply reply;
+  // No edits until the tool takes them (slice 2, step 4).
   const runtime::OperationStart generating = engine.generate(
-      text, turn,
+      text, {}, turn,
       [](std::string_view piece, void* /*userdata*/) {
         put(stdout, piece);
         std::fflush(stdout);

@@ -1,9 +1,18 @@
+// Axis A: changes when an architecture needs a block the ones here do not
+// cover.
+//
+// Contract, algorithm, cost and corpus guidance: graph.h. This file defines
+// what that header states.
+
 #include "core/graph/graph.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <string_view>
 
+#include "core/edit/edit.h"
+#include "core/edit/edit_kernel.h"
 #include "core/kernels/attention/attention.h"
 #include "core/kernels/gather/gather.h"
 #include "core/kernels/matmul/matmul.h"
@@ -22,11 +31,21 @@ constexpr std::uint32_t kRopeHeadsTile =
     64;  // rope.h: (heads) × d / 8 a multiple of 64
 constexpr std::uint32_t kAttentionLanes =
     1024;  // attention.h: the group divides 1,024 / d
+constexpr std::array<std::uint32_t, 3> kHeadDimensions = {
+    64, 128, 256};                      // rope.h, attention.h
+constexpr std::uint32_t kRopeLane = 8;  // rope.h: a head is d / 8 lanes
 
 std::size_t index_of(gguf::TensorId tensor) {
   return static_cast<std::size_t>(tensor);
 }
 std::size_t index_of(Role role) { return static_cast<std::size_t>(role); }
+
+// A weight a describe always fills (model_description.h); one missing is a
+// description not made by describe: a broken precondition.
+gguf::TensorId present(const std::optional<gguf::TensorId>& tensor) {
+  if (!tensor.has_value()) std::abort();
+  return *tensor;
+}
 
 // The plan names every working buffer the blocks bind (residency/plan.h).
 const residency::BufferRange& scratch(const residency::ResidencyPlan& plan,
@@ -46,7 +65,7 @@ GraphResult unsupported(std::uint32_t layer, const std::string& what) {
 GraphResult check_shape(std::uint32_t layer, const model::LayerDescription& l,
                         std::uint32_t width) {
   const std::uint32_t d = l.head_dimension;
-  if (d != 64 && d != 128 && d != 256) {
+  if (std::ranges::find(kHeadDimensions, d) == kHeadDimensions.end()) {
     return unsupported(layer, "head dimension " + std::to_string(d) +
                                   " is not 64, 128 or 256");
   }
@@ -63,14 +82,16 @@ GraphResult check_shape(std::uint32_t layer, const model::LayerDescription& l,
                            " query heads a key-value head do not divide " +
                            std::to_string(kAttentionLanes / d));
   }
-  if ((l.query_heads + 2 * l.key_value_heads) * (d / 8) % kRopeHeadsTile != 0) {
+  if ((l.query_heads + 2 * l.key_value_heads) * (d / kRopeLane) %
+          kRopeHeadsTile !=
+      0) {
     return unsupported(layer,
                        "(query heads + 2 × key-value heads) × head dimension / "
                        "8 is not a multiple of " +
                            std::to_string(kRopeHeadsTile));
   }
-  if (l.tensors[index_of(Role::QueryNorm)].has_value() !=
-      l.tensors[index_of(Role::KeyNorm)].has_value()) {
+  if (l.tensors.at(index_of(Role::QueryNorm)).has_value() !=
+      l.tensors.at(index_of(Role::KeyNorm)).has_value()) {
     return unsupported(layer, "QK-norm on queries or keys alone");
   }
   if (width > kNormWidest) {
@@ -170,6 +191,11 @@ residency::WorkingSet decoder_working_set(
               // The range sums of a product split along K, the most any
               // of the products needs (kernels/matmul/matmul.h).
               {"range_sums", 1, range_sums},
+              // The run's edits, u32 words: a [first, count] pair a layer
+              // and three words an edit, at most edit::kMaxEdits
+              // (edit/edit.h); the engine writes it before each run.
+              {"edit_table", 1,
+               (2ULL * model.layers.size()) + (3ULL * edit::kMaxEdits)},
           },
           true,
           partial_rows};
@@ -179,33 +205,38 @@ Builder::Builder(const model::ModelDescription& model,
                  const residency::ResidencyPlan& plan,
                  const formats::Format& cache_format,
                  std::vector<kernels::Launch>& out)
-    : model_(&model), plan_(&plan), cache_format_(&cache_format), out_(&out) {
+    : model_(&model),
+      plan_(&plan),
+      cache_format_(&cache_format),
+      out_(&out),
+      buffers_{scratch(plan, "hidden"),     scratch(plan, "normed"),
+               scratch(plan, "query"),      scratch(plan, "key"),
+               scratch(plan, "value"),      scratch(plan, "attention"),
+               scratch(plan, "partials"),   scratch(plan, "partial_stats"),
+               scratch(plan, "output"),     scratch(plan, "activation"),
+               scratch(plan, "logits"),     scratch(plan, "partials_a"),
+               scratch(plan, "partials_b"), scratch(plan, "candidates"),
+               scratch(plan, "sampled"),    scratch(plan, "range_sums"),
+               scratch(plan, "edit_table")} {
   for (const residency::PlannedTensor& t : plan.tensors) {
     const std::size_t i = index_of(t.tensor);
     if (i >= views_.size()) views_.resize(i + 1, nullptr);
-    views_[i] = &t.view;
+    views_.at(i) = &t.view;
   }
-  buffers_ = {scratch(plan, "hidden"),     scratch(plan, "normed"),
-              scratch(plan, "query"),      scratch(plan, "key"),
-              scratch(plan, "value"),      scratch(plan, "attention"),
-              scratch(plan, "partials"),   scratch(plan, "partial_stats"),
-              scratch(plan, "output"),     scratch(plan, "activation"),
-              scratch(plan, "logits"),     scratch(plan, "partials_a"),
-              scratch(plan, "partials_b"), scratch(plan, "candidates"),
-              scratch(plan, "sampled"),    scratch(plan, "range_sums")};
 }
 
 const residency::WeightView& Builder::view(gguf::TensorId tensor) const {
   const std::size_t i = index_of(tensor);
-  if (i >= views_.size() || views_[i] == nullptr)
+  if (i >= views_.size() || views_.at(i) == nullptr) {
     std::abort();  // the plan was not made from this model
-  return *views_[i];
+  }
+  return *views_.at(i);
 }
 
 const residency::WeightView* Builder::role(std::uint32_t layer, Role r) const {
   const std::optional<gguf::TensorId>& tensor =
-      model_->layers[layer].tensors[index_of(r)];
-  return tensor ? &view(*tensor) : nullptr;
+      model_->layers.at(layer).tensors.at(index_of(r));
+  return tensor.has_value() ? &view(tensor.value()) : nullptr;
 }
 
 const residency::PlannedGroup* Builder::group(
@@ -214,8 +245,9 @@ const residency::PlannedGroup* Builder::group(
     if (g.count != members.size()) continue;
     std::size_t i = 0;
     bool same = true;
-    for (const std::optional<gguf::TensorId>& m : members)
-      same = same && m == g.members[i++];
+    for (const std::optional<gguf::TensorId>& m : members) {
+      same = same && m == g.members.at(i++);
+    }
     if (same) return &g;
   }
   return nullptr;
@@ -239,15 +271,16 @@ void Builder::product(const residency::WeightView& weight,
 void Builder::embed(float scale) {
   const std::size_t at = out_->size();
   append(*out_,
-         kernels::gather_launches(view(*model_->token_embedding),
+         kernels::gather_launches(view(present(model_->token_embedding)),
                                   buffers_.hidden, buffers_.sampled, scale));
   named(*out_, at, "embed");
 }
 
 GraphResult Builder::attention(std::uint32_t layer) {
-  const model::LayerDescription& l = model_->layers[layer];
-  if (GraphResult r = check_shape(layer, l, model_->embedding_width); !r.ok())
+  const model::LayerDescription& l = model_->layers.at(layer);
+  if (GraphResult r = check_shape(layer, l, model_->embedding_width); !r.ok()) {
     return r;
+  }
   const Buffers& b = buffers_;
 
   std::size_t at = out_->size();
@@ -259,8 +292,8 @@ GraphResult Builder::attention(std::uint32_t layer) {
 
   const auto& t = l.tensors;
   at = out_->size();
-  if (group({t[index_of(Role::Query)], t[index_of(Role::Key)],
-             t[index_of(Role::Value)]}) != nullptr) {
+  if (group({t.at(index_of(Role::Query)), t.at(index_of(Role::Key)),
+             t.at(index_of(Role::Value))}) != nullptr) {
     append(*out_, kernels::matmul_launches(
                       {{role(layer, Role::Query), role(layer, Role::Key),
                         role(layer, Role::Value)},
@@ -314,8 +347,10 @@ GraphResult Builder::attention(std::uint32_t layer) {
 }
 
 GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
-  const auto& t = model_->layers[layer].tensors;
-  if (group({t[index_of(Role::Gate)], t[index_of(Role::Up)]}) == nullptr) {
+  const model::LayerDescription& l = model_->layers.at(layer);
+  const auto& t = l.tensors;
+  if (group({t.at(index_of(Role::Gate)), t.at(index_of(Role::Up))}) ==
+      nullptr) {
     return {GraphError::UngroupedFeedForward, "layer " + std::to_string(layer)};
   }
   const Buffers& b = buffers_;
@@ -338,6 +373,10 @@ GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
                     kernels::kSplitGate, b.range_sums));
   named(*out_, at, "ffn.gate_up", layer);
   at = out_->size();
+  out_->push_back(edit::edit_launch(layer, b.activation, b.edit_table,
+                                    l.feed_forward_width));
+  named(*out_, at, "ffn.edit", layer);
+  at = out_->size();
   product(*role(layer, Role::Down), b.activation, b.output,
           kernels::Rows::EveryToken);
   named(*out_, at, "ffn.down", layer);
@@ -354,13 +393,13 @@ GraphResult Builder::output() {
   }
   const Buffers& b = buffers_;
   std::size_t at = out_->size();
-  out_->push_back(
-      kernels::norm_launch({&view(*model_->output_norm), pending_.post_gain,
-                            pending_.written, b.output, b.hidden, b.normed,
-                            model_->norm_epsilon, kernels::Rows::LastToken}));
+  out_->push_back(kernels::norm_launch(
+      {&view(present(model_->output_norm)), pending_.post_gain,
+       pending_.written, b.output, b.hidden, b.normed, model_->norm_epsilon,
+       kernels::Rows::LastToken}));
   named(*out_, at, "output.norm");
   const residency::WeightView& head =
-      view(model_->output_head.value_or(*model_->token_embedding));
+      view(model_->output_head.value_or(present(model_->token_embedding)));
   at = out_->size();
   product(head, b.normed, b.logits, kernels::Rows::LastToken);
   named(*out_, at, "output.head");

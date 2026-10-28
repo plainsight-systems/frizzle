@@ -1,7 +1,9 @@
 # Remaining work
 
 Slice 1 is built: the port, the engine's operations, the native tool and its
-tests. The work is cut into slices, in order. Each ends in
+tests. Slice 2 is under way: edits reach the model through `generate`, with
+the edit kernel, the cache rewind and the edit specs suite; the tool's
+`--pin`, the replay and edits suite and the kernels suite remain. The work is cut into slices, in order. Each ends in
 something shown working, and the tests from the
 [inventory](../../tests/README.md) that guard it land with it.
 
@@ -28,11 +30,11 @@ something shown working, and the tests from the
 
 - `generate` takes the edit set: edits as a set across layers, applied
   inside the pass at the last prompt position and held at every generated
-  token. Captures at the last prompt position for every layer, sent with the
-  run.
+  token. When a run with edits ends, the cache rewinds to just before
+  the edits began, so it holds no edited entry between runs.
 - The native tool prints the edited reply beside the original.
-- Tests: replay and edits, edit specs, the kernels suite (the ported kernels,
-  and the capture and edit outputs).
+- Tests: replay and edits, edit specs, the kernels suite (the ported kernels
+  and the edit kernel).
 
 ## 3. The loop in a browser, plain
 
@@ -48,6 +50,8 @@ something shown working, and the tests from the
 
 ## 4. MLP workbench
 
+- Captures at the last prompt position for every layer, sent with each run,
+  with their kernel outputs added to the kernels suite.
 - The layer deck (one folded grid per layer, sliding away as you scroll),
   ranked list, search, the neuron card with its push-toward tokens, and the
   pinned list, in the night-glass theme.

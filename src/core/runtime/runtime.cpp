@@ -1,7 +1,13 @@
+// Axis M: changes with a new stage in the generation loop.
+//
+// Contract, algorithm, cost and corpus guidance: runtime.h. This file defines
+// what that header states.
+
 #include "core/runtime/runtime.h"
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -10,6 +16,12 @@
 #include "core/sampler/sampler.h"
 
 namespace frizzle::runtime {
+namespace {
+
+// A failed step's message, reserved so a failure allocates nothing.
+constexpr std::size_t kMessageReserve = 1024;
+
+}  // namespace
 
 // The runtime's state, shared with the program's in-flight callbacks.
 struct Runtime::State {
@@ -18,7 +30,7 @@ struct Runtime::State {
     // The prompt and the reply's accepted draws: at most the context
     // offered, and the last draw, which no step fed.
     held.reserve(std::size_t{cache.capacity()} + 1);
-    message.reserve(1024);
+    message.reserve(kMessageReserve);
   }
 
   std::unique_ptr<kernels::Program>
@@ -67,8 +79,16 @@ void on_profiled_step(kernels::ProgramError error, std::string_view message,
 // Runs every step the turn plans now. The turn plans at most two
 // outstanding, so the program never refuses one at once; and every position
 // is below the context offered, within kMaxPositions.
+// The running turn. Called only while one runs; none is a broken
+// precondition.
+Turn& running(Runtime::State& s) {
+  if (!s.turn.has_value()) std::abort();
+  return *s.turn;
+}
+
 void run_planned(Runtime::State& s) {
-  while (const std::optional<Planned> p = s.turn->next()) {
+  Turn& turn = running(s);
+  while (const std::optional<Planned> p = turn.next()) {
     s.step.position = p->position;
     s.step.tokens = p->tokens;
     s.step.logits = p->logits ? 1 : 0;
@@ -82,8 +102,8 @@ void run_planned(Runtime::State& s) {
     s.cache.advance(p->tokens);
 #if FRIZZLE_DIAGNOSTICS_ENABLED
     if (s.observer != nullptr) {
-      s.outstanding[s.outstanding_count++] = {p->tokens > 1 || !p->fed,
-                                              p->position, p->tokens, 0, 0};
+      s.outstanding.at(s.outstanding_count++) = {p->tokens > 1 || !p->fed,
+                                                 p->position, p->tokens, 0, 0};
       s.program->run_profiled(s.step, s.program->launch_count(),
                               on_profiled_step, &s);
       continue;
@@ -97,7 +117,7 @@ void run_planned(Runtime::State& s) {
 // then its callback.
 void finish(Runtime::State& s) {
   const std::shared_ptr<Runtime::State> keep = std::move(s.in_flight);
-  Turn& turn = *s.turn;
+  Turn& turn = running(s);
   const std::uint32_t kept = s.program ? s.cache.truncate(turn.kept()) : 0;
   s.held.resize(kept);
   const TurnResult result{turn.failure(), turn.end(),     s.message, s.prompt,
@@ -127,7 +147,7 @@ std::optional<tokenizer::TokenId> decide(Runtime::State& s,
                                          kernels::ProgramError error,
                                          std::string_view message,
                                          std::span<const std::byte> bytes) {
-  Turn& turn = *s.turn;
+  Turn& turn = running(s);
   std::optional<tokenizer::TokenId> emitted;
   if (error == kernels::ProgramError::Ok) {
     std::optional<sampler::SampledRecord> record;
@@ -153,8 +173,9 @@ std::optional<tokenizer::TokenId> decide(Runtime::State& s,
     }
   } else {
     if (error == kernels::ProgramError::DeviceLost) s.lost = true;
-    if (s.message.empty())
+    if (s.message.empty()) {
       s.message.assign(message.substr(0, s.message.capacity()));
+    }
     turn.fail(failure_of(error));
   }
   if (s.program) run_planned(s);
@@ -163,8 +184,8 @@ std::optional<tokenizer::TokenId> decide(Runtime::State& s,
 
 // Second half: the token passed on, and the turn finished if it has.
 void deliver(Runtime::State& s, std::optional<tokenizer::TokenId> emitted) {
-  if (emitted) s.on_token(*emitted, s.userdata);
-  if (s.turn->finished()) finish(s);
+  if (emitted.has_value()) s.on_token(*emitted, s.userdata);
+  if (running(s).finished()) finish(s);
 }
 
 void on_step(kernels::ProgramError error, std::string_view message,
@@ -191,8 +212,9 @@ void on_profiled_step(kernels::ProgramError error, std::string_view message,
   step.end_ns = times.end_ns;
   const std::optional<tokenizer::TokenId> emitted =
       decide(s, error, message, bytes);
-  if (error == kernels::ProgramError::Ok && s.observer != nullptr)
+  if (error == kernels::ProgramError::Ok && s.observer != nullptr) {
     s.observer(step, s.observer_data);
+  }
   deliver(s, emitted);
 }
 #endif
@@ -232,8 +254,9 @@ StartResult Runtime::start(std::span<const tokenizer::TokenId> prompt,
       !checked.ok) {
     return {StartError::Settings, checked.subject};
   }
-  if (policy.max_tokens == 0)
+  if (policy.max_tokens == 0) {
     return {StartError::Settings, "max_tokens is 0; a reply draws at least 1"};
+  }
 
   // The diff, less the last token when it is the whole prompt: the first
   // draw needs that token's logits, which the cache does not hold.
@@ -261,14 +284,26 @@ std::uint32_t Runtime::capacity() const noexcept {
   return state_->cache.capacity();
 }
 
+bool Runtime::rewind(std::uint32_t tokens) noexcept {
+  State& s = *state_;
+  if (s.turn.has_value()) return false;
+  // Between turns the held tokens are the cache's length, so both stay one.
+  const std::uint32_t kept =
+      s.cache.truncate(std::min(tokens, s.cache.length()));
+  // kept <= the held tokens, so this only shortens them, allocating nothing.
+  s.held.erase(s.held.begin() + kept, s.held.end());
+  return true;
+}
+
 #if FRIZZLE_DIAGNOSTICS_ENABLED
 bool Runtime::observe_steps(StepObserver observer, void* userdata) noexcept {
   State& s = *state_;
   // Refused while a turn runs, and for a program that cannot profile: its
   // every step would be refused, at once, inside the turn's own loop.
   if (s.turn || (observer != nullptr &&
-                 (s.program == nullptr || !s.program->can_profile())))
+                 (s.program == nullptr || !s.program->can_profile()))) {
     return false;
+  }
   s.observer = observer;
   s.observer_data = userdata;
   return true;

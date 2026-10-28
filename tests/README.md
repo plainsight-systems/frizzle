@@ -24,7 +24,7 @@ skips it.
 | Scenario | Contract it guards | Status |
 | --- | --- | --- |
 | Logits vs llama.cpp | The native engine, on Dawn, computes Gemma 3 1B's logits for fixed token sequences within a frozen tolerance of llama.cpp's for the same file. Run when the inference path changes, not with the routine suite. `tests/integration/reference-logits/`, against the frozen reference in `tests/fixtures/reference/`. | Built |
-| Replay and edits | With no edits, or Scale × 1, the edited reply is the original reply bit for bit, including after other edits were made and removed. Several edits across layers apply together. Edits change the last prompt position and the generated tokens and leave earlier positions' cache entries untouched. Edits are held at every generated token. | Planned |
+| Replay and edits | With no edits, or Scale × 1, the edited reply is the original reply bit for bit, including after other edits were made and removed. Several edits across layers apply together. Edits change the last prompt position and the generated tokens and leave earlier positions' cache entries untouched. Edits are held at every generated token. A later prompt that contains an edited reply gives what a fresh engine gives: the cache keeps no edited entry between runs. | Planned |
 | Browser, end to end | In a real browser: download and verify the pinned file, generate a reply, pin neurons in two layers, and get the edited reply beside the original. | Planned |
 | Site build | The Hugo site builds and publishes with the app inside it. | Planned |
 
@@ -36,5 +36,5 @@ One slot is unassigned.
 | --- | --- | --- |
 | Tokenizer | Prompts tokenize to the reference token IDs for Gemma 3's vocabulary, and token IDs decode back to the same text. `tests/contracts/tokenizer/`, over the model's vocabulary alone in `tests/fixtures/tokenizer/` (`scripts/make_tokenizer_fixture.py`). | Built |
 | Model file | A malformed or hostile GGUF is refused by name, never read past its bounds or misinterpreted. `tests/contracts/gguf/`, over the files `scripts/make_gguf_fixtures.py` writes. | Built |
-| Kernels | Each kernel family (gather, norm, matmul, rope, attention, top-k), and the new capture and edit outputs, matches a CPU reference on small inputs. From slice 2, when the capture and edit work changes kernels; until then the oracle covers the ported kernels end to end. | Planned |
-| Edit specs | An invalid edit (unknown layer, neuron out of range, non-finite value) is refused by name; Scale × 1 is an exact no-op. | Planned |
+| Kernels | Each kernel family (gather, norm, matmul, rope, attention, top-k), and the new capture and edit outputs, matches a CPU reference on small inputs. From slice 2, when the edit kernel joins; captures join in slice 4; until then the oracle covers the ported kernels end to end. | Planned |
+| Edit specs | An invalid edit (unknown kind or layer, neuron out of range, non-finite value, a Zero with a value, a repeat, too many) is refused by name; Scale × 1 is an exact no-op; the table's layout. `tests/contracts/edits/`. | Built |

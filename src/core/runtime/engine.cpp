@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
@@ -23,6 +24,7 @@
 #include "core/arch/architecture.h"
 #include "core/cache/kv.h"
 #include "core/capability/capability.h"
+#include "core/edit/edit.h"
 #include "core/gguf/index.h"
 #include "core/gguf/reader.h"
 #include "core/gpu/userdata.h"
@@ -64,6 +66,7 @@ struct Engine::State {
   // upload's buffers, is released before the upload.
   std::unique_ptr<residency::Upload> upload;
   std::unique_ptr<Generator> generator;
+  residency::BufferRange edit_table{};  // the plan's, written each run
 
   bool running = false;  // a turn is in flight
 };
@@ -85,6 +88,7 @@ struct GenerateCall {
   TextCallback on_text;
   EndCallback on_end;
   void* userdata;
+  bool edited;  // the run had edits, so its cache entries are rewound
 };
 
 // --- Names, for refusals and failures ------------------------------------
@@ -284,6 +288,14 @@ void on_finished(residency::UploadError error, void* userdata) {
            "the plan has no buffer for the sampler's record");
     return;
   }
+  const std::optional<residency::BufferRange> edit_table =
+      scratch(plan, "edit_table");
+  if (!edit_table) {
+    settle(std::move(call), LoadError::Graph,
+           "the plan has no buffer for the edit table");
+    return;
+  }
+  s.edit_table = *edit_table;
   const kernels::Binding draw_record{sampled->buffer, sampled->offset,
                                      sizeof(sampler::SampledRecord)};
   const residency::Upload& upload = *s.upload;
@@ -300,7 +312,16 @@ void on_generate_text(std::string_view text, void* userdata) {
 
 void on_generate_end(const TurnResult& result, void* userdata) {
   auto call = gpu::take_back<GenerateCall>(userdata);
-  call->state->running = false;
+  State& s = *call->state;
+  // Back to just before the edits began: the cache keeps no edited entry
+  // between runs. The turn has ended, so the generator is between turns and
+  // the rewind is not refused; a refusal would be a broken invariant. A
+  // destroyed engine runs nothing again, so its cache is left as it is.
+  if (call->edited && !s.cancelled && s.generator != nullptr &&
+      !s.generator->rewind(result.prompt - 1)) {
+    std::abort();
+  }
+  s.running = false;
   call->on_end(result, call->userdata);
 }
 
@@ -470,23 +491,34 @@ LoadResult Engine::finish_load(LoadCallback done, void* userdata) {
 }
 
 OperationStart Engine::generate(std::string_view text,
+                                std::span<const edit::Edit> edits,
                                 const policy::TurnPolicy& policy,
                                 TextCallback on_text, EndCallback on_end,
                                 void* userdata) {
   State& s = *state_;
-  if (s.phase != Phase::Loaded) return {OperationError::NotLoaded, {}};
-  if (s.running) return {OperationError::Busy, {}};
+  if (s.phase != Phase::Loaded) return {OperationError::NotLoaded, {}, {}};
+  if (s.running) return {OperationError::Busy, {}, {}};
+  if (edit::EditCheck checked = edit::check(edits, s.description);
+      !checked.ok()) {
+    return {OperationError::Edits, std::move(checked), {}};
+  }
+  // The whole table, every run: no turn is in flight, and the queue orders
+  // the write before the turn's first step.
+  const std::vector<std::uint32_t> table = edit::table(edits, s.description);
+  wgpuQueueWriteBuffer(s.device->queue(), s.upload->buffer(s.edit_table.buffer),
+                       s.edit_table.offset, table.data(),
+                       table.size() * sizeof(std::uint32_t));
   // Set before the turn starts, since its end may be reported before start
   // returns.
   s.running = true;
   void* call = gpu::hand_off(std::make_unique<GenerateCall>(
-      GenerateCall{state_, on_text, on_end, userdata}));
+      GenerateCall{state_, on_text, on_end, userdata, !edits.empty()}));
   const GenerateResult started =
       s.generator->start(text, policy, on_generate_text, on_generate_end, call);
   if (!started.ok()) {
     (void)gpu::take_back<GenerateCall>(call);
     s.running = false;
-    return {OperationError::Start, started};
+    return {OperationError::Start, {}, started};
   }
   return {};
 }

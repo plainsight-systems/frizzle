@@ -25,12 +25,52 @@ namespace frizzle::runtime {
 // boundary's, with the tokenizer (tokenizer/tokenizer.h), so the loop is
 // tested on identifiers alone.
 //
-// A turn, started with the prompt, the turn's policy and two callbacks:
-//   1. Refused at once, without a callback, when it cannot run (StartError):
-//      a turn still running; a lost device; an empty prompt; a prompt longer
-//      than the context offered, naming both counts so the page can drop its
-//      oldest messages and render again (logical-overview.md); settings
-//      check refuses (sampler/sampler.h), or a max_tokens of 0.
+// Contract
+//   - start(prompt, policy, on_token, on_turn): a turn over the prompt, the
+//     whole rendered conversation. Refused at once, without a callback, when
+//     it cannot run (StartError): a turn still running; a lost device; an
+//     empty prompt; a prompt longer than the context offered, naming both
+//     counts so the page can drop its oldest messages and render again
+//     (logical-overview.md); settings check refuses (sampler/sampler.h), or
+//     a max_tokens of 0. Otherwise each emitted token is passed to on_token
+//     and the turn's result to on_turn, once.
+//   - Invariant, between turns: the tokens held are exactly the cache's
+//     length, those whose keys and values it holds. During a turn they also
+//     hold the prompt's uncached tokens and the accepted draws.
+//   - rewind(tokens), between turns: keeps at most the first `tokens` of the
+//     cache and the held tokens together, through the cache's truncate, so a
+//     rollback past the ring's reserve empties both (cache/kv.h). It never
+//     lengthens them. Refused, false and changing nothing, while a turn
+//     runs; the turn callback runs after the turn has ended, so it may
+//     rewind. The engine rewinds after a run with edits (runtime/engine.h).
+//   - Cancel ends the running turn at its next report; the steps already run
+//     report first, and are discarded (turn.h). A cancel with no turn running
+//     does nothing.
+//   - Failure is visible, and leaves the cache consistent: a step's failure
+//     empties it, so the next turn prefills from the first token; a
+//     non-finite draw ends the turn NonFinite, the cache kept up to it; a lost
+//     device refuses every later turn.
+//   - Callbacks run inside the program's, on the thread that processes the
+//     device's events. The token callback may cancel; the turn callback may
+//     start the next turn, rewind, or destroy the runtime.
+//   - It owns the program, and so outlives none of the program's callbacks:
+//     they carry the runtime's state, held by those in flight as the
+//     program's is, so destroying a runtime with a turn running finishes that
+//     turn Cancelled, its callback called. The upload the program borrows
+//     outlives the runtime (I.11).
+//   - Diagnostic builds only (core/diagnostics.h, TLM.6): observe_steps sets
+//     a step observer, or clears it, between turns. While one is set every
+//     step runs profiled — kernels/program.h's run_profiled, through all its
+//     launches — timed by the GPU at its one pass's beginning and end and
+//     reading back its record as run() does, so the turn's tokens are the
+//     same. The observer is called with the reporting step's kind, position
+//     and tokens and its two GPU times, after the next steps are run. The
+//     runtime reads no clock: a caller wanting the CPU's time of each report
+//     reads its own clock in the observer, and the two clocks are never
+//     subtracted (TLM.11). The clean build has none of it.
+//
+// Algorithm, a turn
+//   1. The checks above.
 //   2. The diff: the longest common prefix of the tokens the cache holds and
 //      the prompt (cache/prefix.h), less one when it is the whole prompt —
 //      the cache holds keys and values, not logits, and the first draw needs
@@ -49,133 +89,69 @@ namespace frizzle::runtime {
 //   5. Finished: the cache is truncated to what the turn keeps, and the
 //      held tokens to match; then the turn callback, once, with how it ended.
 //
-//   - Invariant, between turns: the tokens held are exactly the cache's
-//     length, those whose keys and values it holds. During a turn they also
-//     hold the prompt's uncached tokens and the accepted draws.
-//   - Cancel ends the running turn at its next report; the steps already run
-//     report first, and are discarded (turn.h). A cancel with no turn running
-//     does nothing.
-//   - Failure is visible, and leaves the cache consistent: a step's failure
-//     empties it, so the next turn prefills from the first token; a
-//     non-finite draw ends the turn NonFinite, the cache kept up to it; a lost
-//     device refuses every later turn.
-//   - Callbacks run inside the program's, on the thread that processes the
-//     device's events. The token callback may cancel; the turn callback may
-//     start the next turn or destroy the runtime.
-//   - It owns the program, and so outlives none of the program's callbacks:
-//     they carry the runtime's state, held by those in flight as the
-//     program's is, so destroying a runtime with a turn running finishes that
-//     turn Cancelled, its callback called. The upload the program borrows
-//     outlives the runtime (I.11).
-//
-// Diagnostic builds only (core/diagnostics.h, TLM.6): observe_steps sets a
-// step observer, or clears it, between turns. While one is set every step
-// runs profiled — kernels/program.h's run_profiled, through all its
-// launches — timed by the GPU at its one pass's beginning and end and
-// reading back its record as run() does, so the turn's tokens are the same.
-// As each step reports, the turn decides its draw and runs the steps it
-// plans next, as without an observer; then the observer is called with the
-// reporting step's kind, position and tokens and its two GPU times, so its
-// work falls after the GPU has its next steps, never between a report and
-// them. The runtime reads no clock: a caller wanting the CPU's time of each
-// report reads its own clock in the observer, and the two clocks are never
-// subtracted (TLM.11). What it perturbs: each step's pass also writes two
-// timestamps, and the step resolves them and copies them to a buffer of
-// their own, which it maps, reads and unmaps — five more calls into WebGPU,
-// 22 with run()'s 17 (kernels/program.h), and one more callback, which the
-// step's report waits on — and the observer's own work, after the next
-// steps are run. The
-// clean build has none of it, which tools/check_diagnostics_excluded.sh
-// checks.
-//
-// What it costs, counted:
+// Design and cost
+//   - The turn's decisions are turn.h's pure functions; this sequences the
+//     program and the cache around them (F.8).
 //   - A decoded token, on the CPU: one report from the program, the turn's
 //     constant work, at most kMaxStops comparisons, one run of the program —
 //     17 calls into WebGPU and 2 or 3 a launch, and 48 bytes written
-//     (program.h) — 4 bytes
-//     appended to the held tokens, and one token callback. Nothing waits on
-//     the GPU: the token is read a step behind, while the next step runs.
+//     (program.h) — 4 bytes appended to the held tokens, and one token
+//     callback. Nothing waits on the GPU: the token is read a step behind,
+//     while the next step runs.
 //   - A turn, once: the diff, one comparison a held token, at most the
-//     context offered — 40,960 for Qwen3, about 15 µs (cache/prefix.h); the
-//     cache's truncation, a visit to each layer, twice; the prompt's uncached
-//     identifiers copied once into the held tokens and once into the steps,
-//     4 bytes each; and a prefill step for each kPrefillBlock of them.
-//   - Its first token waits on the prefill steps and the last one's map, 0.5
-//     ms median on the target (sampler/sampler.h); every later token arrives
-//     a step after it was drawn. A stop is reported once any step queued
-//     behind it has run — at most one; none at the limit or the context. A
-//     cancel waits for what remains of every step already run, at most two,
-//     since the next step is run before the token callback that may cancel:
-//     at most two decode steps' time — each at position p reading its
-//     weights and cache, 0.94 ms + 0.29 µs × p for Qwen3 from device memory
-//     (graph/graph.h) — or two prefill blocks', less what they had already
-//     done when the cancel came.
+//     context offered (cache/prefix.h); the cache's truncation, a visit to
+//     each layer, twice; the prompt's uncached identifiers copied once into
+//     the held tokens and once into the steps, 4 bytes each; and a prefill
+//     step for each kPrefillBlock of them.
+//   - A rewind: one truncation, a visit to each layer, between turns.
+//   - Its first token waits on the prefill steps and the last one's map;
+//     every later token arrives a step after it was drawn. A stop is
+//     reported once any step queued behind it has run — at most one; none at
+//     the limit or the context. A cancel waits for what remains of every
+//     step already run, at most two, since the next step is run before the
+//     token callback that may cancel.
+//   - Profiling perturbs: each step's pass also writes two timestamps, which
+//     the step resolves, copies, maps, reads and unmaps — five more calls
+//     into WebGPU, 22 with run()'s 17 (kernels/program.h), and one more
+//     callback, which the step's report waits on.
 //   - Nothing is allocated after construction: the held tokens are reserved
-//     at the context offered plus one, the step is the runtime's own, and the
-//     turn is a value (MEM.9).
+//     at the context offered plus one, the step is the runtime's own, the
+//     turn is a value, and a failure's message is reserved (MEM.9).
+//   - What it asks of the other contracts: TurnPolicy's max_tokens, checked
+//     at least 1, bounded first by the context offered, and LoadPolicy's
+//     stop texts (policy/policy.h, stops.h); in diagnostic builds the
+//     program's launch count, the profiled step's bound; and the cache after
+//     a step queued behind a turn's end keeps each position whose input
+//     token is accepted (turn.h), where sampler/sampler.h said the queued
+//     step's position is truncated.
+//   - Verification: Charlotte's turn-loop tests were not ported. In
+//     Frizzle the replay and edits suite (tests/README.md), planned, runs
+//     turns through the engine, edited and not, against a fresh engine's;
+//     until it is built, only the native tool exercises the loop.
 //
-// What it asks of the other contracts:
-//   - policy/policy.h: TurnPolicy carries max_tokens, the most tokens a
-//     reply may draw, checked at least 1; the context offered bounds it
-//     first. LoadPolicy carries the stop texts the model's generation config
-//     lists beyond its file's (stops.h); none, for an unmeasured model.
-//   - kernels/program.h: in diagnostic builds, its launch count, the
-//     profiled step's bound.
-//   - sampler/sampler.h: the cache after a step queued behind a turn's end
-//     keeps each position whose input token is accepted (turn.h), the stop
-//     token's among them, where it said the queued step's position is
-//     truncated.
-//
-// Verification the implementation is held to:
-//   - The turn, on the CPU (turn.h): the steps planned — the prefill blocks'
-//     positions, sizes and logits; decode steps at prompt + j; never more
-//     than two outstanding, nor one at the context or past the limit — and
-//     what each way of ending emits and keeps: a stop at draw 0 and at a later
-//     draw, with a step queued behind it and with none; a cancel in prefill,
-//     with a decode step queued, and after the turn ended; a non-finite draw;
-//     the limit at 1 and beyond; a prompt that fills the context, and one a
-//     token short of it; each kind of step failure, and a cancellation by the
-//     program; reports after the end discarded.
-//   - The stop set, on the CPU, from each listed model's file and its
-//     policy's texts, and each refusal by name.
-//   - On the GPU, the cache cases sampler/sampler.h lists: each turn that
-//     follows a discarded step gives the same bits as the same conversation
-//     run as one prompt in a fresh upload. That turn ends at its limit, so
-//     no step is discarded after it, and its drawn tokens and the 64
-//     candidates its last step selected are compared bit for bit. The stop
-//     set is the token a first run shows is drawn at the wanted step, and the
-//     context a cache made that small; Qwen3's file for the full-attention
-//     cases, and a synthetic Gemma 3 of forward_model's sizes, window 16 and a
-//     rollback reserve of 16, for the ring past wrapping.
-//   - On the GPU, the diff: a second turn reuses the common prefix and
-//     prefills only the rest, reported as reused; a prompt wholly held
-//     recomputes its last token; a turn's greedy tokens are those decoding
-//     a step at a time gives; a cancel in prefill keeps the blocks run;
-//     destroying a runtime mid-turn reports Cancelled; and each refusal.
-//
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     F.8    Prefer pure functions — the turn's decisions are turn.h's; this
+//     F.8    Prefer pure functions: the turn's decisions are turn.h's; this
 //            sequences the program and the cache around them.
-//     E.27   Use error codes systematically — StartError, and TurnFailure.
-//     I.11   Never transfer ownership by a raw pointer — the program is
+//     E.27   Use error codes systematically: StartError, and TurnFailure.
+//     I.11   Never transfer ownership by a raw pointer: the program is
 //            owned, by unique_ptr; the upload borrowed, and stated so.
-//     I.5    State preconditions — on construction and on start.
+//     I.5    State preconditions: on construction and on start.
 //   C++ performance guidelines
-//     GPU.7  Pipeline CPU and GPU work — two steps in flight; the next run
+//     GPU.7  Pipeline CPU and GPU work: two steps in flight; the next run
 //            before the CPU's work on a token.
-//     TLM.6  Label measurement modes — the step observer is diagnostic
+//     TLM.6  Label measurement modes: the step observer is diagnostic
 //            builds' alone.
-//     TLM.11 Never align clocks without a calibrated pair — GPU times out,
+//     TLM.11 Never align clocks without a calibrated pair: GPU times out,
 //            the caller's CPU clock its own.
-//     GPU.1  Keep data on the device — the token is fed on the GPU, and only
+//     GPU.1  Keep data on the device: the token is fed on the GPU, and only
 //            its 16-byte record is read back.
-//     MEM.9  Allocate at init — every buffer the turn touches, at
+//     MEM.9  Allocate at init: every buffer the turn touches, at
 //            construction.
-//     WASM.2 Batch work across the JS boundary — the prompt crosses once a
+//     WASM.2 Batch work across the JS boundary: the prompt crosses once a
 //            turn; a token, once.
 
-enum class StartError {
+enum class StartError : std::uint8_t {
   Ok,
   Busy,        // a turn is running
   DeviceLost,  // a step reported the device lost; no turn can run
@@ -252,6 +228,12 @@ class Runtime {
   // The context offered: the most tokens a prompt and its reply hold.
   [[nodiscard]] std::uint32_t capacity() const noexcept;
 
+  // Between turns, keeps at most the first `tokens` of the cache and the
+  // tokens held: the cache's truncate (cache/kv.h), which empties it for a
+  // rollback past its reserve. Never lengthens it. False, changing nothing,
+  // while a turn runs.
+  [[nodiscard]] bool rewind(std::uint32_t tokens) noexcept;
+
 #if FRIZZLE_DIAGNOSTICS_ENABLED
   // Sets the step observer, or with null clears it; false, changing
   // nothing, while a turn runs or, setting one, when the program's device
@@ -262,6 +244,8 @@ class Runtime {
   ~Runtime();
   Runtime(const Runtime&) = delete;
   Runtime& operator=(const Runtime&) = delete;
+  Runtime(Runtime&&) = delete;
+  Runtime& operator=(Runtime&&) = delete;
 
   // What the runtime and its in-flight callbacks share; defined only where
   // the runtime is.

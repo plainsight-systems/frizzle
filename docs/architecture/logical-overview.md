@@ -56,7 +56,7 @@ the file it is read from.
 | Operation | Does | Returns |
 | --- | --- | --- |
 | `load(file)` | Read the GGUF, put the weights on the GPU | Ready, or a named refusal |
-| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; captures (slice 2) |
+| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; captures (slice 4) |
 
 Frizzle shows what the model produces and computes nothing beside it. The
 cache keeps the prompt's prefix between runs, so running the same prompt
