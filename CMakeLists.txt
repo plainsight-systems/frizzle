@@ -147,6 +147,7 @@ add_library(frizzle_gpu STATIC
     src/core/residency/mapping.cpp
     src/core/residency/upload.cpp
     src/core/residency/witness.cpp
+    src/core/runtime/engine.cpp
     src/core/runtime/generator.cpp
     src/core/runtime/runtime.cpp
 )
@@ -168,6 +169,7 @@ set(FRIZZLE_GPU_HEADERS
     core/residency/mapping.h
     core/residency/upload.h
     core/residency/upload_check.h
+    core/runtime/engine.h
     core/runtime/generator.h
     core/runtime/runtime.h
 )
@@ -193,4 +195,7 @@ else()
     # thread (core/gpu/callback_mode.h).
     target_compile_definitions(frizzle_gpu PUBLIC
         FRIZZLE_GPU_PROCESS_EVENTS=1 FRIZZLE_GPU_DAWN_NATIVE=1)
+    # The native analysis tool (axis V): the reply to one prompt.
+    add_executable(frizzle tools/frizzle/main.cpp)
+    target_link_libraries(frizzle PRIVATE frizzle_gpu)
 endif()

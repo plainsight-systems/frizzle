@@ -15,7 +15,7 @@ Arrows are labelled: what crosses, or who owns what.
 flowchart TB
   subgraph Page["Page"]
     Site["Site · Hugo [N]"]
-    App["App · React [N]<br/>prompt, prediction, replies<br/>pass map in three.js WebGL<br/>workbenches · the edit set"]
+    App["App · React [N]<br/>prompt, replies<br/>pass map in three.js WebGL<br/>workbenches · the edit set"]
   end
   subgraph Worker["Engine worker"]
     Host["Worker host · TypeScript [C]<br/>download, SHA-256, OPFS<br/>chat template → text"]
@@ -29,11 +29,11 @@ flowchart TB
   end
   Site -->|"hosts"| App
   App -->|"requests, each with an id"| Host
-  Host -->|"predictions, captures (copies), tokens"| App
+  Host -->|"replies (streamed), captures (copies)"| App
   File -->|"downloaded once, verified"| Host
-  Host -->|"the four operations"| Wasm
+  Host -->|"the operations"| Wasm
   Wasm -->|"owns"| GPU
-  Tool -->|"the four operations"| Dawn
+  Tool -->|"the operations"| Dawn
 ```
 
 One engine source, two builds, one `webgpu.h`. Everything the native tool and
@@ -48,37 +48,33 @@ the file it is read from.
 | Site | Pages, the family shell | A home for the built app | Anything in the model |
 | App | The edit set, what is on screen, copies of captures | Requests | The device, the model, tokens |
 | Worker host | The file: download, verify, cache; the chat template | The worker side of the protocol | The GPU |
-| Engine | Weights on the GPU, the cache, the edit set position n−1 was computed under, the sampler | `load`, `prompt`, `predict`, `generate` | The page; the file on disk |
+| Engine | Weights on the GPU, the cache, the sampler | `load`, `generate` | The page; the file on disk |
 | Native tool, tests | Fixtures, references | Nothing to the product | Anything the browser build does not also do |
 
-## The four operations
+## The operations
 
 | Operation | Does | Returns |
 | --- | --- | --- |
 | `load(file)` | Read the GGUF, put the weights on the GPU | Ready, or a named refusal |
-| `prompt(text)` | Template, tokenize, compute the prefix and position n−1 with no edits | Prediction and captures |
-| `predict(edits)` | Bring n−1 to these edits | Prediction and captures |
-| `generate(edits, seed)` | Bring n−1 to these edits, then decode with them held | Tokens, streamed |
+| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; captures (slice 2) |
 
-"Bring n−1 to these edits" is one rule, shared by `predict` and `generate`:
-cut the cache back to the prompt, then rerun n−1 from the first layer where
-the new edit set differs from the one n−1 was computed under. Nothing differs,
-nothing reruns.
+Frizzle shows what the model produces and computes nothing beside it. The
+cache keeps the prompt's prefix between runs, so running the same prompt
+with other edits recomputes only the last position before decoding.
 
 ## The state: the cache in three parts
 
 ```mermaid
 flowchart LR
   P["0 … n−2<br/><b>the prefix</b><br/>computed once per prompt<br/>never written again"]
-  L["n−1<br/><b>the last position</b><br/>a function of the prefix<br/>and the edit set<br/>rerun from layer L"]
+  L["n−1<br/><b>the last position</b><br/>a function of the prefix<br/>and the edit set<br/>recomputed every run"]
   G["n …<br/><b>the reply</b><br/>appended while decoding<br/>cut away before the next run"]
   P --- L --- G
 ```
 
 These are Frizzle's requirements on the cache. Cutting the reply away never
-recomputes the prompt, whatever the reply's length. Rerunning n−1 from layer
-L leaves the layers below it untouched. Charlotte's cache is where the code
-starts, and it changes wherever it falls short.
+recomputes the prompt, whatever the reply's length. Charlotte's cache is where
+the code starts, and it changes wherever it falls short.
 
 ## Inside one layer: where values are read and changed
 
@@ -102,9 +98,8 @@ flowchart TD
 
 Each capture is copied out at its point into a capture store with a slot
 per layer, so it holds what the model used even if the buffer it came from
-is reused. A rerun from layer L rewrites slots L onward; the
-slots below are already right. Every `prompt` and `predict` sends the whole
-store to the page, so switching layers never asks the engine for anything.
+is reused. Every run sends the whole store to the page, so switching layers
+never asks the engine for anything.
 
 | Per layer, at f32 | Size |
 | --- | --- |
@@ -114,8 +109,8 @@ store to the page, so switching layers never asks the engine for anything.
 | Attention weights, 4 heads × positions (slice 5) | 16 B per position |
 | **All 26 layers, 512-token prompt** | **about 1.1 MiB** |
 
-That is a small fraction of one decode step's reads (the 722 MB of weights),
-and a dropped predict sends nothing. An edited stage is captured after its
+That is a small fraction of one decode step's reads (the 722 MB of
+weights). An edited stage is captured after its
 edit: the screen shows what the model used. The unedited values are the
 store from the run without edits, which the app keeps.
 
@@ -130,18 +125,11 @@ sequenceDiagram
   participant App
   participant Worker as Worker and engine
   You->>App: type a prompt
-  App->>Worker: prompt(text)
-  Worker-->>App: prediction, captures
-  App->>Worker: generate(no edits, seed)
-  Worker-->>App: the original reply, streamed
-  loop while you drag
-    You->>App: change a neuron
-    App->>Worker: predict(whole edit set)
-    Worker-->>App: prediction, captures
-  end
-  You->>App: release
-  App->>Worker: generate(whole edit set, same seed)
-  Worker-->>App: the edited reply, beside the original
+  App->>Worker: generate(text, no edits, seed)
+  Worker-->>App: the original reply, streamed; captures
+  You->>App: pin neurons
+  App->>Worker: generate(text, whole edit set, same seed)
+  Worker-->>App: the edited reply, beside the original; captures
 ```
 
 The original reply is generated once per prompt, before any edit, and kept.
@@ -149,26 +137,21 @@ The original reply is generated once per prompt, before any edit, and kept.
 ## What must stay true
 
 1. The prefix, 0 … n−2, is computed once per prompt and never written again.
-2. Position n−1 depends only on the prefix and the edit set. The engine reruns
-   it from the first layer where the new set differs from the one it was
-   computed under; removing an edit is a difference.
-3. With no edits, or Scale × 1, n−1 and everything decoded after it are bit for
-   bit the original.
-4. The app sends the whole edit set with every request, and the engine works
-   out the difference. Neither holds a change list for the other.
+2. Position n−1 depends only on the prefix and the edit set, and is
+   recomputed on every run.
+3. With no edits, or Scale × 1, the reply is bit for bit the original.
+4. The app sends the whole edit set with every run. Neither holds a change
+   list for the other.
 5. A capture is a copy taken inside the pass at its point. An edited stage is
-   captured after its edit. The capture store always matches the current
-   state of n−1, for every layer, and is sent whole.
+   captured after its edit. The capture store always holds the last run's
+   values, for every layer, and is sent whole.
 6. The original and edited replies use the same seed. The sampler is keyed by
    seed and position, and edits are applied at every decode step, so the edits
    are the only difference.
 7. Every request carries an id, and the page shows only the answer to its
-   latest one. The worker may drop a predict that a newer one replaces, never
-   a generate.
+   latest one.
 
 ## Not settled here
 
 - Whether gate and up are shown separately (new kernel outputs).
 - How the residual edit opens up the add-and-norm kernel (slice 7).
-- How a rerun from layer L starts (slice 2). The ported norm kernel adds into
-  X and normalizes in one step; it can change if that is in the way.

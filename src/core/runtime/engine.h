@@ -1,0 +1,191 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+
+#include "core/gguf/byte_source.h"
+#include "core/gpu/device.h"
+#include "core/policy/policy.h"
+#include "core/runtime/generator.h"
+
+namespace frizzle::runtime {
+
+// Axis M: changes with an operation the engine offers, or the order of the
+// stages inside one.
+//
+// The engine's operations (docs/architecture/logical-overview.md): load and
+// generate. Every host calls these and nothing below them: the native tool
+// now, the browser boundary (src/wasm/) in slice 3. It composes what is
+// ported, unchanged: the GGUF reader, the capability table, the residency
+// planner and upload, the graph and program, the turn loop and the
+// generator. It shows what the model produces and computes nothing beside
+// it.
+//
+// Contract
+//   load, in three calls, because the file arrives in pieces
+//     1. begin_load(front, max_chunk, policy, ready): reads the GGUF index
+//        and the tokenizer from `front`, a byte source whose size() is the
+//        file's and which holds at least the file's index and metadata
+//        (natively the whole file; in the browser its first bytes).
+//        Describes the architecture through the capability table, plans
+//        residency within the device's limits and `policy`, loads the
+//        tokenizer, resolves the stop tokens, and begins the upload.
+//        Refused at once, named (LoadError), with no callback: a load or a
+//        turn in progress; a file that is not a GGUF this engine reads; an
+//        architecture or tokenizer it does not implement; stops it cannot
+//        resolve; a plan that does not fit. `front` is not read after the
+//        call. Otherwise `ready` is called once: Ok when the upload's
+//        buffers exist, or the upload's failure. A model loaded before is
+//        released first, so the two are never on the device together.
+//     2. write(offset, chunk, accepted): the file's bytes, in order, at most
+//        `max_chunk` a call, each accepted through its callback before the
+//        next; `chunk` may be reused once accepted.
+//     3. finish_load(done): checks the upload is complete, builds the graph
+//        and its program (pipelines compile asynchronously), then makes the
+//        cache and the turn loop. `done` reports Ok or a named failure.
+//     write and finish_load are refused at once, NotLoading, outside a load,
+//     and Busy while the previous call's callback is pending.
+//   generate(text, policy, on_text, on_end)
+//     - `text` is exactly what the model reads: Gemma's chat template already
+//       applied. The engine renders no template (the worker does; T).
+//     - Runs the model over `text` and streams the reply as text, under
+//       `policy`: its sampling settings, seed and token limit; then calls
+//       back once with the turn's result (runtime.h).
+//     - Refused at once, named (OperationError): not loaded; a turn running;
+//       and what the generator refuses (generator.h): text the tokenizer
+//       cannot encode, an empty or too long prompt.
+//   - One operation at a time. Callbacks run on the thread that processes
+//     the device's events, and a callback may run before the call that
+//     started it returns: the upload refuses some files and accepts a first
+//     chunk at once, and the program refuses some graphs at once. Every
+//     failure is reported, named; none is turned into an empty reply.
+//   - Borrows the device, which outlives it (I.11); the upload takes a
+//     reference of its own. Owns everything it makes. Destroying it with an
+//     operation in flight reports that operation Cancelled, as the runtime
+//     does, so each callback's userdata must stay valid until its callback
+//     has run.
+//
+// Algorithm, generate
+//   1. Start a turn on the generator with the text and the caller's policy.
+//      The turn loop reuses whatever prefix of the text the cache already
+//      holds from the turn before, and recomputes the rest (runtime.h).
+//   2. Stream its text; call back once at the end with how it ended.
+//
+// Design and cost
+//   - Nothing ported changes. The engine is the composition Charlotte's
+//     browser bindings made inline, as a class every host shares.
+//   - The tokenizer and stops load before the upload begins, on the CPU,
+//     so every refusal begin_load names comes at once. Charlotte overlapped
+//     them with the device's buffer creation (20 to 56 ms, its bindings);
+//     not done here until it is measured to matter.
+//   - Settings: Charlotte never measured Gemma 3, so the load and turn
+//     policies are policy.h's defaults for an unmeasured model; the tool
+//     prints what it ran with. Measuring is J's, still open.
+//   - State shared with in-flight callbacks (F.27), as the runtime's is: each
+//     callback carries a record holding it, so destroying the engine leaves
+//     a live state for the callback to land on, and the last holder frees it.
+//   - A turn costs what the turn loop's does (runtime.h); the engine adds one
+//     record a call and nothing a token.
+//
+// Corpus guidance
+//   C++ Core Guidelines
+//     I.1    Make interfaces explicit: the stages and the order of load, and
+//            when callbacks may run, are stated above.
+//     I.11   Never transfer ownership by a raw pointer or reference: the
+//            device is borrowed; everything else is owned.
+//     E.27   Use error codes systematically: LoadError and OperationError,
+//            and the runtime's own, each named.
+//     C.2    Use class if the class has an invariant: the engine is
+//            unloaded, loading, or loaded, and each operation states which
+//            it needs.
+//     F.27   Use a shared_ptr to share ownership: the state, between the
+//            engine and its callbacks in flight.
+//     ES.79  Use default for common cases only: the switches over error
+//            enums name every case and have no default, so a new case is a
+//            compile warning, not a silent fallthrough.
+//   C++ performance guidelines
+//     MEM.9  Allocate at init: the cache and the program at load; a turn
+//            allocates only the engine's record for it.
+
+enum class LoadError : std::uint8_t {
+  Ok,
+  Busy,          // a load stage or a turn is in progress
+  NotLoading,    // write or finish_load with no load begun
+  Index,         // the bytes are not a GGUF index this engine reads
+  Architecture,  // missing, not implemented, or not describing this file
+  Fit,           // the plan does not fit the device's limits or the budget
+  Tokenizer,     // missing, not implemented, or not loading from this file
+  Stops,         // the stop tokens cannot be resolved
+  Upload,        // the upload refused or failed; the subject names how
+  Graph,         // the graph does not build over the plan
+  Program,       // the kernels did not build; the subject is WebGPU's
+  Cancelled,     // the engine was destroyed with the stage in flight
+};
+
+struct LoadResult {
+  LoadError error = LoadError::Ok;
+  std::string subject;  // what was refused, and why
+  [[nodiscard]] bool ok() const noexcept { return error == LoadError::Ok; }
+};
+
+using LoadCallback = void (*)(const LoadResult& result, void* userdata);
+
+enum class OperationError : std::uint8_t {
+  Ok,
+  NotLoaded,
+  Busy,   // a turn is running
+  Start,  // the generator refused; `start` says why
+};
+
+struct OperationStart {
+  OperationError error = OperationError::Ok;
+  GenerateResult start;  // for Start
+  [[nodiscard]] bool ok() const noexcept { return error == OperationError::Ok; }
+};
+
+class Engine {
+ public:
+  // Preconditions: `device` outlives the engine.
+  explicit Engine(const gpu::Device& device);
+  ~Engine();
+  Engine(const Engine&) = delete;
+  Engine& operator=(const Engine&) = delete;
+  Engine(Engine&&) = delete;
+  Engine& operator=(Engine&&) = delete;
+
+  // Load, step 1. On ok(), `ready` is called once with `userdata`.
+  // Preconditions: max_chunk > 0.
+  [[nodiscard]] LoadResult begin_load(gguf::ByteSource& front,
+                                      std::size_t max_chunk,
+                                      const policy::LoadPolicy& policy,
+                                      LoadCallback ready, void* userdata);
+  // Load, step 2. On ok(), `accepted` is called once with `userdata`.
+  [[nodiscard]] LoadResult write(std::uint64_t offset,
+                                 std::span<const std::byte> chunk,
+                                 LoadCallback accepted, void* userdata);
+  // Load, step 3. On ok(), `done` is called once with `userdata`.
+  [[nodiscard]] LoadResult finish_load(LoadCallback done, void* userdata);
+
+  // On ok(), `on_text` is called for each piece of the reply and `on_end`
+  // once, both with `userdata`. `text` is not read after the call.
+  [[nodiscard]] OperationStart generate(std::string_view text,
+                                        const policy::TurnPolicy& policy,
+                                        TextCallback on_text,
+                                        EndCallback on_end, void* userdata);
+
+  // The context the loaded model offers; 0 when none is loaded.
+  [[nodiscard]] std::uint32_t context() const noexcept;
+
+  // What the engine and its callbacks in flight share; defined only where
+  // the engine is.
+  struct State;
+
+ private:
+  std::shared_ptr<State> state_;
+};
+
+}  // namespace frizzle::runtime

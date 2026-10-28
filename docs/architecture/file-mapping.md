@@ -72,7 +72,7 @@ slice 1 and the TypeScript rules from slice 3.
 | Path | Axis | Origin | What it holds |
 | --- | --- | --- | --- |
 | `core/arch/`, `core/model/` | A, C, contract | [P] | Gemma 3's description and the order its graph runs the blocks |
-| `core/graph/graph.*` | A | [C] | The layer's blocks; the ◉ and ✎ points; running position n−1 from layer L |
+| `core/graph/graph.*` | A | [C] | The layer's blocks; the ◉ and ✎ points |
 | `core/formats/<format>/` | B | [P] | F32, F16, Q4_0, Q4_1, Q8_0 |
 | `core/gguf/` | C | [P] | The file reader |
 | `core/gpu/`, `core/residency/`, `core/kernels/program`, `order`, `schedule`, `core/run_guard.h` | D | [P] | Device, placement, upload, launching; the context offered is sized in `residency/plan` |
@@ -85,9 +85,11 @@ slice 1 and the TypeScript rules from slice 3.
 | `core/capability/capability.cpp` | I | [C] | Trimmed to Gemma 3 and its formats |
 | `core/policy/` | contract | [P] | What can be configured. The values are J's: they come from `config/model.json`, which gains the measured settings once measured |
 | `core/tokenizer/` | K | [P] | SentencePiece BPE |
-| `core/runtime/runtime.*`, `generator.*`, `turn.*`, `stops.*` | M | [C] | `load`, `prompt`, `predict`, `generate` |
+| `core/runtime/runtime.*`, `turn.*`, `stops.*` | M | [P] | The turn loop |
+| `core/runtime/generator.*` | M | [P] | Text in, text out over the turn loop |
+| `core/runtime/engine.*` | M | [N] | `load` and `generate`, the operations every host calls |
 | `core/capture/` | O | [N] | The store, a slot per layer, its layout |
-| `core/edit/` | Q | [N] | Edit kinds and what each does as a plain function; the first layer where two sets differ; `edit.wgsl` and its launcher |
+| `core/edit/` | Q | [N] | Edit kinds and what each does as a plain function; `edit.wgsl` and its launcher |
 | `core/diagnostics.h` | U | [P] | The build's instrumentation gate |
 | `ported.json` | V | [N] | Each ported file's SHA-256 as ported, written by `scripts/port_charlotte.py`; tells unchanged files from changed ones |
 | `wasm/bindings.cpp` | R | [N] | The four operations for the worker; the only Emscripten-aware C++ |
@@ -103,7 +105,7 @@ in WGSL, and adding an edit kind changes both files.
 
 ```text
 main.tsx, App.tsx      H(frame)
-views/prompt/          H(view)   prompt, first-token prediction, both replies
+views/prompt/          H(view)   prompt, both replies
 views/pass-map/        H(view)   slice 5
 views/deck/            H(view)   the MLP workbench
 views/residual/        H(view)   slice 7
@@ -127,9 +129,9 @@ Two Vite entries, the page and the worker. `worker/delivery/` reads
 | --- | --- | --- |
 | `CMakeLists.txt`, `CMakePresets.json`, `cmake/` | U | Native and browser presets, shader embedding, the Dawn pin |
 | `app/package.json`, lockfile, Vite config | U | Exact npm versions |
-| `tools/frizzle/` | V | The native tool: the prediction and both replies for a prompt |
+| `tools/frizzle/` | V | The native tool: the reply to a prompt; the edited reply beside it from slice 2 |
 | `tools/reference_logits/` | V | llama.cpp's logits, the frozen reference |
-| `scripts/` | U, V | Python: checks, fetching Dawn and test data, fixture generators |
+| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, fixture generators |
 | `tests/integration/<scenario>/` | V | One directory per scenario in the [inventory](../../tests/README.md): `reference-logits`, `replay`, `browser`, `site` |
 | `tests/contracts/<suite>/` | V | One per suite: `tokenizer`, `gguf`, `kernels`, `edits` |
 | `tests/fixtures/` | V | Small inputs and frozen references |

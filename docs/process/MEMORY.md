@@ -6,11 +6,12 @@ Current decisions only. Remaining work is in [QUEUE.md](QUEUE.md).
 
 A chat model in the browser that you can reach inside. Type a prompt; it runs
 through the model's chat template (control tokens are never shown) and the
-page shows the first token of the reply. Open any layer, change something at
-the last position, and the first-token prediction updates live. On release,
-the whole reply is generated with the edit held at every generated token and
-shown beside the original reply, both from the same seed. The typical use:
-pin a neuron, or several across any layers, and see what the model says.
+model writes its reply. Open any layer, change something at the last
+position, and run the model again: the reply it writes with the edit held at
+every generated token is shown beside the original, both from the same seed.
+The typical use: pin a neuron, or several across any layers, and see what the
+model says. Frizzle shows what the model produces and computes nothing beside
+it.
 
 The audience is curious people, not interpretability researchers. Frizzle does
 not build on published interpretability resources.
@@ -49,7 +50,7 @@ estimated at about 140 tok/s and has not been measured.
   refuse other versions and never install anything.
 - The engine owns its WebGPU device in a worker. The scene uses three.js's
   WebGL renderer on the page. Captured values are copied across, all layers
-  on every prediction (sizes in the
+  on every run (sizes in the
   [logical overview](../architecture/logical-overview.md)).
 - The interface is React, react-three-fiber, TypeScript and Vite, with npm at
   exact versions and a committed lockfile. The site is Hugo.
@@ -88,20 +89,28 @@ which comes over whole.
 
 Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 
+## Engine operations
+
+- Hosts call the engine's operations alone (`src/core/runtime/engine.h`):
+  `load` in three calls, and `generate`, which gains the edit set in slice
+  2. The engine composes the ported pieces unchanged.
+- `generate` runs the model over the rendered text and streams its reply.
+  The turn loop reuses the prefix of the prompt the cache already holds.
+- The engine renders no chat template; it reads text already rendered.
+- Nothing is computed beside the model: no probabilities derived on the CPU,
+  no second pass to keep in step with the first.
+
 ## Engine requirements
 
 - Capture, at the last position for every layer: the residual, Q, attention
-  weights over earlier positions and itself, and the neurons. Every prediction
+  weights over earlier positions and itself, and the neurons. Every run
   sends all 26 layers to the page (about 1.1 MiB for a 512-token prompt), so
   switching layers needs no request.
 - Edits are a set, applied together in one pass: any number of neurons in
   any layers.
-- Apply edits inside the pass. Rerun the last position from the first layer
-  where the edit set differs from the one it was computed under (removing an
-  edit is a difference). Earlier positions' cache entries are unchanged; the
-  last position's own keys and values from that layer on are overwritten in
-  place.
+- Apply edits inside the pass, at the last prompt position and at every
+  generated token. Earlier positions' cache entries are unchanged.
 - Hold edits at every generated token. Generate the original and edited replies
   from the same seed.
-- With no edits, or Scale × 1, the rerun reproduces the original prediction
-  bit for bit.
+- With no edits, or Scale × 1, the edited reply is the original reply, bit
+  for bit.

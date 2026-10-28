@@ -1,6 +1,7 @@
 # Remaining work
 
-Nothing is built yet. The work is cut into slices, in order. Each ends in
+Slice 1 is under way: the port, the engine's operations and the native tool
+are built; its tests are not. The work is cut into slices, in order. Each ends in
 something shown working, and the tests from the
 [inventory](../../tests/README.md) that guard it land with it, each shown to
 fail before it is kept.
@@ -20,15 +21,17 @@ fail before it is kept.
   `residency/plan`, which comes over whole).
 - `check.py boundaries`, its C++ rule: the core includes nothing from
   `src/wasm/`, `tools/` or `tests/`.
-- A native tool prints the first-token prediction and the reply for a prompt.
+- The engine's operations `load` and `generate`
+  (src/core/runtime/engine.h).
+- A native tool prints the reply to a prompt, through those operations.
 - Tests: logits vs llama.cpp, tokenizer, model file, the ported kernels.
 
 ## 2. Pinned neurons, native
 
-- Captures at the last position for every layer; edits as a set across
-  layers, applied inside the pass; rerun from the first layer where the edit
-  set differs, overwriting the last position's keys and values; edits held through
-  decoding.
+- `generate` takes the edit set: edits as a set across layers, applied
+  inside the pass at the last prompt position and held at every generated
+  token. Captures at the last prompt position for every layer, sent with the
+  run.
 - The native tool prints the edited reply beside the original.
 - Tests: replay and edits, edit specs, the capture and edit kernels.
 
@@ -37,8 +40,8 @@ fail before it is kept.
 - The Emscripten build; scaffold `app/` with its pinned dependencies; port the
   worker, protocol, download, verification, cache and chat-template modules
   to TypeScript.
-- A plain page: prompt, prediction bars, pin neurons by number, the two
-  replies side by side.
+- A plain page: prompt, pin neurons by number, the two replies side by
+  side.
 - `check.py boundaries`, its TypeScript rules (React only in the root,
   `views/` and `theme/`; the worker imports no page code).
 - Measure the browser decode speed for Gemma 3 1B.
@@ -77,4 +80,8 @@ fail before it is kept.
 - An early readout: what the model would predict if it stopped at a layer.
 - Workbenches for stages other than the MLP.
 - Supported browsers and devices.
+- Measuring Gemma 3 1B's sampling settings; until then it runs on the
+  defaults for an unmeasured model (policy.h).
+- Which libc++ the native build links on macOS: today the system's
+  `/usr/lib/libc++.1.dylib`, while compiling against LLVM 21.1.8's headers.
 - Hosting and CI.

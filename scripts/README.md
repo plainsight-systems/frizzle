@@ -33,8 +33,10 @@ On macOS, `tidy` gives the analyzer the Xcode SDK's system root, which the
 compile command leaves implicit, and nothing else. The native build is
 compiled by LLVM 21.1.8 clang against that LLVM's own libc++ headers, which
 the analyzer finds by itself; adding the SDK's libc++ headers as well would
-put two standard libraries in one translation unit. Which libc++ library the
-native build links against on macOS is still open: nothing links yet.
+put two standard libraries in one translation unit. The native tool links
+the system's `/usr/lib/libc++.1.dylib` against those headers, and runs so on
+macOS 26.6.2 (checked 2026-10-28); whether to pin that pairing is open
+([QUEUE](../docs/process/QUEUE.md)).
 
 `tidy` leaves out files ported from Charlotte and unchanged since (their
 SHA-256 still matches `src/ported.json`) and lists them on every run; see the
@@ -61,3 +63,18 @@ docker run --rm -v "$PWD":/src -w /src emscripten/emsdk:6.0.8 emcmake cmake --pr
 checks its SHA-256 and unpacks it into ignored `.cache/dawn/`; an archive
 that does not match is not unpacked. CMake refuses any native compiler but
 LLVM clang 21.1.8 and any Emscripten but 6.0.8, rather than substituting one.
+
+## The native tool
+
+```sh
+python3 scripts/fetch_model.py
+CXX=$(brew --prefix llvm@21)/bin/clang++ cmake --preset native-release
+cmake --build build/native-release
+build/native-release/frizzle --prompt-file prompt.txt
+```
+
+`fetch_model.py` downloads the model pinned in `config/model.json` into
+ignored `.cache/models/`, checking its size and SHA-256 before the file takes
+its final name. The tool takes the prompt with Gemma's chat template already
+applied; `frizzle` with no arguments prints the rendered form. A file keeps
+the newline after `model` that a shell's `$(...)` would drop.

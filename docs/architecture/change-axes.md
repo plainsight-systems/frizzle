@@ -61,7 +61,7 @@ flowchart LR
   O["O · copies into the store,<br/>a slot per layer"]
   Q["Q · which edits apply here"]
   E["Q's edit kernel<br/>applies them"]
-  M["M · sends the store<br/>with the prediction"]
+  M["M · sends the store<br/>with the run"]
   A -->|"at ◉"| O
   A -->|"at ✎"| Q
   Q -->|"in WGSL"| E
@@ -83,10 +83,10 @@ flowchart LR
 | **J** The pinned model [C] | The model, or its measured settings | `config/model.json`, policy values |
 | **K** Tokenizer [P] | A tokenization algorithm | That algorithm |
 | **L** Delivery [C] | A browser network or storage API, how we download | Fetch, SHA-256, OPFS, in TypeScript |
-| **M** The loop [C] | A stage in the loop | `load`, `prompt`, `predict`, `generate`; when to cut back and rerun; stops |
+| **M** The loop [C] | A stage in the loop | `load`, `generate`; stops |
 | **H** The app [N], a family | See below | See below |
 | **O** Captures [N] | A new captured value, or what is sent | The store, its slots, its layout |
-| **Q** Edits [N] | A new kind of edit | The kinds, what each does (a plain function and its WGSL kernel), the first layer where two sets differ |
+| **Q** Edits [N] | A new kind of edit | The kinds, what each does (a plain function and its WGSL kernel) |
 | **R** Protocol [N] | A message | Messages, ids, the latest-answer rule, on both sides of the worker |
 | **S** Site [N] | Pages, the family shell | Hugo, the hand-over into the app |
 | **T** Chat template [C] | A template feature, or how a conversation is rendered | Jinja rendering, now in the worker |
@@ -108,11 +108,8 @@ interface or a weight format's interface, belongs to the family, not to a
 member, and changes only when the contract does. Charlotte filed `policy/` as
 a contract; here its values are J's.
 
-Three rules:
+Two rules:
 
-- **Diffs are pure functions.** "The first layer where two edit sets differ"
-  is Q's, kept apart from the pass as Charlotte keeps its prefix diff apart
-  from the cache, so it is tested without a device.
 - **Widths come from the model description.** O, Q and H never hold 26,
   1,152 or 6,912; they read them from A's description. H folds vectors into
   grids; O sends them flat.
@@ -146,5 +143,4 @@ Fixed by scope. Swapping one is an architectural change, not a local one.
 | Another quantization of the same model | J, I, V, and B if the format is new | A, O, Q, H |
 | A new Gemma template revision | T | K, the engine: it receives text |
 | How seeds are derived | F | M, Q |
-| How a superseded predict is dropped | R | M, Q |
 | Dawn moves to a new release | U, D if the surface changed | Everything above D |
