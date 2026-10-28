@@ -14,7 +14,7 @@ fail it.
 | Scenario | Contract it guards | Status |
 | --- | --- | --- |
 | Logits vs llama.cpp | The native engine, on Dawn, computes Gemma 3 1B's logits for fixed token sequences within a frozen tolerance of llama.cpp's for the same file. | Planned |
-| Replay and edits | With no edits, or Scale × 1, a rerun reproduces the original prediction bit for bit. Several edits across layers apply together. Edits starting at layer L change the last position only from L onward and leave earlier positions' cache entries untouched. Edits are held at every generated token. | Planned |
+| Replay and edits | With no edits, or Scale × 1, a rerun reproduces the original prediction bit for bit, including after other edits were made and removed. Several edits across layers apply together. Edits starting at layer L change the last position only from L onward and leave earlier positions' cache entries untouched. Edits are held at every generated token. | Planned |
 | Browser, end to end | In a real browser: download and verify the pinned file, generate a reply, pin neurons in two layers, and get the edited reply beside the original. | Planned |
 | Site build | The Hugo site builds and publishes with the app inside it. | Planned |
 

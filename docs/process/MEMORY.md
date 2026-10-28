@@ -48,8 +48,9 @@ estimated at about 140 tok/s and has not been measured.
   native build's compilation database. Tools are installed locally; scripts
   refuse other versions and never install anything.
 - The engine owns its WebGPU device in a worker. The scene uses three.js's
-  WebGL renderer on the page. Captured values are copied across: about 32 KiB
-  per layer, about 819 KiB for all layers, per prediction.
+  WebGL renderer on the page. Captured values are copied across, all layers
+  on every prediction (sizes in the
+  [logical overview](../architecture/logical-overview.md)).
 - The interface is React, react-three-fiber, TypeScript and Vite, with npm at
   exact versions and a committed lockfile. The site is Hugo.
 
@@ -65,10 +66,13 @@ dropped except its sizing of the context to the device.
 
 - **The pass map:** one layer at a time, isometric, each stage drawn as the
   last position's vector at its real width. Arrow keys step layers.
-- **Workbenches:** a flat working view per stage, wide vectors folded into
-  grids (neurons 96 × 72). The MLP workbench has the grid, a ranked list,
-  search by neuron number, and a neuron card with Set, Scale × and Zero and
-  the tokens the neuron pushes toward.
+- **Workbenches:** a working view per stage, wide vectors folded into
+  grids (neurons 96 × 72). The MLP workbench is the layer deck: one card per
+  layer, its neurons as the grid, positive amber and negative cool blue;
+  scrolling slides the front card away to the next layer. Beside it, for the
+  front layer: a ranked list, search by neuron number, a neuron card with
+  Set, Scale × and Zero and the tokens the neuron pushes toward, and the
+  pinned neurons across all layers.
 - **What can change:** MLP neurons (set, scale, zero), any number at once, in
   one layer or several; each pinned neuron is listed and removable. Editing
   the last position's residual dimensions (set or nudge) is wanted next.
@@ -85,12 +89,16 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 ## Engine requirements
 
 - Capture, at the last position for every layer: the residual, Q, attention
-  weights over earlier positions and itself, and the neurons.
+  weights over earlier positions and itself, and the neurons. Every prediction
+  sends all 26 layers to the page (about 1.1 MiB for a 512-token prompt), so
+  switching layers needs no request.
 - Edits are a set, applied together in one pass: any number of neurons in
   any layers.
-- Apply edits inside the pass and rerun from the earliest edited layer. Earlier
-  positions' cache entries are unchanged; the last position's own keys and
-  values from that layer on are overwritten in place.
+- Apply edits inside the pass. Rerun the last position from the first layer
+  where the edit set differs from the one it was computed under (removing an
+  edit is a difference). Earlier positions' cache entries are unchanged; the
+  last position's own keys and values from that layer on are overwritten in
+  place.
 - Hold edits at every generated token. Generate the original and edited replies
   from the same seed.
 - With no edits, or Scale × 1, the rerun reproduces the original prediction

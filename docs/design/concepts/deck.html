@@ -1,0 +1,88 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frizzle layer deck concept</title>
+<style>
+@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:"Plex Mono";src:url(../../../../dolittle/web/static/fonts/PlexMono-Regular.woff2) format('woff2')}
+:root{--page:#0d1422;--panel:#121b2c;--ink:#eee6d3;--muted:#9aa0a8;--rule:#253247;--night:#090f1a;--accent:#e2b866;--glow:#f2b54f;--edit:#ffcf73;--cool:#9fc0e8;--bar:#c9a253;--bar-before:#2f3b50}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--page);color:var(--ink);font-family:"Plex Serif",Georgia,serif;font-size:14px}
+.mono{font-family:"Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+header{display:flex;align-items:baseline;gap:12px;padding:12px 18px;border-bottom:1px solid var(--rule);background:var(--night)}
+header b{font-weight:500;font-size:16px}
+header .crumb{color:var(--muted)}
+header .note{margin-left:auto;color:var(--muted);font-size:12px}
+main{display:grid;grid-template-columns:minmax(0,1fr) 320px;height:calc(100% - 47px)}
+.stage{position:relative;min-width:0;display:flex;flex-direction:column}
+#deck{flex:1;min-height:0;position:relative}
+#deck canvas{display:block;width:100%;height:100%}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:2px 7px;font-size:12px;display:none;white-space:nowrap}
+.scrub{display:flex;gap:3px;padding:8px 18px 4px;align-items:flex-end}
+.scrub button{flex:1;min-width:0;height:26px;background:var(--panel);border:1px solid var(--rule);border-radius:3px;color:var(--muted);font:11px "Plex Mono",monospace;cursor:pointer;position:relative;padding:0}
+.scrub button.global{border-bottom-color:var(--accent)}
+.scrub button.on{background:#1d2a42;color:var(--ink);border-color:var(--accent)}
+.scrub button.pin::after{content:"";position:absolute;top:-6px;left:50%;width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--edit);box-shadow:0 0 6px var(--glow)}
+.caption{color:var(--muted);font-size:12px;padding:2px 18px 12px;margin:0}
+.caption i{font-style:normal;color:var(--ink)}
+aside{border-left:1px solid var(--rule);background:var(--panel);padding:14px 16px;overflow:auto}
+h3{font-size:12px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+h3:first-child{margin-top:0}
+.list .item{display:grid;grid-template-columns:72px 1fr 52px;gap:8px;align-items:center;padding:3px 4px;border-radius:3px;cursor:pointer}
+.list .item:hover,.list .item.sel{background:#1a2538}
+.bar{height:7px;background:var(--bar-before);border-radius:2px;position:relative}
+.bar i{position:absolute;top:0;bottom:0;left:0;background:var(--bar);border-radius:2px}
+.bar i.neg{background:var(--cool)}
+.card{border:1px solid var(--rule);border-radius:6px;padding:10px 12px;background:#0f1726}
+.card .title{font-size:16px;font-weight:500}
+.card .row{display:flex;justify-content:space-between;margin:4px 0;color:var(--muted)}
+.card .row span:last-child{color:var(--ink)}
+.push span{display:inline-block;border:1px solid var(--rule);border-radius:3px;padding:0 6px;margin:2px 4px 2px 0;font-size:12px}
+.sp{color:var(--muted)}
+.btns{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.btns button,.btns input{font:12px "Plex Mono",monospace;background:#16213a;border:1px solid var(--rule);color:var(--ink);border-radius:4px;padding:4px 8px}
+.btns input{width:64px}
+.btns button:hover{border-color:var(--accent)}
+.pins div{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:3px 0}
+.pins .dot{color:var(--edit)}
+.pins button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px}
+.pins a{color:var(--ink);cursor:pointer;text-decoration:none}
+.pins a:hover{color:var(--edit)}
+.out .row{display:grid;grid-template-columns:84px 1fr 44px;gap:8px;align-items:center;margin:4px 0}
+.out .bar i.before{background:#46546e}
+.small{font-size:11px;color:var(--muted);margin:6px 0 0}
+.legend{display:flex;gap:14px;align-items:center;font-size:12px;color:var(--muted);padding:0 18px}
+.legend span{display:inline-flex;gap:5px;align-items:center}
+.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+@media (max-width:820px){main{grid-template-columns:1fr;height:auto}#deck{height:62vh}aside{border-left:none;border-top:1px solid var(--rule)}}
+</style>
+<header>
+  <b>Frizzle</b>
+  <span class="crumb mono">“What should I name my cat?” › MLP neurons</span>
+  <span class="note">Concept · made-up values · scroll, arrow keys or the strip to move through layers</span>
+</header>
+<main>
+  <section class="stage">
+    <div id="deck"><div id="tip" class="mono"></div></div>
+    <div class="legend">
+      <span><i style="background:#ffc35a"></i>positive</span>
+      <span><i style="background:#9fc0e8"></i>negative</span>
+      <span><i style="background:#18233a;border:1px solid #2a3852"></i>near zero</span>
+      <span><i style="border:2px solid #ffcf73"></i>pinned</span>
+    </div>
+    <div class="scrub" id="scrub"></div>
+    <p class="caption">One card per layer, 6,912 neurons each, folded 96 × 72 in index order. <i>A spot on one card has nothing to do with the same spot on another.</i> Values are after your edits, as the model used them.</p>
+  </section>
+  <aside>
+    <h3 id="strongestTitle">Strongest in layer</h3>
+    <div class="list mono" id="list"></div>
+    <h3>Neuron</h3>
+    <div class="card" id="card"></div>
+    <h3>Pinned</h3>
+    <div class="pins mono" id="pins"></div>
+    <h3>First token of the reply</h3>
+    <div class="out mono" id="out"></div>
+    <p class="small">Before (dim) and with your pins (bright). Simulated in this concept.</p>
+  </aside>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="deck.js"></script>

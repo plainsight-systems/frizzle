@@ -1,38 +1,72 @@
 # Remaining work
 
-Nothing is built yet. In order:
+Nothing is built yet. The work is cut into slices, in order. Each ends in
+something shown working, and the tests from the
+[inventory](../../tests/README.md) that guard it land with it, each shown to
+fail before it is kept.
 
-## Architecture
+## 0. Architecture
 
-- Write the logical overview, change axes and file mapping in
-  `docs/architecture/`, covering the ported Gemma 3 path and the new capture
-  and edit work.
+- Logical overview, change axes and file mapping in `docs/architecture/`,
+  diagrams first, covering the ported Gemma 3 path and the new capture and
+  edit work.
+- Settle whether the residual exists as a whole vector in memory, given that
+  Charlotte adds it inside the next norm.
 
-## Engine
+## 1. The original reply, native
 
 - Bring over Charlotte's Gemma 3 path as inventoried, with the build: CMake,
   the native and browser presets, shader embedding, Dawn and Emscripten pins.
 - Trim `capability.cpp`; extract the context sizing from preflight.
-- Design and build captures at the last position, edits applied inside the
-  pass, writing the cache at a position, and edits held through decoding.
+- A native tool prints the first-token prediction and the reply for a prompt.
+- Tests: logits vs llama.cpp, tokenizer, model file, the ported kernels.
+
+## 2. Pinned neurons, native
+
+- Captures at the last position for every layer; edits as a set across
+  layers, applied inside the pass; rerun from the earliest edited layer,
+  overwriting the last position's keys and values; edits held through
+  decoding.
+- The native tool prints the edited reply beside the original.
+- Tests: replay and edits, edit specs, the capture and edit kernels.
+
+## 3. The loop in a browser, plain
+
+- The Emscripten build; scaffold `app/` with its pinned dependencies; port the
+  worker, protocol, download, verification, cache and chat-template modules
+  to TypeScript.
+- A plain page: prompt, prediction bars, pin neurons by number, the two
+  replies side by side.
 - Measure the browser decode speed for Gemma 3 1B.
+- Tests: browser end to end.
 
-## Interface and site
+## 4. MLP workbench
 
-- Scaffold `app/` with its pinned dependencies; port the worker, protocol,
-  download, verification, cache and chat-template modules to TypeScript.
-- Build the pass map and the MLP workbench against the real engine.
-- Scaffold `web/` in Hugo with the family shell, hosting the built app.
+- The layer deck (one folded grid per layer, sliding away as you scroll),
+  ranked list, search, the neuron card with its push-toward tokens, and the
+  pinned list, in the night-glass theme.
 
-## Tests
+## 5. Pass map
 
-- Build the tests in the [inventory](../../tests/README.md), each shown to
-  fail before it is kept.
+- The isometric layer in three.js, stages at their real widths, layer
+  stepping, clicking into a workbench.
+- Attention weights written out at the last position (new kernel output),
+  with its kernel test.
+
+## 6. The site
+
+- Scaffold `web/` in Hugo with the family shell, hosting the built app, and
+  the hand-over into the app.
+- Tests: site build.
+
+## 7. Residual dimensions
+
+- The residual workbench (the 48 × 24 grid) and its edits, extending the edit
+  specs and replay tests.
 
 ## Open decisions
 
-- Editing the last position's residual dimensions is wanted next, after
-  neurons: its workbench (the 48 × 24 grid) and whether it is set or nudged.
+- For slice 7: whether a residual dimension is set or nudged.
 - Whether to offer switching off a head or skipping a layer's output.
 - Whether the map shows gate and up separately (new kernel outputs) or only
   the neurons.
