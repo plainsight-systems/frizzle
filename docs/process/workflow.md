@@ -150,9 +150,11 @@ program, cache, sampler or turn loop.
   and every run lists them; a ported file that changes is analyzed from then
   on, and every finding in it is fixed.
 - **Tests:** `python3 scripts/check.py test` builds and runs the contract
-  suites on the native build. The oracle runs by hand when the inference
-  path changes ([inventory](../../tests/README.md)); the end-to-end scenario
-  runs in a browser.
+  suites on the native build, the kernels suite among them, which needs a
+  GPU. The oracle runs by hand when the inference path changes, and the
+  replay and edits scenario when edits, the graph or the turn loop change
+  ([inventory](../../tests/README.md)); the end-to-end scenario runs in a
+  browser.
 - A build passing, or the page loading, is not evidence of correctness.
   Report the checks actually run.
 

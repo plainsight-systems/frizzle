@@ -1,13 +1,21 @@
-# The test inventory (tests/README.md), natively. Two executables:
+# The test inventory (tests/README.md), natively. Four executables:
 #
-#   frizzle_tests   the contract suites, registered with CTest: the routine run.
-#                   Their inputs are committed; they read no model.
-#   frizzle_oracle  the llama.cpp comparison, an integration test, not
-#                   registered: run it when the inference path changes
-#                   (docs/process/workflow.md, Tests).
+#   frizzle_tests    the contract suites that need no device, registered with
+#                    CTest: the routine run. Their inputs are committed; they
+#                    read no model.
+#   frizzle_kernels  the kernels suite: one kernel at a time on the GPU, no
+#                    model; registered with CTest, so part of the routine
+#                    run. It needs a GPU and fails without one, never skips.
+#   frizzle_oracle   the llama.cpp comparison, an integration test, not
+#                    registered: run it when the inference path changes
+#                    (docs/process/workflow.md, Tests).
+#   frizzle_replay   the replay and edits scenario, an integration test, not
+#                    registered: run it when edits, the graph or the turn
+#                    loop change.
 #
-# The oracle reads the pinned model file that scripts/fetch_model.py
-# downloads; a missing file fails it, never skips it.
+# The integration tests read the pinned model file that
+# scripts/fetch_model.py downloads; a missing file fails them, never skips
+# them.
 
 include(FetchContent)
 
@@ -34,6 +42,14 @@ target_compile_definitions(frizzle_tests PRIVATE
     FRIZZLE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME frizzle_tests COMMAND frizzle_tests)
 
+add_executable(frizzle_kernels
+    support/main.cpp
+    contracts/kernels/edit_kernel_test.cpp
+)
+target_link_libraries(frizzle_kernels PRIVATE frizzle_gpu doctest::doctest)
+target_include_directories(frizzle_kernels PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME frizzle_kernels COMMAND frizzle_kernels)
+
 add_executable(frizzle_oracle
     support/main.cpp
     integration/reference-logits/logits_test.cpp
@@ -41,4 +57,13 @@ add_executable(frizzle_oracle
 target_link_libraries(frizzle_oracle PRIVATE frizzle_gpu doctest::doctest)
 target_include_directories(frizzle_oracle PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(frizzle_oracle PRIVATE
+    FRIZZLE_MODEL_FILE="${FRIZZLE_MODEL_FILE}")
+
+add_executable(frizzle_replay
+    support/main.cpp
+    integration/replay/replay_test.cpp
+)
+target_link_libraries(frizzle_replay PRIVATE frizzle_gpu doctest::doctest)
+target_include_directories(frizzle_replay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(frizzle_replay PRIVATE
     FRIZZLE_MODEL_FILE="${FRIZZLE_MODEL_FILE}")

@@ -1,10 +1,11 @@
 # Remaining work
 
 Slice 1 is built: the port, the engine's operations, the native tool and its
-tests. Slice 2 is under way: edits reach the model through `generate`, with
-the edit kernel, the cache rewind and the edit specs suite, and the native
-tool's `--pin` prints the edited reply after the original; the replay and
-edits suite and the kernels suite remain.
+tests. Slice 2 is built: edits reach the model through `generate`, with the edit
+kernel and the cache rewind; the native tool's `--pin` prints the edited
+reply after the original; the edit specs, the edit kernel's unit test and
+the replay and edits scenario guard it. The ported kernel families get no
+unit tests of their own; the oracle covers them end to end.
 
 The work is cut into slices, in order. Each ends in something shown working.
 Each step in a slice runs headers, then tests, then code (workflow.md): the
@@ -38,8 +39,8 @@ from slice 3 on, the plan for each step assigns them.
   token. When a run with edits ends, the cache rewinds to just before
   the edits began, so it holds no edited entry between runs.
 - The native tool prints the edited reply beside the original.
-- Tests: replay and edits, edit specs, the kernels suite (the ported kernels
-  and the edit kernel).
+- Tests: replay and edits, edit specs, the kernels suite (the edit kernel;
+  the oracle covers the ported kernels).
 
 ## 3. The loop in a browser, plain
 

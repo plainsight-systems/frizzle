@@ -36,7 +36,7 @@ def main():
         tidy.run(build, args.jobs)
     if args.action in ('test', 'all'):
         subprocess.run(['cmake', '--build', str(build), '--target', 'frizzle_tests',
-                        '-j', str(args.jobs)], check=True)
+                        'frizzle_kernels', '-j', str(args.jobs)], check=True)
         subprocess.run(['ctest', '--test-dir', str(build), '--output-on-failure'], check=True)
 
 
