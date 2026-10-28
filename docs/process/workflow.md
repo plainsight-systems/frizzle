@@ -115,11 +115,14 @@ tolerance before investigating a failure; do not adjust the reference or relax
 the tolerance to make a failure pass. Exact-replay checks are bit for bit, with
 no tolerance. A tolerance comparison fails on NaN.
 
-**Unit and integration.** Contract tests run in process on small in-memory or
-fixture inputs, with no builds, servers, browsers, downloads or full model
-runs. Anything that loads the real model, drives the GPU through the engine,
-builds the site or opens a browser is an integration test and counts toward
-the five.
+**Unit and integration.** A unit test exercises one unit of functionality: a
+function, a module, or one kernel, on the GPU where the kernel needs it.
+Contract tests run in process on small in-memory or fixture inputs, with no
+builds, servers, browsers, downloads or full model runs. Several units run
+together, such as kernels back to back, or the system end to end is
+integration: anything that loads the real model, drives the GPU through the
+engine, builds the site or opens a browser is an integration test and counts
+toward the five.
 
 **The oracle runs when inference changes.** The comparison with llama.cpp is
 an integration test, not part of the routine suite. Run it when the inference
