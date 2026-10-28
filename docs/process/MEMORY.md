@@ -59,8 +59,10 @@ estimated at about 140 tok/s and has not been measured.
 Built separately, not forked. Charlotte's Gemma 3 path, 111 files listed in
 the [inventory](../research/2026-10-27-charlotte-inventory.md), is copied
 from commit `e003048` as the starting point and maintained here. One registry
-is trimmed, the WebAssembly boundary is rewritten, and model preflight is
-dropped except its sizing of the context to the device.
+is trimmed, the WebAssembly boundary is rewritten, the namespace `bllm`
+becomes `frizzle` (a mechanical rename), and model preflight is
+dropped; the context is sized to the device by the residency planner,
+which comes over whole.
 
 ## Interface
 

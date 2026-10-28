@@ -10,22 +10,24 @@ fail before it is kept.
 - Logical overview, change axes and file mapping in `docs/architecture/`,
   diagrams first, covering the ported Gemma 3 path and the new capture and
   edit work.
-- Settle whether the residual exists as a whole vector in memory, given that
-  Charlotte adds it inside the next norm.
 
 ## 1. The original reply, native
 
 - Bring over Charlotte's Gemma 3 path as inventoried, with the build: CMake,
   the native and browser presets, shader embedding, Dawn and Emscripten pins.
-- Trim `capability.cpp`; extract the context sizing from preflight.
+  Rename `bllm` to `frizzle` and `BLLM_` to `FRIZZLE_` as the files land.
+- Trim `capability.cpp`; drop preflight (the context is sized in
+  `residency/plan`, which comes over whole).
+- `check.py boundaries`, its C++ rule: the core includes nothing from
+  `src/wasm/`, `tools/` or `tests/`.
 - A native tool prints the first-token prediction and the reply for a prompt.
 - Tests: logits vs llama.cpp, tokenizer, model file, the ported kernels.
 
 ## 2. Pinned neurons, native
 
 - Captures at the last position for every layer; edits as a set across
-  layers, applied inside the pass; rerun from the earliest edited layer,
-  overwriting the last position's keys and values; edits held through
+  layers, applied inside the pass; rerun from the first layer where the edit
+  set differs, overwriting the last position's keys and values; edits held through
   decoding.
 - The native tool prints the edited reply beside the original.
 - Tests: replay and edits, edit specs, the capture and edit kernels.
@@ -37,6 +39,8 @@ fail before it is kept.
   to TypeScript.
 - A plain page: prompt, prediction bars, pin neurons by number, the two
   replies side by side.
+- `check.py boundaries`, its TypeScript rules (React only in the root,
+  `views/` and `theme/`; the worker imports no page code).
 - Measure the browser decode speed for Gemma 3 1B.
 - Tests: browser end to end.
 

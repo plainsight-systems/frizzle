@@ -58,7 +58,12 @@ Each new or changed C++ or WGSL file begins with:
 5. **Corpus guidance:** the rules read, with IDs and their application.
 
 Ported files keep Charlotte's headers until they are changed; a changed file
-is brought up to this standard.
+is brought up to this standard. A mechanical rename is not a change for this
+rule: on porting, the namespace `bllm` becomes `frizzle` and the macro prefix
+`BLLM_` becomes `FRIZZLE_`, with nothing else touched. A ported file whose
+header names no change axis gains that line when it next changes for another
+reason; until then the [file mapping](../architecture/file-mapping.md) is the
+record of its axis.
 
 ## Performance design
 
