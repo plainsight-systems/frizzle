@@ -69,14 +69,16 @@ nothing reruns.
 
 ```mermaid
 flowchart LR
-  P["0 … n−2<br/><b>the prefix</b><br/>computed once per prompt<br/>never written again<br/>[P]"]
-  L["n−1<br/><b>the last position</b><br/>a function of the prefix<br/>and the edit set<br/>overwritten in place [N]"]
-  G["n …<br/><b>the reply</b><br/>appended while decoding [P]<br/>cut away before the next run [N]"]
+  P["0 … n−2<br/><b>the prefix</b><br/>computed once per prompt<br/>never written again"]
+  L["n−1<br/><b>the last position</b><br/>a function of the prefix<br/>and the edit set<br/>rerun from layer L"]
+  G["n …<br/><b>the reply</b><br/>appended while decoding<br/>cut away before the next run"]
   P --- L --- G
 ```
 
-Charlotte's cache only appends. Writing at n−1 again, and cutting back to the
-prompt, are new.
+These are Frizzle's requirements on the cache. Cutting the reply away never
+recomputes the prompt, whatever the reply's length. Rerunning n−1 from layer
+L leaves the layers below it untouched. Charlotte's cache is where the code
+starts, and it changes wherever it falls short.
 
 ## Inside one layer: where values are read and changed
 
@@ -98,9 +100,9 @@ flowchart TD
   N1 --> X --> QKV --> R --> Q --> A --> AW --> O --> GU --> E --> D
 ```
 
-Charlotte reuses its working buffers from layer to layer, so each capture is
-copied out at its point, before the buffer is reused, into a capture store
-with a slot per layer. A rerun from layer L rewrites slots L onward; the
+Each capture is copied out at its point into a capture store with a slot
+per layer, so it holds what the model used even if the buffer it came from
+is reused. A rerun from layer L rewrites slots L onward; the
 slots below are already right. Every `prompt` and `predict` sends the whole
 store to the page, so switching layers never asks the engine for anything.
 
@@ -168,3 +170,5 @@ The original reply is generated once per prompt, before any edit, and kept.
 
 - Whether gate and up are shown separately (new kernel outputs).
 - How the residual edit opens up the add-and-norm kernel (slice 7).
+- How a rerun from layer L starts (slice 2). The ported norm kernel adds into
+  X and normalizes in one step; it can change if that is in the way.
