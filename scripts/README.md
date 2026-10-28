@@ -29,10 +29,22 @@ version. `CLANG_FORMAT` and `CLANG_TIDY` select an executable explicitly; a
 wrong version fails rather than being substituted. Nothing is installed by
 these scripts.
 
-On macOS, `tidy` adds the selected Xcode SDK's libc++ headers for the
-separately installed analyzer, as Bullet Witch does. The native build's own
-compiler is also LLVM 21.1.8 clang; which libc++ it uses on macOS is still
-open.
+On macOS, `tidy` gives the analyzer the Xcode SDK's system root, which the
+compile command leaves implicit, and nothing else. The native build is
+compiled by LLVM 21.1.8 clang against that LLVM's own libc++ headers, which
+the analyzer finds by itself; adding the SDK's libc++ headers as well would
+put two standard libraries in one translation unit. Which libc++ library the
+native build links against on macOS is still open: nothing links yet.
+
+`tidy` leaves out files ported from Charlotte and unchanged since (their
+SHA-256 still matches `src/ported.json`) and lists them on every run; see the
+[workflow](../docs/process/workflow.md#checks).
+
+`port_charlotte.py --charlotte <checkout>` is the mechanical port itself: it
+reads the inventoried files from Charlotte's pinned commit, renames the
+namespace and macro prefix, formats C++, and writes the manifest. It never
+overwrites a file that has changed since it was ported. `--verify` redoes the
+port in memory and checks the manifest against it.
 
 `scripts/clang-format` is the editor's formatter: it forwards to the same
 pinned binary and fails if it is missing.

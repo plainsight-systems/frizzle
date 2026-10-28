@@ -133,7 +133,11 @@ the five.
   clang-tidy over every entry in the native build's compilation database;
   every finding fails. Fix findings rather than excluding checks; any narrow
   exception is justified beside the code. Code that exists only in the
-  browser build is not covered, and is reviewed instead.
+  browser build is not covered, and is reviewed instead. Files ported from
+  Charlotte and unchanged since porting (their SHA-256 still matches
+  `src/ported.json`) are not analyzed, as translation units or as headers,
+  and every run lists them; a ported file that changes is analyzed from then
+  on, and every finding in it is fixed.
 - **Tests:** the inventory, on the native build with Dawn for GPU work and in
   a browser for the end-to-end scenario.
 - A build passing, or the page loading, is not evidence of correctness.
