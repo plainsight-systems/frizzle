@@ -1,0 +1,375 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include "core/formats/format.h"
+#include "core/residency/plan.h"
+#include "core/residency/weight_view.h"
+
+namespace frizzle::kernels {
+
+// Contract 7: kernel launch.
+//
+// Every kernel binds the same way, so one piece of code launches all of them
+// and changing a kernel never changes how the others are called. In bind
+// group 0:
+//
+//   binding 0   the step's parameters, shared by every launch and written
+//               once per step: its first position, its token count, and its
+//               tokens' identifiers (Step below)
+//   binding 1   this launch's constants, written once at load
+//   binding 2…  the kernel's weights, in the order it declares them, then its
+//               activations
+//
+//   - A kernel launcher is pure: from the plan's weight views and working
+//     buffers it describes its launches (Launch below) — which kernel, which
+//     format it unpacks, its constants, its bindings, its geometry — and
+//     holds no GPU object, so what it launches is tested without a device.
+//     The program (kernels/program.h) carries the descriptions out, as
+//     upload carries out the routes.
+//   - Pipelines and bind groups are built at load, one bind group per launch
+//     in the graph. No bind group, pipeline or buffer is created per token,
+//     so a token costs one uniform write and its dispatches.
+//   - A kernel that reads a weight composes with that weight's format's
+//     unpack, which reads the binding named `weights` (format.h); a launch
+//     binds one piece of a weight, so a split weight is one launch per piece.
+//     A kernel that writes the cache composes with the cache format's pack
+//     (format.h), which reads no binding, so it composes beside an unpack.
+//   - Geometry: a launch runs a fixed number of invocations for each row it
+//     covers — every token of the step, or only its last, which is all the
+//     final norm and the output head need — in workgroups of a size the
+//     launcher chooses and gives the kernel as an override constant, so the
+//     size is stated once. The program works out each step's workgroups from
+//     its position and token count with workgroups_for below. Workgroup size
+//     belongs to each kernel: the right value differs per kernel, and a shared
+//     constant would couple them. A launch that covers only the last token is
+//     one row's workgroups, and the program sets its override constant
+//     `last_token` to true; a kernel that can cover only the last token
+//     declares `override last_token: bool = false;` and then works on row
+//     tokens - 1 of each buffer. Rows alone decides both, so they cannot
+//     disagree. A launch may instead cover tiles of rows — attention's
+//     query tiles — and may multiply its workgroups by the step's key
+//     chunks or run only when the step splits them, and may run in one
+//     range of token counts — a regime, or part of one (key_chunks,
+//     regime_for, TokenRange, workgroups_for below); a launch that does not
+//     run in a step is not dispatched. A module may hold several entry
+//     points, and a launch names its own.
+//   - Variants: a kernel's other override constants select among its forms —
+//     the norm with or without the residual add — so one WGSL source serves
+//     them. The program compiles each distinct kernel, unpack and pack
+//     format, workgroup size and set of overrides once, and passes every
+//     override to the pipeline; `workgroup_size` and `last_token` are the
+//     program's to set, and a launch naming either, or one name twice, is
+//     refused at build.
+//   - The regime is chosen per step from its token count.
+//   - The step's token identifiers are below the vocabulary: the runtime
+//     checks them before it writes a step, since a kernel cannot tell an
+//     identifier past the table from one in another piece of it.
+//
+// What a launch costs, measured on the target (the desktop app's
+// Chromium 152, Apple M3 Max, Metal). Holding a pass's work constant at 300
+// workgroups and splitting it into 1, 3, 10, 30, 100 and 300 dispatches, each
+// extra dispatch adds about 1.5 µs of GPU time (20 µs a pass for one dispatch,
+// 478 µs for 300; medians of 16 runs of 40 passes). Encoding from JavaScript is
+// about 0.03 µs a launch, pipeline changes included, a lower bound for the
+// module's path, which adds a wasm-to-browser crossing a call. So a graph of
+// 300 launches pays about 0.45 ms a pass in dispatch overhead, about half the
+// 0.95 ms floor for reading Qwen3 0.6B's 380 MB of weights at the M3 Max's 400
+// GB/s (its published bandwidth). That is not small, and WebGPU has no captured
+// compute sequence to replay, so the lever is fusion: each kernel's header
+// states its launches a pass, and the graph keeps the total low (GPU.6). The
+// module's own encoding cost, and where a real pass's time goes, are
+// measured once the program runs (GPU.10).
+//
+// Guidelines, by corpus:
+//   C++ Core Guidelines
+//     I.4    Make interfaces precisely and strongly typed — a launch names
+//            planned buffers through Binding, never a raw offset alone.
+//   C++ performance guidelines
+//     GPU.6  Batch tiny GPU work — the measurement above, and fusion as the
+//            response; each kernel records its launches.
+//     GPU.10 Profile before optimizing — the module's path is measured once
+//            it runs, not assumed from the JavaScript figure.
+//     GPU.9  Suballocate — every launch's constants in one buffer.
+//     WASM.2 Batch work across the JS boundary — the step's parameters and
+//            identifiers in one write; constants in one write, at load.
+//     MEM.9  Allocate at init, not in steady state — every pipeline, bind
+//            group and buffer at load.
+
+enum class Regime {
+  // One token: matrix times vector, bound by weight bandwidth.
+  Decode,
+  // Many tokens: matrix times block, bound by arithmetic.
+  Prefill,
+};
+
+// A step's regime, from its token count alone, never from anything else
+// about the step: one token decodes, more prefill.
+[[nodiscard]] constexpr Regime regime_for(
+    std::uint32_t tokens_in_step) noexcept {
+  return tokens_in_step == 1 ? Regime::Decode : Regime::Prefill;
+}
+
+// The steps a launch runs in, by token count, both ends included: a
+// regime's, or a part of prefill's, as a matrix product's tile widths
+// take (kernels/matmul/matmul.h).
+struct TokenRange {
+  std::uint32_t least = 1;
+  std::uint32_t most = UINT32_MAX;
+  friend bool operator==(const TokenRange&, const TokenRange&) = default;
+};
+
+[[nodiscard]] constexpr TokenRange tokens_of(Regime r) noexcept {
+  return r == Regime::Decode ? TokenRange{1, 1} : TokenRange{2, UINT32_MAX};
+}
+
+inline constexpr std::uint32_t kBindGroup = 0;
+inline constexpr std::uint32_t kStepBinding = 0;
+inline constexpr std::uint32_t kLaunchBinding = 1;
+inline constexpr std::uint32_t kFirstWeightBinding = 2;
+
+// Binding 0, a uniform buffer, declared once in WGSL, kernels/step.wgsl,
+// which the program composes before every kernel, as it composes a format's
+// unpack (program.h):
+//
+//   struct Step { position: u32, tokens: u32, logits: u32, fed: u32,
+//                 seed: vec2<u32>, top_k: u32, temperature: f32, top_p: f32,
+//                 min_p: f32, log_min_p: f32, columns: u32, media: u32,
+//                 media_token: u32, padding: vec2<u32>,
+//                 ids: array<vec4<u32>, 128> }
+//
+// A 64-byte head: WGSL places `ids` at 64, a uniform array's 16-byte stride.
+// `columns` is a vision step's patch grid columns, which rope's axial form
+// and gather's position form read (graph/vision.h), and an audio step's
+// spectrogram frames (graph/audio.h); `media` is 1 when a text step carries
+// a medium and 0 otherwise, and then `media_token` is the identifier its
+// media rows carry — the medium's placeholder — which gather skips, since a
+// media encoder's step copies those rows in (runtime/media_stage.h). Two
+// words, not a token of 0 for none: 0 is a token of the vocabulary,
+// EmbeddingGemma 2's `<pad>`. A medium's rows may be several runs, a
+// video's frames each between its own two tokens, so they are named by
+// their identifier, not by one range. sampler::apply writes the
+// seed and settings. `logits` is the program's,
+// read by no kernel; `fed` is gather's; the seed and the settings are the
+// draw's (sampler/sampler.h), the turn's, written with every step. Token i's
+// identifier is ids[i / 4][i % 4]. A step writes its head and only the
+// identifier words it uses: 64 bytes for a fed decode step, which uses none,
+// 80 for one given its token. A step of more than kPrefillBlock rows — a
+// vision step's patches — has no identifiers and writes its head alone.
+// Optimization (browser): the identifiers ride in the uniform every launch
+// already binds, so a step is one write, not one for its parameters and one
+// for its tokens (WASM.2).
+struct Step {
+  std::uint32_t position;  // the first token's position in the context
+  // 1 .. kPrefillBlock for a step of tokens; a vision step's patches, up
+  // to its plan's rows, with no identifiers.
+  std::uint32_t tokens;
+  // 1 when the step's last token's logits are sampled; 0 for a prefill
+  // step that does not end the prompt, which runs no launch over the last
+  // token alone — the final norm and the head (graph/graph.h).
+  std::uint32_t logits;
+  // 1 when the step is one token, the last step's draw, which gather reads
+  // from the draw's record on the GPU (kernels/gather/gather.h); the step
+  // writes no identifier.
+  std::uint32_t fed;
+  // The draw's: the turn's seed, low word first, and its settings
+  // (policy::SamplingSettings), checked before the turn (sampler.h).
+  std::uint32_t seed[2];
+  std::uint32_t top_k;
+  float temperature;
+  float top_p;
+  float min_p;
+  float log_min_p;  // ln min_p, once a turn: the draw's min-p threshold
+  std::uint32_t columns = 0;      // a vision step's patch grid columns
+  std::uint32_t media = 0;        // 1 when a text step carries a medium
+  std::uint32_t media_token = 0;  // then the identifier its media rows carry
+  std::uint32_t padding1 = 0;
+  std::uint32_t padding2 =
+      0;  // WGSL places `ids` at 64, a uniform array's 16-byte stride
+  std::array<std::uint32_t, residency::kPrefillBlock> ids;
+};
+static_assert(sizeof(Step) == 64 + 4 * residency::kPrefillBlock);
+inline constexpr std::size_t kStepHead = 64;
+
+// Each launch's constants lie at their own offset in one uniform buffer, in
+// a whole number of slots on the alignment WebGPU's default limits require
+// for a uniform binding's offset — one for most kernels, five for rope's
+// 1,040 bytes — and no larger than this.
+inline constexpr std::uint32_t kLaunchConstantsAlignment =
+    256;  // minUniformBufferOffsetAlignment
+inline constexpr std::uint32_t kMaxLaunchConstants = 1280;
+
+// A bound range of a buffer the residency plan names: a piece of a weight,
+// a working buffer, a layer's cache.
+struct Binding {
+  residency::BufferIndex buffer;
+  std::uint64_t offset;
+  std::uint64_t size;
+};
+
+// The rows a launch covers.
+enum class Rows {
+  EveryToken,
+  LastToken,
+};
+
+// The positions a step may reach: position + tokens <= 2^24. Rope forms a
+// position as an f32, exact only below 2^24 (kernels/rope/rope.h), and
+// below it every intermediate of the chunk arithmetic — position + 1,
+// tokens × count, at most 512 × 262,145 — stays far below 2^32. Every listed
+// model's context, at most 131,072, is well inside. The program refuses a
+// step past it.
+inline constexpr std::uint32_t kMaxPositions = 1u << 24;
+
+// Keys a chunk holds, fixed by position: chunk c is positions 64c ..
+// 64c + 63 (kernels/attention/attention.h), as the plan sizes the partial
+// buffers by.
+inline constexpr std::uint32_t kChunkKeys = residency::kChunkKeys;
+
+// A layer's chunks of keys for a step, and how it splits them: from the
+// chunk holding its first row's earliest key, position − window + 1, to the
+// chunk holding its last row; split one workgroup a chunk when every row's
+// partials fit the partial buffers' `partial_rows`, else not at all. The
+// program dispatches by it and the attention kernel computes the same in WGSL.
+struct KeyChunks {
+  std::uint32_t first;
+  std::uint32_t count;
+  std::uint32_t splits;  // count, or 1
+};
+
+// Preconditions: tokens >= 1, at most kPrefillBlock; window >= 1;
+// position + tokens <= kMaxPositions.
+[[nodiscard]] constexpr KeyChunks key_chunks(
+    std::uint32_t position, std::uint32_t tokens, std::uint32_t window,
+    std::uint32_t partial_rows) noexcept {
+  const std::uint32_t earliest =
+      position + 1 > window ? position + 1 - window : 0;
+  const std::uint32_t first = earliest / kChunkKeys;
+  const std::uint32_t count = (position + tokens - 1) / kChunkKeys - first + 1;
+  return {first, count, tokens * count <= partial_rows ? count : 1};
+}
+
+// How a launch uses the step's key chunks.
+enum class KeySplit {
+  // Not at all.
+  None,
+  // Its workgroups are multiplied by the step's splits.
+  PerChunk,
+  // It runs only when the step splits: the combine after a split.
+  WhenSplit,
+};
+
+// What decides how many invocations a launch runs in a step.
+struct Geometry {
+  Rows rows;
+  std::uint32_t invocations_per_row;
+  std::uint32_t rows_per_tile;  // 0: a launch over rows
+  KeySplit key_split;
+  std::uint32_t window;
+  // The steps it runs in, by its rows (below); every step by default.
+  TokenRange tokens = {};
+  // A key split's partial buffers' query rows (key_chunks).
+  std::uint32_t partial_rows = residency::kPrefillBlock;
+  // The launch's rows are the step's tokens over this: 1 for every
+  // launch but those after a vision encoder's pooling, whose rows are its
+  // patches over k² (graph/vision.h). Its token range is in those rows,
+  // and its kernel bounds its rows the same way, by an override the
+  // program sets, `row_divisor`. Every step's tokens are a multiple of
+  // every divisor its launches carry. Not with a launch over the last
+  // token or a key split.
+  std::uint32_t row_divisor = 1;
+};
+
+// The workgroups a launch of `workgroup_size` runs in a step of `tokens`
+// from `position`; 0 when it does not run: in a step outside its token
+// range, over the last token alone in a step that asks for no `logits`, or
+// a combine when the step does not split. A split runs its rows' or
+// tiles' workgroups once for each chunk, each a whole number of
+// workgroups. Preconditions: tokens >= 1; workgroup_size >= 1; a key
+// split's window >= 1; position + tokens <= kMaxPositions.
+[[nodiscard]] constexpr std::uint64_t workgroups_for(
+    const Geometry& g, std::uint32_t workgroup_size, std::uint32_t position,
+    std::uint32_t tokens, bool logits) noexcept {
+  const std::uint32_t launch_rows = tokens / g.row_divisor;
+  if (launch_rows < g.tokens.least || launch_rows > g.tokens.most) return 0;
+  if (g.rows == Rows::LastToken && !logits) return 0;
+  const std::uint64_t rows = g.rows == Rows::LastToken ? 1 : launch_rows;
+  const std::uint64_t covered =
+      g.rows_per_tile == 0 ? rows * g.invocations_per_row
+                           : (rows + g.rows_per_tile - 1) / g.rows_per_tile *
+                                 g.rows_per_tile * g.invocations_per_row;
+  const std::uint64_t workgroups =
+      (covered + workgroup_size - 1) / workgroup_size;
+  if (g.key_split == KeySplit::None) return workgroups;
+  const std::uint32_t splits =
+      key_chunks(position, tokens, g.window, g.partial_rows).splits;
+  if (g.key_split == KeySplit::WhenSplit) return splits > 1 ? workgroups : 0;
+  return workgroups * splits;
+}
+
+// A WGSL override constant and its value.
+struct Override {
+  std::string_view name;
+  double value;
+  friend bool operator==(const Override&, const Override&) = default;
+};
+
+// A launch that belongs to no layer: the embedding, the output block.
+inline constexpr std::uint32_t kNoLayer = ~std::uint32_t{0};
+
+// One launch, as a kernel launcher describes it.
+struct Launch {
+  // The kernel's WGSL entry point and helpers, embedded at build time.
+  std::string_view kernel;
+  // The format whose unpack the kernel composes with, or null for a kernel
+  // that reads no weight.
+  const formats::Format* format;
+  // Binding 1: this launch's constants, as the kernel's WGSL struct lays
+  // them out. At most kMaxLaunchConstants bytes.
+  std::vector<std::byte> constants;
+  // Bindings 2 onward: weights, then activations.
+  std::vector<Binding> bindings;
+  std::uint32_t invocations_per_row;
+  std::uint32_t workgroup_size;
+  Rows rows = Rows::EveryToken;
+  // Override constants beyond workgroup_size, which every kernel declares.
+  std::vector<Override> overrides;
+  // The format whose pack the kernel composes with — the cache's, for a
+  // kernel that writes the cache (formats/format.h) — or null. Pack reads
+  // no binding, so it composes beside an unpack.
+  const formats::Format* pack_format = nullptr;
+  // When nonzero, the launch covers tiles of this many rows: the program
+  // dispatches ceil(rows / rows_per_tile) tiles, each rows_per_tile ×
+  // invocations_per_row invocations, a whole number of workgroups.
+  std::uint32_t rows_per_tile = 0;
+  // Its use of the step's key chunks, for a layer of this window, and the
+  // partial buffers' query rows.
+  KeySplit key_split = KeySplit::None;
+  std::uint32_t window = 0;
+  std::uint32_t partial_rows = residency::kPrefillBlock;
+  // The WGSL entry point: one module may hold two roles, which share its
+  // functions and not each other's workgroup memory.
+  std::string_view entry_point = "main";
+  // The steps the launch runs in, by its rows — the step's token count over
+  // row_divisor — every step by default: a matrix product's decode form
+  // runs in tokens_of(Regime::Decode), its prefill tiles in parts of
+  // prefill's.
+  TokenRange tokens = {};
+  // Its rows are the step's tokens over this (Geometry); the program sets
+  // the kernel's `row_divisor` override to it where it is not 1.
+  std::uint32_t row_divisor = 1;
+  // What the launch does in the model, and its layer, as the graph names
+  // them (graph/graph.h): a profile's name for it, since
+  // one kernel serves many roles — the matrix product is every projection
+  // and the head (GPU.10). The program runs a launch the same whatever its
+  // name; a launcher leaves both for the graph to set.
+  std::string_view role = {};
+  std::uint32_t layer = kNoLayer;
+};
+
+}  // namespace frizzle::kernels

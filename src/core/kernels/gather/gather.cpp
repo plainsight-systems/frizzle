@@ -1,0 +1,97 @@
+#include "core/kernels/gather/gather.h"
+
+#include <cstring>
+
+#include "core/capability/capability.h"
+#include "core/gguf/types.h"
+#include "frizzle/shaders_generated.h"
+
+namespace frizzle::kernels {
+namespace {
+
+// Binding 1, as gather.wgsl's Gather lays it out.
+struct Constants {
+  std::uint32_t first_row;
+  std::uint32_t row_count;
+  std::uint32_t groups_per_row;
+  std::uint32_t blocks_in_piece;
+  float scale;
+  std::uint32_t positions = 0;
+};
+static_assert(sizeof(Constants) == 24);
+
+constexpr std::uint32_t kWorkgroupSize = 64;
+
+std::vector<std::byte> bytes_of(const Constants& c) {
+  std::vector<std::byte> out(sizeof c);
+  std::memcpy(out.data(), &c, sizeof c);
+  return out;
+}
+
+}  // namespace
+
+std::vector<Launch> gather_launches(const residency::WeightView& table,
+                                    const residency::BufferRange& hidden,
+                                    const residency::BufferRange& sampled,
+                                    float scale) {
+  const formats::Format* format = capability::find_format(table.format());
+  const std::uint64_t width = table.shape().dimensions[0];
+  const auto groups_per_row =
+      static_cast<std::uint32_t>(width / formats::kUnpackGroup);
+  const std::uint64_t block_elements =
+      gguf::format_layout(table.format())->block_elements;
+
+  std::vector<Launch> launches;
+  launches.reserve(table.pieces().size());
+  for (const residency::WeightPiece& piece : table.pieces()) {
+    const Constants constants{
+        static_cast<std::uint32_t>(piece.first_row),
+        static_cast<std::uint32_t>(piece.row_count),
+        groups_per_row,
+        static_cast<std::uint32_t>(piece.row_count * width / block_elements),
+        scale,
+    };
+    launches.push_back(Launch{
+        shaders::gather,
+        format,
+        bytes_of(constants),
+        {Binding{piece.buffer, piece.offset, piece.length},
+         Binding{hidden.buffer, hidden.offset, hidden.length},
+         Binding{sampled.buffer, sampled.offset, sampled.length}},
+        groups_per_row,
+        kWorkgroupSize,
+    });
+  }
+  return launches;
+}
+
+Launch position_launch(const residency::WeightView& table,
+                       std::uint32_t positions,
+                       const residency::BufferRange& output) {
+  const std::uint64_t width = table.shape().dimensions[0];
+  const auto groups_per_row =
+      static_cast<std::uint32_t>(width / formats::kUnpackGroup);
+  const residency::WeightPiece& piece = table.pieces().front();
+  const Constants constants{
+      0,
+      2 * positions,
+      groups_per_row,
+      static_cast<std::uint32_t>(
+          std::uint64_t{2} * positions * width /
+          gguf::format_layout(table.format())->block_elements),
+      1.0f,
+      positions};
+  Launch launch{
+      shaders::gather,
+      capability::find_format(table.format()),
+      bytes_of(constants),
+      {Binding{piece.buffer, piece.offset, piece.length},
+       Binding{output.buffer, output.offset, output.length}},
+      groups_per_row,
+      kWorkgroupSize,
+  };
+  launch.entry_point = "positions";
+  return launch;
+}
+
+}  // namespace frizzle::kernels

@@ -1,0 +1,72 @@
+#include "core/sampler/sampler.h"
+
+#include <cmath>
+#include <cstring>
+
+#include "core/kernels/topk/topk.h"
+#include "frizzle/shaders_generated.h"
+
+namespace frizzle::sampler {
+namespace {
+
+// Binding 1, as draw.wgsl's Draw lays it out.
+struct Constants {
+  std::uint32_t count;
+};
+
+kernels::Binding whole(const residency::BufferRange& range) {
+  return {range.buffer, range.offset, range.length};
+}
+
+SettingsResult refuse(std::string subject) {
+  return {false, std::move(subject)};
+}
+
+}  // namespace
+
+SettingsResult check(const policy::SamplingSettings& s) {
+  if (s.top_k < 1 || s.top_k > kernels::kCandidates) {
+    return refuse("top_k " + std::to_string(s.top_k) + " is outside 1 to " +
+                  std::to_string(kernels::kCandidates));
+  }
+  if (!std::isfinite(s.temperature) || s.temperature < 0) {
+    return refuse("temperature " + std::to_string(s.temperature) +
+                  " is not a finite number of 0 or more");
+  }
+  if (!(s.top_p > 0 && s.top_p <= 1)) {
+    return refuse("top_p " + std::to_string(s.top_p) + " is outside (0, 1]");
+  }
+  if (!(s.min_p >= 0 && s.min_p < 1)) {
+    return refuse("min_p " + std::to_string(s.min_p) + " is outside [0, 1)");
+  }
+  return {};
+}
+
+void apply(const policy::SamplingSettings& settings, policy::Seed seed,
+           kernels::Step& step) {
+  const auto bits = static_cast<std::uint64_t>(seed);
+  step.seed[0] = static_cast<std::uint32_t>(bits);
+  step.seed[1] = static_cast<std::uint32_t>(bits >> 32);
+  step.top_k = settings.top_k;
+  step.temperature = settings.temperature;
+  step.top_p = settings.top_p;
+  step.min_p = settings.min_p;
+  step.log_min_p = settings.min_p > 0 ? std::log(settings.min_p) : 0.0f;
+}
+
+kernels::Launch draw_launch(const residency::BufferRange& candidates,
+                            const residency::BufferRange& sampled) {
+  const Constants constants{kernels::kCandidates};
+  std::vector<std::byte> bytes(sizeof constants);
+  std::memcpy(bytes.data(), &constants, sizeof constants);
+  return kernels::Launch{shaders::draw,
+                         nullptr,
+                         std::move(bytes),
+                         {whole(candidates), whole(sampled)},
+                         kernels::kCandidates,
+                         kernels::kCandidates,
+                         kernels::Rows::LastToken,
+                         {}};
+}
+
+}  // namespace frizzle::sampler

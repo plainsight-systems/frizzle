@@ -1,0 +1,75 @@
+// Embedding gather (kernels/gather/gather.h). Composed with the table's
+// format's unpack, which reads `weights`. One invocation per 32-weight group
+// of a step's row: it decodes its token's group, scales it, and writes the
+// group's 32 floats into the hidden buffer.
+
+struct Gather {
+    first_row: u32,
+    row_count: u32,
+    groups_per_row: u32,
+    blocks_in_piece: u32,
+    scale: f32,
+    positions: u32,   // the position form's: each axis table's rows
+}
+
+// The program sets workgroup_size from the launcher (gather.cpp, 64); the
+// default only lets a tool that reads this file alone size what uses it.
+override workgroup_size: u32 = 64;
+
+@group(0) @binding(1) var<uniform> gather: Gather;
+@group(0) @binding(2) var<storage, read> weights: array<u32>;
+@group(0) @binding(3) var<storage, read_write> hidden: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> sampled: array<u32>;   // the draw's record
+
+@compute @workgroup_size(workgroup_size)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let row = id.x / gather.groups_per_row;
+    if (row >= step.tokens) {
+        return;
+    }
+    // A fed step's one token is the last step's draw, and its identifier is
+    // never read (gather.h).
+    var token: u32;
+    if (step.fed == 1u) {
+        token = sampled[0];
+    } else {
+        token = step.ids[row / 4u][row % 4u];
+        // A medium's rows are copied in by its encoder's steps
+        // (runtime/media_stage.h); they carry its placeholder.
+        if (step.media == 1u && token == step.media_token) {
+            return;
+        }
+    }
+    // A token in another piece of the table is that piece's launch's to write.
+    if (token < gather.first_row || token - gather.first_row >= gather.row_count) {
+        return;
+    }
+    let group = id.x % gather.groups_per_row;
+    let weights_of = unpack(0u, gather.blocks_in_piece, (token - gather.first_row) * gather.groups_per_row + group);
+    let at = (row * gather.groups_per_row + group) * 8u;
+    for (var v = 0u; v < 8u; v++) {
+        hidden[at + v] = weights_of[v] * gather.scale;
+    }
+}
+
+// The position form, a vision encoder's learned positions (graph/vision.h):
+// patch row r, at column x = r mod columns and row y = r / columns of the
+// step's grid, takes the column table's row x plus the row table's row y —
+// rows x and positions + y of the one table — written to the output the
+// first norm adds. One invocation per 32-weight group of a row, as main.
+@compute @workgroup_size(workgroup_size)
+fn positions(@builtin(global_invocation_id) id: vec3<u32>) {
+    let row = id.x / gather.groups_per_row;
+    if (row >= step.tokens) {
+        return;
+    }
+    let group = id.x % gather.groups_per_row;
+    let x = row % step.columns;
+    let y = row / step.columns;
+    let across = unpack(0u, gather.blocks_in_piece, x * gather.groups_per_row + group);
+    let down = unpack(0u, gather.blocks_in_piece, (gather.positions + y) * gather.groups_per_row + group);
+    let at = (row * gather.groups_per_row + group) * 8u;
+    for (var v = 0u; v < 8u; v++) {
+        hidden[at + v] = across[v] + down[v];
+    }
+}
