@@ -4,9 +4,13 @@ Slice 1 is built: the port, the engine's operations, the native tool and its
 tests. Slice 2 is under way: edits reach the model through `generate`, with
 the edit kernel, the cache rewind and the edit specs suite, and the native
 tool's `--pin` prints the edited reply after the original; the replay and
-edits suite and the kernels suite remain. The work is cut into slices, in order. Each ends in
-something shown working, and the tests from the
-[inventory](../../tests/README.md) that guard it land with it.
+edits suite and the kernels suite remain.
+
+The work is cut into slices, in order. Each ends in something shown working.
+Each step in a slice runs headers, then tests, then code (workflow.md): the
+tests from the [inventory](../../tests/README.md) that guard a step are
+written in that step, before its code. A slice's "Tests" line names them;
+from slice 3 on, the plan for each step assigns them.
 
 ## 0. Architecture
 

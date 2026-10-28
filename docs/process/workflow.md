@@ -11,11 +11,18 @@ self-contained; the repository imports no governance files.
 2. For C++ header design, query both corpus MCP servers as below. Write each
    new or changed file's contract, algorithm and design in its opening
    comments, with the rules read. Review those headers before implementing.
-3. For C++ implementation, query both servers again for the concrete work.
-   Implement the change and its tests together, applying the guidance and
-   keeping the header comments current.
-4. Check correctness and cost, then update [MEMORY](MEMORY.md) and
+3. Write the tests next, before any of the code: the ones the inventory
+   assigns to the step, each locking a contract the reviewed headers state.
+   A test written after its code is fitted to the code, and locks nothing.
+4. For C++ implementation, query both servers again for the concrete work.
+   Implement until the tests pass, applying the guidance and keeping the
+   header comments current. A test changes during implementation only when
+   the contract it locks does, and that goes back to the header review.
+5. Check correctness and cost, then update [MEMORY](MEMORY.md) and
    [QUEUE](QUEUE.md).
+
+Every step runs in this order: headers, then tests, then code. A plan lists a
+step's tests inside the step, never as a step of its own at the end.
 
 There are no implementation packets. Architecture documents describe the
 system; file headers carry the design of the code they accompany.

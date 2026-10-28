@@ -30,9 +30,12 @@ them.
   a dated research note like it.
 - Keep `app/` (the interface) separate from `web/` (the site that hosts it).
 - **Tests lock contracts.** A test guards a named contract that someone would
-  notice breaking, and never needs changing for a refactor. The inventory in `tests/README.md` is the
-  whole test suite; adding to it is a decision. Integration tests are capped at
-  five. Follow the test rules in the workflow.
+  notice breaking, and never needs changing for a refactor. The inventory in
+  `tests/README.md` is the whole test suite; adding to it is a decision.
+  Integration tests are capped at five. Follow the test rules in the workflow.
+- **Headers, then tests, then code.** Every step: the design headers are
+  reviewed, the step's tests are written against them, and only then the
+  code. Tests are never a step of their own at the end.
 - Run `python3 scripts/check.py all` for C++ changes. Use the pinned Google
   formatter and the fatal clang-tidy policy; fix findings instead of disabling
   check families. Report only checks actually performed.
