@@ -9,4 +9,4 @@ Checks: >
   clang-analyzer-*
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|tests|tools)/.*'
-ExcludeHeaderFilterRegex: '.*/(build|_deps|\.cache)/.*'
+ExcludeHeaderFilterRegex: '.*/(build|_deps|\.cache|tests/fixtures)/.*'

@@ -198,4 +198,7 @@ else()
     # The native analysis tool (axis V): the reply to one prompt.
     add_executable(frizzle tools/frizzle/main.cpp)
     target_link_libraries(frizzle PRIVATE frizzle_gpu)
+    # The tests (tests/README.md), natively only.
+    enable_testing()
+    add_subdirectory(tests)
 endif()

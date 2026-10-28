@@ -1,10 +1,9 @@
 # Remaining work
 
-Slice 1 is under way: the port, the engine's operations and the native tool
-are built; its tests are not. The work is cut into slices, in order. Each ends in
+Slice 1 is built: the port, the engine's operations, the native tool and its
+tests. The work is cut into slices, in order. Each ends in
 something shown working, and the tests from the
-[inventory](../../tests/README.md) that guard it land with it, each shown to
-fail before it is kept.
+[inventory](../../tests/README.md) that guard it land with it.
 
 ## 0. Architecture
 
@@ -24,7 +23,6 @@ fail before it is kept.
 - The engine's operations `load` and `generate`
   (src/core/runtime/engine.h).
 - A native tool prints the reply to a prompt, through those operations.
-- Tests: logits vs llama.cpp, tokenizer, model file, the ported kernels.
 
 ## 2. Pinned neurons, native
 
@@ -33,7 +31,8 @@ fail before it is kept.
   token. Captures at the last prompt position for every layer, sent with the
   run.
 - The native tool prints the edited reply beside the original.
-- Tests: replay and edits, edit specs, the capture and edit kernels.
+- Tests: replay and edits, edit specs, the kernels suite (the ported kernels,
+  and the capture and edit outputs).
 
 ## 3. The loop in a browser, plain
 

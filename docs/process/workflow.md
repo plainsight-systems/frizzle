@@ -93,11 +93,6 @@ untouched behind the last position). It does not test private helpers,
 incidental structure, call sequences, or how the code currently happens to be
 written.
 
-**A test must be shown to fail.** Before a test is kept, break the contract
-it guards on purpose and watch it fail. The commit names the breakage it
-catches. A test that cannot fail is deleted. Check that failure comparisons
-also fail on NaN.
-
 **Refactors never change tests.** A behavior-preserving change that forces a
 test change means the test was asserting implementation: narrow it to its
 contract or delete it. A deliberate change of contract is the only reason to
@@ -117,13 +112,18 @@ reference, llama.cpp's logits for the same file and tokens, never against the
 engine's own earlier output. Freeze the reference, its inputs and its
 tolerance before investigating a failure; do not adjust the reference or relax
 the tolerance to make a failure pass. Exact-replay checks are bit for bit, with
-no tolerance.
+no tolerance. A tolerance comparison fails on NaN.
 
 **Unit and integration.** Contract tests run in process on small in-memory or
 fixture inputs, with no builds, servers, browsers, downloads or full model
 runs. Anything that loads the real model, drives the GPU through the engine,
 builds the site or opens a browser is an integration test and counts toward
 the five.
+
+**The oracle runs when inference changes.** The comparison with llama.cpp is
+an integration test, not part of the routine suite. Run it when the inference
+path changes: the GGUF reader, formats, residency and upload, graph, kernels,
+program, cache, sampler or turn loop.
 
 ## Checks
 
@@ -138,8 +138,10 @@ the five.
   `src/ported.json`) are not analyzed, as translation units or as headers,
   and every run lists them; a ported file that changes is analyzed from then
   on, and every finding in it is fixed.
-- **Tests:** the inventory, on the native build with Dawn for GPU work and in
-  a browser for the end-to-end scenario.
+- **Tests:** `python3 scripts/check.py test` builds and runs the contract
+  suites on the native build. The oracle runs by hand when the inference
+  path changes ([inventory](../../tests/README.md)); the end-to-end scenario
+  runs in a browser.
 - A build passing, or the page loading, is not evidence of correctness.
   Report the checks actually run.
 

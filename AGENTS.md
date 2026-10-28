@@ -29,9 +29,8 @@ them.
   commit. Add anything else copied from a sibling project to that record, or to
   a dated research note like it.
 - Keep `app/` (the interface) separate from `web/` (the site that hosts it).
-- **Tests must mean something.** A test guards a named contract that someone
-  would notice breaking, is shown to fail when that contract breaks, and never
-  needs changing for a refactor. The inventory in `tests/README.md` is the
+- **Tests lock contracts.** A test guards a named contract that someone would
+  notice breaking, and never needs changing for a refactor. The inventory in `tests/README.md` is the
   whole test suite; adding to it is a decision. Integration tests are capped at
   five. Follow the test rules in the workflow.
 - Run `python3 scripts/check.py all` for C++ changes. Use the pinned Google

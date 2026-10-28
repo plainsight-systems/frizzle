@@ -130,11 +130,12 @@ Two Vite entries, the page and the worker. `worker/delivery/` reads
 | `CMakeLists.txt`, `CMakePresets.json`, `cmake/` | U | Native and browser presets, shader embedding, the Dawn pin |
 | `app/package.json`, lockfile, Vite config | U | Exact npm versions |
 | `tools/frizzle/` | V | The native tool: the reply to a prompt; the edited reply beside it from slice 2 |
-| `tools/reference_logits/` | V | llama.cpp's logits, the frozen reference |
-| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, fixture generators |
+| `tools/reference_logits/` | V | Makes llama.cpp's logits, the frozen reference, again; its own build against llama.cpp |
+| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, the test fixtures |
 | `tests/integration/<scenario>/` | V | One directory per scenario in the [inventory](../../tests/README.md): `reference-logits`, `replay`, `browser`, `site` |
 | `tests/contracts/<suite>/` | V | One per suite: `tokenizer`, `gguf`, `kernels`, `edits` |
 | `tests/fixtures/` | V | Small inputs and frozen references |
+| `tests/support/` | V | What the tests share: reading files, driving the GPU, doctest's main |
 | `web/` | S | Hugo; mapped in slice 6 |
 
 Charlotte's tests come over only where one implements an inventory row.

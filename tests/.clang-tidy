@@ -1,4 +1,7 @@
-# Authored byte layouts and expected boundary values are test inputs.
+# Test inputs and expected values are written out as numbers, as in Bullet
+# Witch's tests; and doctest's assertion macros expand to do/while(0), which
+# no test can avoid.
 InheritParentConfig: true
 Checks: >
-  -cppcoreguidelines-avoid-magic-numbers
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-do-while

@@ -48,6 +48,9 @@ estimated at about 140 tok/s and has not been measured.
 - clang-format and clang-tidy are pinned to LLVM 21.1.8; tidy reads the
   native build's compilation database. Tools are installed locally; scripts
   refuse other versions and never install anything.
+- Tests use doctest v2.4.12, which CMake fetches pinned by commit. The
+  llama.cpp reference is frozen in the repository; llama.cpp itself is fetched
+  only to make it again (`tools/reference_logits/`).
 - The engine owns its WebGPU device in a worker. The scene uses three.js's
   WebGL renderer on the page. Captured values are copied across, all layers
   on every run (sizes in the

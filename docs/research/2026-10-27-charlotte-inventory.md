@@ -78,3 +78,31 @@ Left behind: the chat, picker, catalog, drawer, model, cache and status views; s
 
 - **`kernels/rope/rope_encode.wgsl` comes over too.** `rope.cpp` builds the encoder form of the rope kernel as well as the decoder's, so it does not compile without that shader. It is ported unused, like the other families' branches in the shared kernels, and leaves with them.
 - **Preflight goes entirely.** Its only caller is Charlotte's `wasm/bindings.cpp`, which Frizzle rewrites, and the context is already sized to the device in `residency/plan`, which comes over whole; nothing needs to be found in preflight and kept.
+
+## Addendum, 2026-10-28: the slice 1 tests
+
+Tests came over only where they lock a contract on Frizzle's inventory
+(`tests/README.md`), from Charlotte `e003048`:
+
+- **Model file:** the cases of `tests/gguf_malformed_test.cpp` that the
+  contract names, without "error strings are distinct". The 23 GGUF files are
+  written by `scripts/make_gguf_fixtures.py`, its `tools/make_fixture_gguf.py`
+  trimmed to those cases; its output matches Charlotte's committed files byte
+  for byte.
+- **Tokenizer:** the two Gemma 3 cases of `tests/tokenizer_sentencepiece_test.cpp`
+  (encode to the reference IDs; decode back, whole and streamed), through the
+  capability table rather than the SentencePiece class, over a committed
+  GGUF of the pinned model's tokenizer entries alone
+  (`scripts/make_tokenizer_fixture.py`) rather than a fetched 16 MiB header,
+  so it needs no download. The fixture
+  `tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.inc` is copied unchanged; its
+  generator, `tools/make_tokenizer_fixtures.py` at that commit, is not ported.
+- **Oracle:** `tests/gpu/reference_test.cpp`, Gemma 3 only, planned within the
+  device's limits and the default load policy as the engine plans, holding one
+  logits row at a time. Its in-test checks that a swapped RoPE pairing and a
+  global window fall outside the tolerance are not ported. The fixture
+  `tests/fixtures/reference/gemma-3-1b-it-q4_0.inc` is copied unchanged;
+  `tools/reference_logits/main.cpp` and its CMake are ported unchanged but for
+  formatting (their comments name Charlotte's paths); the script that drives
+  them is rewritten for Gemma 3 and the pinned model file.
+- **Not ported:** the per-kernel GPU tests, until slice 2 changes kernels.

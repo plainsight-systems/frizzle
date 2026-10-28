@@ -11,6 +11,9 @@ LLVM_VERSION = '21.1.8'
 SOURCE_ROOTS = ('src', 'tests', 'tools')
 TRANSLATION_SUFFIXES = {'.c', '.cc', '.cpp', '.cxx'}
 SUFFIXES = TRANSLATION_SUFFIXES | {'.h', '.hh', '.hpp', '.hxx'}
+# Built in a project of its own against llama.cpp, never in Frizzle's build,
+# so no compilation database of Frizzle's can hold it: formatted, not analyzed.
+SEPARATE_BUILDS = ('tools/reference_logits',)
 
 
 def find_tool(name):

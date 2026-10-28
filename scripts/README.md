@@ -12,13 +12,14 @@ python3 scripts/check.py all
 - `tidy` runs clang-tidy over every entry in the native build's
   `compile_commands.json` (default `build/native-debug`), each in isolation,
   and fails on any finding or on an authored translation unit missing from the
-  database. Logs and a summary go to ignored `.local/clang-tidy/`.
-- `all` runs both. Building, the test inventory and the site check join it as
-  those parts of the repository are created.
-
-Until there is C++ in the repository, `format` reports that there is nothing to
-check and fails, and `tidy` fails for want of a compilation database. That is
-the honest result, not a broken script.
+  database. Logs and a summary go to ignored `.local/clang-tidy/`. Frozen
+  test data under `tests/fixtures/` is not analyzed, nor is
+  `tools/reference_logits/`, which builds only against llama.cpp in a project
+  of its own. In `tests/`, magic numbers are allowed, and so is doctest's
+  do/while in its assertion macros (`tests/.clang-tidy`).
+- `test` builds and runs the contract suites (`frizzle_tests`) through CTest.
+  The llama.cpp oracle is not part of it ([tests](../tests/README.md)).
+- `all` runs all three. The site check joins it when the site exists.
 
 ## Pinned tools
 
@@ -72,6 +73,16 @@ CXX=$(brew --prefix llvm@21)/bin/clang++ cmake --preset native-release
 cmake --build build/native-release
 build/native-release/frizzle --prompt-file prompt.txt
 ```
+
+`make_gguf_fixtures.py` writes the small GGUF files the model-file tests read
+into `tests/fixtures/gguf/`; `--check` fails if a committed file differs from
+what it makes.
+
+`make_tokenizer_fixture.py` copies the pinned model's tokenizer entries, and
+nothing else, into `tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.gguf` (6.5 MB),
+so the tokenizer tests need no model. It checks the model against its pin
+first; run it again only when the pin changes. `--check` fails if the
+committed file differs.
 
 `fetch_model.py` downloads the model pinned in `config/model.json` into
 ignored `.cache/models/`, checking its size and SHA-256 before the file takes
