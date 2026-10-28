@@ -1,17 +1,22 @@
 // Axis V: a native tool for analysis, never part of the product.
 //
-// frizzle: for one prompt, prints the reply the model generates, natively on
+// frizzle: for one message, prints the reply the model generates, natively on
 // Dawn, through the same engine operations the browser calls
 // (src/core/runtime/engine.h).
 //
 // Contract
-//   frizzle [--model PATH] [--seed N] [--max-tokens N] TEXT
-//   frizzle [options] --prompt-file FILE
-//   - TEXT, or FILE's contents, is exactly what the model reads: Gemma's
-//     chat template already applied. The tool renders no template; its
-//     usage shows Gemma 3's rendered form for one user message. (A shell's
-//     $(...) drops trailing newlines, the one after "model" among them;
-//     --prompt-file keeps every byte.)
+//   frizzle [--model PATH] [--seed N] [--max-tokens N] MESSAGE
+//   frizzle [options] --message-file FILE
+//   - MESSAGE, or FILE's contents, is one user message, as a person types
+//     it. The tool is the user interface here, so it wraps the message as
+//     Gemma 3's chat template (the file's tokenizer.chat_template) renders
+//     one user turn with no system prompt and asks for the model's reply:
+//       <bos><start_of_turn>user\n{message, trimmed}<end_of_turn>\n
+//       <start_of_turn>model\n
+//     The engine reads that text as it is (engine.h). The template's trim
+//     strips whitespace at both ends; the tool strips ASCII whitespace
+//     (space, tab, CR, LF, VT, FF) and keeps any other, the one way it may
+//     differ from the template.
 //   - PATH defaults to .cache/models/gemma-3-1b-it-q4_0.gguf, relative to
 //     the working directory, as scripts/fetch_model.py leaves it from the
 //     repository's root. The tool does not verify the file's hash; the
@@ -25,15 +30,15 @@
 //     arguments. Nothing is printed as a result that was not computed.
 //
 // Algorithm
-//   1. Parse the arguments; read the prompt text.
+//   1. Parse the arguments; read the message; wrap it (above).
 //   2. Create a WebGPU instance, request a device (gpu/device.h) and pump the
 //      instance's events until it arrives.
 //   3. Open the model file. begin_load with a byte source that reads the
 //      file at an offset on demand, so nothing holds the whole file in
 //      memory; write the file in 16 MiB chunks, each accepted before the
 //      next; finish_load. Pump events throughout.
-//   4. generate(text, no edits, policy), printing text as it streams; print
-//      how it ended.
+//   4. generate(wrapped text, no edits, policy), printing text as it
+//      streams; print how it ended.
 //
 // Design and cost
 //   - The file-backed byte source lives here, not in the core: the browser
@@ -124,15 +129,11 @@ constexpr std::string_view kDefaultModel =
     ".cache/models/gemma-3-1b-it-q4_0.gguf";
 
 constexpr std::string_view kUsage =
-    "usage: frizzle [--model PATH] [--seed N] [--max-tokens N] TEXT\n"
-    "       frizzle [options] --prompt-file FILE\n"
+    "usage: frizzle [--model PATH] [--seed N] [--max-tokens N] MESSAGE\n"
+    "       frizzle [options] --message-file FILE\n"
     "\n"
-    "TEXT is exactly what the model reads: Gemma's chat template already\n"
-    "applied. For one user message, Gemma 3's rendered form is\n"
-    "  <bos><start_of_turn>user\\n{message}<end_of_turn>\\n"
-    "<start_of_turn>model\\n\n"
-    "with each \\n a newline. A shell's $(...) drops the last newline;\n"
-    "--prompt-file keeps every byte.\n"
+    "MESSAGE is one user message; the tool wraps it in Gemma 3's chat\n"
+    "template before the model reads it.\n"
     "\n"
     "  --model PATH      default .cache/models/gemma-3-1b-it-q4_0.gguf\n"
     "  --seed N          the reply's sampling seed, default 0\n"
@@ -146,13 +147,16 @@ void put(std::FILE* to, std::string_view text) {
 
 // --- Arguments ---------------------------------------------------------------
 
+constexpr std::string_view kOneMessage =
+    "give exactly one of MESSAGE and --message-file";
+
 struct Options {
   std::string model{kDefaultModel};
   std::uint64_t seed = 0;
   std::uint32_t max_tokens = kDefaultMaxTokens;
-  std::string prompt;  // the text, or the file that holds it
-  bool prompt_is_file = false;
-  bool has_prompt = false;
+  std::string message;  // the message, or the file that holds it
+  bool message_is_file = false;
+  bool has_message = false;
 };
 
 template <typename T>
@@ -168,7 +172,7 @@ std::optional<Options> parse(std::span<char*> args, std::string& refused) {
   Options o;
   for (std::size_t i = 1; i < args.size(); ++i) {
     const std::string_view arg = args[i];
-    const bool takes_value = arg == "--model" || arg == "--prompt-file" ||
+    const bool takes_value = arg == "--model" || arg == "--message-file" ||
                              arg == "--seed" || arg == "--max-tokens";
     if (takes_value) {
       if (i + 1 >= args.size()) {
@@ -178,14 +182,14 @@ std::optional<Options> parse(std::span<char*> args, std::string& refused) {
       const std::string_view value = args[++i];
       if (arg == "--model") {
         o.model = value;
-      } else if (arg == "--prompt-file") {
-        if (o.has_prompt) {
-          refused = "give exactly one of TEXT and --prompt-file";
+      } else if (arg == "--message-file") {
+        if (o.has_message) {
+          refused = kOneMessage;
           return std::nullopt;
         }
-        o.prompt = value;
-        o.prompt_is_file = true;
-        o.has_prompt = true;
+        o.message = value;
+        o.message_is_file = true;
+        o.has_message = true;
       } else if (arg == "--seed") {
         if (!parse_number(value, o.seed)) {
           refused = "--seed takes an unsigned 64-bit integer";
@@ -198,16 +202,16 @@ std::optional<Options> parse(std::span<char*> args, std::string& refused) {
     } else if (arg.starts_with("--")) {
       refused = std::format("unknown option {}", arg);
       return std::nullopt;
-    } else if (o.has_prompt) {
-      refused = "give exactly one of TEXT and --prompt-file";
+    } else if (o.has_message) {
+      refused = kOneMessage;
       return std::nullopt;
     } else {
-      o.prompt = arg;
-      o.has_prompt = true;
+      o.message = arg;
+      o.has_message = true;
     }
   }
-  if (!o.has_prompt) {
-    refused = "give exactly one of TEXT and --prompt-file";
+  if (!o.has_message) {
+    refused = kOneMessage;
     return std::nullopt;
   }
   return o;
@@ -255,6 +259,21 @@ std::optional<std::string> read_text(const std::string& path) {
   }
   if (std::ferror(file.get()) != 0) return std::nullopt;
   return text;
+}
+
+// One user message as Gemma 3's chat template renders it, asking for the
+// model's reply (Contract, above).
+std::string gemma_turn(std::string_view message) {
+  constexpr std::string_view kWhitespace = " \t\r\n\v\f";
+  const std::size_t first = message.find_first_not_of(kWhitespace);
+  const std::string_view trimmed =
+      first == std::string_view::npos
+          ? std::string_view{}
+          : message.substr(first,
+                           message.find_last_not_of(kWhitespace) - first + 1);
+  return std::format(
+      "<bos><start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n",
+      trimmed);
 }
 
 // The model file as a ByteSource, read at an offset on demand. An I/O error
@@ -581,13 +600,15 @@ int tool(std::span<char*> args) {
     put(stderr, std::format("frizzle: {}\n\n{}", refused, kUsage));
     return kBadArguments;
   }
-  if (!options->prompt_is_file) return run(*options, options->prompt);
-  const std::optional<std::string> text = read_text(options->prompt);
-  if (!text) {
-    put(stderr, std::format("frizzle: cannot read {}\n", options->prompt));
+  if (!options->message_is_file) {
+    return run(*options, gemma_turn(options->message));
+  }
+  const std::optional<std::string> message = read_text(options->message);
+  if (!message) {
+    put(stderr, std::format("frizzle: cannot read {}\n", options->message));
     return kBadArguments;
   }
-  return run(*options, *text);
+  return run(*options, gemma_turn(*message));
 }
 
 }  // namespace

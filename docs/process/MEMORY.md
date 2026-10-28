@@ -101,6 +101,12 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 - `generate` runs the model over the rendered text and streams its reply.
   The turn loop reuses the prefix of the prompt the cache already holds.
 - The engine renders no chat template; it reads text already rendered.
+- Wrapping a message is the user interface's job: the page's chat template,
+  and the native tool's wrapping of one user message, write Gemma 3's
+  `<bos>` and turn markers; the page's template tests (slice 3) lock it.
+  The tool wraps one message only, by hand, untested. The engine checks
+  nothing of the template; text wrapped otherwise runs, and the reply is what
+  the model makes of it (without `<bos>`, often nothing).
 - Nothing is computed beside the model: no probabilities derived on the CPU,
   no second pass to keep in step with the first.
 

@@ -71,7 +71,7 @@ LLVM clang 21.1.8 and any Emscripten but 6.0.8, rather than substituting one.
 python3 scripts/fetch_model.py
 CXX=$(brew --prefix llvm@21)/bin/clang++ cmake --preset native-release
 cmake --build build/native-release
-build/native-release/frizzle --prompt-file prompt.txt
+build/native-release/frizzle "Write a short poem about the sea."
 ```
 
 `make_gguf_fixtures.py` writes the small GGUF files the model-file tests read
