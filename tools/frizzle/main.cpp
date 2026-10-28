@@ -5,7 +5,8 @@
 // (src/core/runtime/engine.h).
 //
 // Contract
-//   frizzle [--model PATH] [--seed N] [--max-tokens N] MESSAGE
+//   frizzle [--model PATH] [--seed N] [--max-tokens N] [--pin PIN]...
+//           MESSAGE
 //   frizzle [options] --message-file FILE
 //   - MESSAGE, or FILE's contents, is one user message, as a person types
 //     it. The tool is the user interface here, so it wraps the message as
@@ -22,12 +23,22 @@
 //     repository's root. The tool does not verify the file's hash; the
 //     fetch script did.
 //   - --seed defaults to 0, --max-tokens to 256.
+//   - --pin pins a neuron for the edited run, and may be given again for
+//     more, in any layers: LAYER:NEURON=VALUE sets it to VALUE,
+//     LAYER:NEURON*FACTOR scales it by FACTOR, LAYER:NEURON=zero zeroes it
+//     (edit/edit.h). The tool reads only this syntax, refusing anything else
+//     as a bad argument; whether a pin is valid for the model (its layer,
+//     neuron and value) is the engine's to say, and it refuses one by name.
 //   - Prints, in order: the device; the load and turn settings it ran with;
 //     the reply, streamed as the model writes it; how the reply ended, its
-//     token count and the prompt's.
-//   - Exit status 0 when the reply completed; 1 with
-//     the engine's named refusal or failure on stderr otherwise; 2 for bad
-//     arguments. Nothing is printed as a result that was not computed.
+//     token count and the prompt's. With pins, then: the pins; the edited
+//     reply, from the same seed and settings, and how it ended. The two runs
+//     share the cached prompt, so the second reports reusing all of it but
+//     its last token.
+//   - Exit status 0 when every reply completed; 1 with the engine's named
+//     refusal or failure on stderr otherwise, after the replies that did; 2
+//     for bad arguments. Nothing is printed as a result that was not
+//     computed.
 //
 // Algorithm
 //   1. Parse the arguments; read the message; wrap it (above).
@@ -39,6 +50,7 @@
 //      next; finish_load. Pump events throughout.
 //   4. generate(wrapped text, no edits, policy), printing text as it
 //      streams; print how it ended.
+//   5. With pins, generate(wrapped text, the pins, policy) the same way.
 //
 // Design and cost
 //   - The file-backed byte source lives here, not in the core: the browser
@@ -69,6 +81,10 @@
 //            destructor, on every path.
 //     E.27   If you can't throw, use error codes systematically: each stage's
 //            named result decides the exit status.
+//     F.1    Package meaningful operations as named functions: a reply, run
+//            and printed, is one function, called for each run.
+//     SL.io.2 Always consider ill-formed input: a --pin's syntax is checked
+//            whole, never read in part.
 //     I.11   Never transfer ownership by a raw pointer or reference: the
 //            engine borrows the device, which main holds and outlives it; the
 //            byte source borrows the file.
@@ -101,6 +117,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/edit/edit.h"
 #include "core/gguf/byte_source.h"
 #include "core/gpu/device.h"
 #include "core/gpu/wgpu_handles.h"
@@ -117,6 +134,7 @@ using frizzle::gguf::ByteSource;
 using frizzle::gguf::ReadStatus;
 namespace runtime = frizzle::runtime;
 namespace policy = frizzle::policy;
+namespace edit = frizzle::edit;
 
 constexpr int kOk = 0;
 constexpr int kFailed = 1;
@@ -129,7 +147,8 @@ constexpr std::string_view kDefaultModel =
     ".cache/models/gemma-3-1b-it-q4_0.gguf";
 
 constexpr std::string_view kUsage =
-    "usage: frizzle [--model PATH] [--seed N] [--max-tokens N] MESSAGE\n"
+    "usage: frizzle [--model PATH] [--seed N] [--max-tokens N] [--pin PIN]...\n"
+    "               MESSAGE\n"
     "       frizzle [options] --message-file FILE\n"
     "\n"
     "MESSAGE is one user message; the tool wraps it in Gemma 3's chat\n"
@@ -137,7 +156,11 @@ constexpr std::string_view kUsage =
     "\n"
     "  --model PATH      default .cache/models/gemma-3-1b-it-q4_0.gguf\n"
     "  --seed N          the reply's sampling seed, default 0\n"
-    "  --max-tokens N    the reply's most tokens, default 256\n";
+    "  --max-tokens N    the reply's most tokens, default 256\n"
+    "  --pin PIN         a neuron for the edited reply, which follows the\n"
+    "                    original from the same seed; repeatable. PIN is\n"
+    "                    LAYER:NEURON=VALUE (set), LAYER:NEURON*FACTOR\n"
+    "                    (scale) or LAYER:NEURON=zero\n";
 
 // --- Output ------------------------------------------------------------------
 
@@ -154,7 +177,8 @@ struct Options {
   std::string model{kDefaultModel};
   std::uint64_t seed = 0;
   std::uint32_t max_tokens = kDefaultMaxTokens;
-  std::string message;  // the message, or the file that holds it
+  std::vector<edit::Edit> pins;  // for the edited run; none, no such run
+  std::string message;           // the message, or the file that holds it
   bool message_is_file = false;
   bool has_message = false;
 };
@@ -167,13 +191,46 @@ bool parse_number(std::string_view text, T& out) {
   return error == std::errc{} && at == end;
 }
 
+// One --pin (Contract, above), or the reason it is refused. Its numbers are
+// read whole: a layer and a neuron as unsigned 32-bit integers, a value as
+// a float in from_chars' general form, which reads no locale.
+std::optional<edit::Edit> parse_pin(std::string_view text,
+                                    std::string& refused) {
+  const auto refuse = [&]() {
+    refused = std::format(
+        "--pin {}: write LAYER:NEURON=VALUE, LAYER:NEURON*FACTOR or "
+        "LAYER:NEURON=zero",
+        text);
+    return std::nullopt;
+  };
+  const std::size_t colon = text.find(':');
+  if (colon == std::string_view::npos) return refuse();
+  const std::size_t op = text.find_first_of("=*", colon + 1);
+  if (op == std::string_view::npos) return refuse();
+  edit::Edit pin{};
+  if (!parse_number(text.substr(0, colon), pin.layer) ||
+      !parse_number(text.substr(colon + 1, op - colon - 1), pin.neuron)) {
+    return refuse();
+  }
+  const std::string_view value = text.substr(op + 1);
+  if (text[op] == '=' && value == "zero") {
+    pin.kind = edit::EditKind::Zero;
+    pin.value = 0.0F;
+    return pin;
+  }
+  pin.kind = text[op] == '=' ? edit::EditKind::Set : edit::EditKind::Scale;
+  if (!parse_number(value, pin.value)) return refuse();
+  return pin;
+}
+
 // The options, or the reason they are refused.
 std::optional<Options> parse(std::span<char*> args, std::string& refused) {
   Options o;
   for (std::size_t i = 1; i < args.size(); ++i) {
     const std::string_view arg = args[i];
     const bool takes_value = arg == "--model" || arg == "--message-file" ||
-                             arg == "--seed" || arg == "--max-tokens";
+                             arg == "--pin" || arg == "--seed" ||
+                             arg == "--max-tokens";
     if (takes_value) {
       if (i + 1 >= args.size()) {
         refused = std::format("{} needs a value", arg);
@@ -182,6 +239,10 @@ std::optional<Options> parse(std::span<char*> args, std::string& refused) {
       const std::string_view value = args[++i];
       if (arg == "--model") {
         o.model = value;
+      } else if (arg == "--pin") {
+        const std::optional<edit::Edit> pin = parse_pin(value, refused);
+        if (!pin) return std::nullopt;
+        o.pins.push_back(*pin);
       } else if (arg == "--message-file") {
         if (o.has_message) {
           refused = kOneMessage;
@@ -453,6 +514,72 @@ int fail_load(const runtime::LoadResult& result, const FileByteSource& source) {
   return fail("load", why);
 }
 
+// --- A reply -----------------------------------------------------------------
+
+// The pins, as the tool read them.
+std::string described(std::span<const edit::Edit> pins) {
+  std::string out;
+  for (const edit::Edit& e : pins) {
+    if (!out.empty()) out += "; ";
+    out += std::format("layer {} neuron {} ", e.layer, e.neuron);
+    switch (e.kind) {
+      case edit::EditKind::Set:
+        out += std::format("set {}", e.value);
+        break;
+      case edit::EditKind::Scale:
+        out += std::format("scale {}", e.value);
+        break;
+      case edit::EditKind::Zero:
+        out += "zero";
+        break;
+    }
+  }
+  return out;
+}
+
+// One reply to `text` under `edits`: generated, streamed under `label`, and
+// how it ended printed; kOk, or the engine's refusal or failure reported.
+int reply(runtime::Engine& engine, WGPUInstance instance,
+          std::string_view label, const std::string& text,
+          std::span<const edit::Edit> edits, const policy::TurnPolicy& turn) {
+  put(stdout, std::format("{}:\n", label));
+  Reply reply;
+  const runtime::OperationStart generating = engine.generate(
+      text, edits, turn,
+      [](std::string_view piece, void* /*userdata*/) {
+        put(stdout, piece);
+        std::fflush(stdout);
+      },
+      [](const runtime::TurnResult& result, void* userdata) {
+        auto& r = *static_cast<Reply*>(userdata);
+        r.result = result;
+        r.message = result.message;  // valid only during the call
+        r.done = true;
+      },
+      &reply);
+  if (!generating.ok()) return fail("generate", refusal(generating));
+  pump_until(instance, reply.done);
+  put(stdout, "\n");
+  const runtime::TurnResult& r = reply.result;
+  if (r.failure != runtime::TurnFailure::None) {
+    std::string why(name(r.failure));
+    if (!reply.message.empty()) why += ": " + reply.message;
+    return fail("generate", why);
+  }
+  if (r.end == runtime::TurnEnd::Cancelled) {
+    return fail("generate", "cancelled");
+  }
+  std::string ended(name(r.end));
+  if (r.stop) {
+    ended += std::format(" (token {})", static_cast<std::uint32_t>(*r.stop));
+  }
+  put(stdout,
+      std::format("end: {}, {} tokens; prompt {} tokens, {} reused from the "
+                  "cache\n",
+                  ended, r.emitted, r.prompt, r.reused));
+  return kOk;
+}
+
 // --- The run -----------------------------------------------------------------
 
 int run(const Options& options, const std::string& text) {
@@ -553,44 +680,14 @@ int run(const Options& options, const std::string& text) {
                   turn.sampling.top_p, turn.sampling.min_p, options.seed,
                   turn.max_tokens));
 
-  // The reply.
-  put(stdout, "reply:\n");
-  Reply reply;
-  // No edits until the tool takes them (slice 2, step 4).
-  const runtime::OperationStart generating = engine.generate(
-      text, {}, turn,
-      [](std::string_view piece, void* /*userdata*/) {
-        put(stdout, piece);
-        std::fflush(stdout);
-      },
-      [](const runtime::TurnResult& result, void* userdata) {
-        auto& r = *static_cast<Reply*>(userdata);
-        r.result = result;
-        r.message = result.message;  // valid only during the call
-        r.done = true;
-      },
-      &reply);
-  if (!generating.ok()) return fail("generate", refusal(generating));
-  pump_until(instance.get(), reply.done);
-  put(stdout, "\n");
-  const runtime::TurnResult& r = reply.result;
-  if (r.failure != runtime::TurnFailure::None) {
-    std::string why(name(r.failure));
-    if (!reply.message.empty()) why += ": " + reply.message;
-    return fail("generate", why);
+  if (const int status = reply(engine, instance.get(), "reply", text, {}, turn);
+      status != kOk) {
+    return status;
   }
-  if (r.end == runtime::TurnEnd::Cancelled) {
-    return fail("generate", "cancelled");
-  }
-  std::string ended(name(r.end));
-  if (r.stop) {
-    ended += std::format(" (token {})", static_cast<std::uint32_t>(*r.stop));
-  }
-  put(stdout,
-      std::format("end: {}, {} tokens; prompt {} tokens, {} reused from the "
-                  "cache\n",
-                  ended, r.emitted, r.prompt, r.reused));
-  return kOk;
+  if (options.pins.empty()) return kOk;
+  put(stdout, std::format("edits: {}\n", described(options.pins)));
+  return reply(engine, instance.get(), "edited reply", text, options.pins,
+               turn);
 }
 
 int tool(std::span<char*> args) {
