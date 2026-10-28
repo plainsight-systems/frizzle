@@ -57,6 +57,14 @@ estimated at about 140 tok/s and has not been measured.
   [logical overview](../architecture/logical-overview.md)).
 - The interface is React, react-three-fiber, TypeScript and Vite, with npm at
   exact versions and a committed lockfile. The site is Hugo.
+- The app runs on Node 24.12.0, pinned in `app/.nvmrc` and refused otherwise,
+  as LLVM is. Packages are installed by hand with `npm ci`, with no install
+  scripts. TypeScript 7's native `tsc` only type-checks; Vite builds.
+- The TypeScript suites run on Node's built-in test runner, with no test
+  dependency: Node strips the types itself, so the app uses only TypeScript
+  that erases (no enum, namespace or parameter properties; `tsc` enforces
+  it) and tested modules use no Vite-only features. Vitest, the alternative,
+  would add about 20 packages.
 
 ## Relationship to Charlotte
 

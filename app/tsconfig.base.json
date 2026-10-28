@@ -1,0 +1,23 @@
+// The compiler settings every part of the app shares. tsc only checks; Vite
+// builds. Code uses only TypeScript that erases to JavaScript (no enum,
+// namespace or parameter properties), so Node's built-in runner can run the
+// TypeScript suites as they are, with no build step and no test dependency.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": false
+  }
+}

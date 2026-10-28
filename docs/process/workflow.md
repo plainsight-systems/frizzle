@@ -138,8 +138,12 @@ program, cache, sampler or turn loop.
 
 ## Checks
 
-- **Formatting:** the pinned Google `.clang-format`, through
-  `python3 scripts/check.py format` (`--fix` applies it).
+- **Formatting:** the pinned Google `.clang-format` for C++, and the app's
+  pinned Prettier for its TypeScript, through `python3 scripts/check.py
+  format` (`--fix` applies both).
+- **Boundaries:** `python3 scripts/check.py boundaries` reads the import
+  rules of the [file mapping](../architecture/file-mapping.md) from the
+  sources, C++ and TypeScript, and lists every violation.
 - **Static analysis:** `python3 scripts/check.py tidy` runs the pinned
   clang-tidy over every entry in the native build's compilation database;
   every finding fails. Fix findings rather than excluding checks; any narrow

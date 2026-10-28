@@ -44,17 +44,55 @@ from slice 3 on, the plan for each step assigns them.
 
 ## 3. The loop in a browser, plain
 
-- The Emscripten build; scaffold `app/` with its pinned dependencies; port the
-  worker, protocol, download, verification, cache and chat-template modules
-  to TypeScript.
-- A plain page: prompt, pin neurons by number, the two replies side by
-  side.
-- `check.py boundaries`, its TypeScript rules (React only in the root,
-  `views/` and `theme/`; the worker imports no page code).
-- Measure the browser decode speed for Gemma 3 1B.
-- Tests: browser end to end.
+Ends with a plain page in a real browser: download and
+verify the pinned file, type a message, pin neurons by number, and see the
+edited reply beside the original. Each step: headers reviewed, then its
+tests, then its code.
 
-## 4. MLP workbench
+1. **The app's scaffold and its rules.** `app/` with Vite, React and
+   TypeScript at exact versions and a committed lockfile; the page and
+   worker entries; a TypeScript test runner. `check.py` gains the app's
+   type check and its tests, and `check.py boundaries` its TypeScript rules
+   (React only in the root, `views/` and `theme/`; the worker imports no
+   page code), in force before the first module lands.
+   Tests: the boundary rules run in `check.py all`; nothing else to lock.
+   The test runner is Node's own (MEMORY). The C++ boundary rule listed in
+   slice 1 lands here: it had not.
+2. **The chat template** (`worker/template/`, T). Gemma 3's template, read
+   from the file's `tokenizer.chat_template`, rendered by a vendored Jinja.
+   Tests first, a new unit suite, Chat template: one user message renders
+   `<bos><start_of_turn>user\n{message, trimmed}<end_of_turn>\n<start_of_turn>model\n`;
+   a conversation renders each turn, assistant as `model`; a system prompt
+   joins the first user turn; turns that do not alternate are refused by
+   name. Against Charlotte's Gemma template fixture, rewritten to these
+   contracts.
+3. **Delivery** (`worker/delivery/`, L). Fetch the pinned file in chunks,
+   SHA-256 as it streams, keep it in OPFS, and stream it into the engine;
+   a cached copy is verified before use. Tests first, a new unit suite,
+   Delivery: SHA-256 against published test vectors, whole and fed in
+   pieces; a file of the wrong size or hash is refused by name and not
+   kept. The real download is the browser scenario's (step 5).
+4. **The boundary and the worker** (`src/wasm/bindings.cpp`, R;
+   `worker/worker.ts`, `protocol/`). The Emscripten build of the engine;
+   the boundary offers load (in its three calls) and generate with edits,
+   streaming text and the turn's end to the worker; the protocol carries
+   requests with ids, and the page's client shows only the answer to its
+   latest request. Tests first, a new unit suite, Protocol: replies to an
+   earlier request are dropped once a later one is sent; every request is
+   answered once, with its result or a named refusal. The boundary itself
+   is thin translation, locked by the browser scenario.
+5. **The plain page** (`views/prompt/`, H). A message box, pins by number
+   (layer, neuron, kind, value), the two replies side by side, the same
+   seed. Tests first, the integration scenario Browser, end to end
+   (slot 3 of 5): in a real browser with WebGPU, download and verify the
+   pinned file, generate a reply, pin neurons in two layers, and get an
+   edited reply that differs from the original beside it.
+   Decision: the browser driver and the browser it runs, and their pins.
+6. **Measure.** Decode speed for Gemma 3 1B in the browser, edits off and
+   on (the accepted cost of the edit launch), recorded in MEMORY with the
+   browser, its version, the machine and the workload.
+
+## 4. MLP workbench## 4. MLP workbench
 
 - Captures at the last prompt position for every layer, sent with each run,
   with their kernel outputs added to the kernels suite.
