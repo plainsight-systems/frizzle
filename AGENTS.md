@@ -33,9 +33,10 @@ them.
   notice breaking, and never needs changing for a refactor. The inventory in
   `tests/README.md` is the whole test suite; adding to it is a decision.
   Integration tests are capped at five. Follow the test rules in the workflow.
-- **Headers, then tests, then code.** Every step: the design headers are
-  reviewed, the step's tests are written against them, and only then the
-  code. Tests are never a step of their own at the end.
+- **Headers and tests, review, code, review.** Every step, in any language:
+  the files with their design in their opening comments, and the step's
+  tests; both reviewed; then the code; that reviewed; then the next step.
+  Tests are never a step of their own at the end.
 - Run `python3 scripts/check.py all` for C++ changes. Use the pinned Google
   formatter and the fatal clang-tidy policy; fix findings instead of disabling
   check families. Report only checks actually performed.

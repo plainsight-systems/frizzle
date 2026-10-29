@@ -8,21 +8,23 @@ self-contained; the repository imports no governance files.
 
 1. Establish the logical architecture, its change axes and the file mapping
    in `docs/architecture/` before writing engine code.
-2. For C++ header design, query both corpus MCP servers as below. Write each
-   new or changed file's contract, algorithm and design in its opening
-   comments, with the rules read. Review those headers before implementing.
-3. Write the tests next, before any of the code: the ones the inventory
-   assigns to the step, each locking a contract the reviewed headers state.
-   A test written after its code is fitted to the code, and locks nothing.
-4. For C++ implementation, query both servers again for the concrete work.
-   Implement until the tests pass, applying the guidance and keeping the
-   header comments current. A test changes during implementation only when
-   the contract it locks does, and that goes back to the header review.
-5. Check correctness and cost, then update [MEMORY](MEMORY.md) and
-   [QUEUE](QUEUE.md).
+2. Write each new or changed file with its design: its contract, algorithm
+   and design in its opening comments, in any language (for C++, with the
+   corpus rules read, below).
+3. Write the step's tests: the ones the inventory assigns to it, each locking
+   a contract the headers state. A test written after its code is fitted to
+   the code, and locks nothing.
+4. The headers and the tests are reviewed together. No code before that.
+5. Write the code until the tests pass, applying the guidance and keeping
+   the headers current (for C++, querying the corpus again for the concrete
+   work). A test changes only when the contract it locks does, and that goes
+   back to review.
+6. Check correctness and cost, update [MEMORY](MEMORY.md) and
+   [QUEUE](QUEUE.md), and the code is reviewed. Then the next step.
 
-Every step runs in this order: headers, then tests, then code. A plan lists a
-step's tests inside the step, never as a step of its own at the end.
+Every step runs in this order: headers and tests, review, code, review. A
+plan lists a step's tests inside the step, never as a step of its own at the
+end.
 
 There are no implementation packets. Architecture documents describe the
 system; file headers carry the design of the code they accompany.
