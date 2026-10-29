@@ -1,6 +1,6 @@
 // The page: React, the browser's DOM. protocol/ and engine/ join when their
-// first modules land (slice 3, step 4); the worker gets a project of its own
-// then, with the Web Worker's types instead of the DOM's.
+// first modules land (slice 3, step 4); the worker has its own project
+// (tsconfig.worker.json).
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {

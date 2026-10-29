@@ -1,0 +1,72 @@
+{
+  "$comment": "Gemma 3 1B chat-template references, copied unchanged from Charlotte e003048 tests/web/fixtures/templates.json, the gemma-3-1b-it-q4_0 entry. Each sha256 is of the conversation rendered by Python jinja2 configured as Hugging Face transformers configures it (Charlotte tools/make_template_fixtures.py, not ported), with add_generation_prompt true, over the template in the pinned model file. Frozen: a mismatch is investigated, never re-hashed from our own output.",
+  "source": "Charlotte e003048",
+  "date": "29 Sep 2026",
+  "model": "gemma-3-1b-it-q4_0",
+  "cases": [
+    {
+      "name": "one user turn",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ],
+      "variables": {},
+      "sha256": "bf12b6d99b589347dd2e5ff83ac48cd1671af27c9aa23b84cc634179b6d0f233"
+    },
+    {
+      "name": "system prompt",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Be brief."
+        },
+        {
+          "role": "user",
+          "content": "What is a KV cache?"
+        }
+      ],
+      "variables": {},
+      "sha256": "db784d8fe35633c2c8182c4f5cbe63307746bb2bdcda70abbbc2ed5b490fb640"
+    },
+    {
+      "name": "second turn",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hi"
+        },
+        {
+          "role": "assistant",
+          "content": "Hello! How can I help?"
+        },
+        {
+          "role": "user",
+          "content": "Tell me a joke."
+        }
+      ],
+      "variables": {},
+      "sha256": "d22f2666e4c8339cb506ebf4ff826cddd2ee990939e3398a914bf04e0feb06aa"
+    },
+    {
+      "name": "earlier reasoning in the history",
+      "messages": [
+        {
+          "role": "user",
+          "content": "2+2?"
+        },
+        {
+          "role": "assistant",
+          "content": "<think>\nAdd them.\n</think>\n\n4"
+        },
+        {
+          "role": "user",
+          "content": "And 3+3?"
+        }
+      ],
+      "variables": {},
+      "sha256": "b6f3492f1c0a5f3c3400759429c1fb9894df23d58eebf6c63a906f298ef7f4b5"
+    }
+  ]
+}

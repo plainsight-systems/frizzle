@@ -117,7 +117,7 @@ engine/edits.ts        Q         the edit kinds, as sent
 protocol/              R         messages, ids, the page's client
 worker/worker.ts       R         the worker's entry; loads the module
 worker/delivery/       L         fetch, SHA-256, OPFS, streaming into the engine
-worker/template/       T         Gemma's chat template; vendored Jinja
+worker/template/       T         Gemma's chat template; @huggingface/jinja from npm
 ```
 
 Two Vite entries, the page and the worker. `worker/delivery/` reads

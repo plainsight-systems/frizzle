@@ -1,10 +1,15 @@
-// Code that runs in Node: Vite's config now; the TypeScript suites in
-// tests/contracts/ join with the first of them (slice 3, step 2).
+// Code that runs in Node: Vite's config, and the TypeScript suites in
+// tests/contracts/ with their support, which import the app's modules they
+// test (those are checked here too, against Node's types).
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["vite.config.ts"]
+  "include": [
+    "vite.config.ts",
+    "../tests/contracts/**/*.ts",
+    "../tests/support/**/*.ts"
+  ]
 }
