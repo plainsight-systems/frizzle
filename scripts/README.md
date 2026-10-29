@@ -52,6 +52,22 @@ port in memory and checks the manifest against it.
 `scripts/clang-format` is the editor's formatter: it forwards to the same
 pinned binary and fails if it is missing.
 
+`editor_wasm.py` gives the editor the browser-only C++ (`src/wasm/`), which
+the native database cannot hold. It configures the wasm-release preset in the
+pinned container (which exports that build's database), copies the
+container's headers into ignored `.cache/emsdk-6.0.8/`, and rewrites the
+browser-only entries as commands for the pinned clang++ in ignored
+`build/wasm-editor/compile_commands.json`, which `.vscode/settings.json`
+lists after the native database. It parses every rewritten file with
+`-fsyntax-only` and fails if one does not compile, so the editor never reads
+a database it cannot follow. The module is still built only by em++ in the
+container. Run it after a wasm build, and again when the image or the
+browser-only files' flags change:
+
+```sh
+python3 scripts/editor_wasm.py
+```
+
 ## Building
 
 ```sh

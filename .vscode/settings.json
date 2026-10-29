@@ -1,5 +1,8 @@
 {
-  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/native-debug/compile_commands.json",
+  "C_Cpp.default.compileCommands": [
+    "${workspaceFolder}/build/native-debug/compile_commands.json",
+    "${workspaceFolder}/build/wasm-editor/compile_commands.json"
+  ],
   "C_Cpp.default.cppStandard": "c++23",
   "C_Cpp.default.includePath": [
     "${workspaceFolder}/src",

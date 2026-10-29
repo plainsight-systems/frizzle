@@ -28,9 +28,11 @@
     {
       "name": "wasm-release",
       "displayName": "WebAssembly release, inside emscripten/emsdk:6.0.8",
+      "description": "Exports its compilation database for scripts/editor_wasm.py, which rewrites the browser-only entries for the editor; the module is unchanged by it.",
       "binaryDir": "${sourceDir}/build/wasm-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     }
   ],
