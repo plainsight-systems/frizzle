@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git's pre-push hook for this repository: scripts/pre_push.py, given git's
+# arguments and standard input unchanged. Enabled once per clone with
+# `git config core.hooksPath .githooks`.
+exec python3 "$(git rev-parse --show-toplevel)/scripts/pre_push.py" "$@"

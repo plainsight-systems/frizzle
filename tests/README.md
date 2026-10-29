@@ -7,7 +7,10 @@ change tests, and adding or removing an entry is a recorded decision.
 An entry is "built" when the test exists and passes.
 
 **Running them.** The contract suites are one executable, `frizzle_tests`,
-which `python3 scripts/check.py test` (and `all`) builds and runs. The oracle
+which `python3 scripts/check.py test` (and `all`) builds and runs, with the
+app's TypeScript suites and type check; that check covers the browser
+scenario's driver too, so it needs `npm ci` in `app/` and in
+`tests/integration/browser/`. The oracle
 is `frizzle_oracle`, run by hand when the inference path changes:
 
 ```sh
@@ -25,7 +28,7 @@ skips it.
 | --- | --- | --- |
 | Logits vs llama.cpp | The native engine, on Dawn, computes Gemma 3 1B's logits for fixed token sequences within a frozen tolerance of llama.cpp's for the same file. Run when the inference path changes, not with the routine suite. `tests/integration/reference-logits/`, against the frozen reference in `tests/fixtures/reference/`. | Built |
 | Replay and edits | Through the engine, on the pinned model, one message and one seed. (1) Scale × 1 edits in several layers give the reply without edits, byte for byte, with the same token count and ending. (2) Without edits, then with a strong edit, then without again: the third run equals the first, and reuses all the prompt's cache but its last token, so the edited run left the earlier positions' entries as they were. (3) One edit set across layers, given in two orders, gives one reply, different from the reply without edits. (4) After an edited run, a conversation that contains its reply reuses only the prompt before the edits (the rewind), and its reply equals a fresh engine's. `tests/integration/replay/`, `frizzle_replay`, run when edits, the graph or the turn loop change. | Built |
-| Browser, end to end | In a real browser: download and verify the pinned file, generate a reply, pin neurons in two layers, and get the edited reply beside the original. | Planned |
+| Browser, end to end | In a real browser with WebGPU, the app as it ships: fetch and verify the pinned file, generate a reply, pin neurons in two layers, and get the edited reply, from the same seed, beside the original and different from it. The pins show the edits' way in from the page to the engine is connected, not that each edit arrives as sent; slice 4's captures check that exactly. `tests/integration/browser/`, its own npm project: puppeteer-core driving Chrome for Testing at its pin, headless, over the app's production build served as static files. The pinned URL is answered from the local copy (`.cache/models/`, `scripts/fetch_model.py`) and every other host is blocked, so the app's own fetch, OPFS and hash check run with no network, into a fresh profile each run. Runs before every push as the pre-push hook (`scripts/pre_push.py`), which first rebuilds the browser module; not in CI. By hand: `npm ci` and `npm run install-browser` once, then `npm run scenario`, in that directory. | Built |
 | Site build | The Hugo site builds and publishes with the app inside it. | Planned |
 
 One slot is unassigned.

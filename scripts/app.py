@@ -6,7 +6,9 @@ installs with `npm ci` in app/; a missing app/node_modules fails here, by
 name, rather than installing anything.
 
 - format: Prettier over the app's TypeScript and HTML (--fix applies it).
-- typecheck: tsc over each of the app's type-check projects.
+- typecheck: tsc over each of the app's type-check projects, and the
+  browser scenario's (tests/integration/browser/), whose packages a person
+  installs with `npm ci` there.
 - suites: Node's built-in runner over tests/contracts/**/*.test.ts, the
   TypeScript suites of the inventory (tests/README.md), run as written: Node
   strips the types itself.
@@ -20,7 +22,7 @@ APP = ROOT / 'app'
 NODE_VERSION = (APP / '.nvmrc').read_text().strip()
 
 
-def _node():
+def check_node():
     try:
         version = subprocess.run(['node', '--version'], capture_output=True, text=True,
                                  check=True).stdout.strip()
@@ -34,7 +36,7 @@ def _node():
 
 
 def _run(script):
-    _node()
+    check_node()
     subprocess.run(['npm', 'run', '--silent', script], cwd=APP, check=True)
 
 
@@ -44,6 +46,11 @@ def format_app(fix=False):
 
 
 def typecheck():
+    # The browser scenario is type-checked with the app's TypeScript against
+    # its own packages (tests/integration/browser/package.json).
+    if not (ROOT / 'tests' / 'integration' / 'browser' / 'node_modules').is_dir():
+        raise ValueError('tests/integration/browser/node_modules is missing: run `npm ci` there. '
+                         'Nothing was installed.')
     _run('typecheck')
     print('TypeScript: the app type-checks', flush=True)
 
@@ -53,7 +60,7 @@ def suites():
     if not files:
         print('TypeScript suites: none yet (tests/README.md)', flush=True)
         return
-    _node()
+    check_node()
     # A test that never settles fails at a minute, by name, rather than
     # holding the run open.
     subprocess.run(['node', '--test', '--test-timeout=60000', *map(str, files)], cwd=ROOT, check=True)

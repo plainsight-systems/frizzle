@@ -1,0 +1,11 @@
+// The browser scenario's type check: Node's types for the driver, the DOM's
+// for what it runs in the page, and its own packages (package.json here).
+// The app's typecheck script runs it with the app's TypeScript.
+{
+  "extends": "../../../app/tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["*.ts"]
+}

@@ -65,6 +65,19 @@ estimated at about 140 tok/s and has not been measured.
   that erases (no enum, namespace or parameter properties; `tsc` enforces
   it) and tested modules use no Vite-only features. Vitest, the alternative,
   would add about 20 packages.
+- The browser scenario drives Chrome for Testing 155.0.8059.84, headless,
+  with puppeteer-core 25.15.0 (the Chrome build that version is made for; a
+  bump of one is a bump of both) and @puppeteer/browsers 3.2.5 to install
+  it, in its own npm project (`tests/integration/browser/`), so the driver's
+  packages never enter the app's lockfile. Playwright was the alternative;
+  its Chromium is pinned only through its own version. On an Apple M3 Max,
+  2026-10-28, that Chrome gave a WebGPU device headless and headed, with no
+  flags: adapter vendor apple, architecture metal-3, shader-f16.
+- The scenario answers the pinned URL from the local copy and blocks every
+  other host, so it needs no network. It runs before every push as the
+  pre-push hook (`.githooks/`, `scripts/pre_push.py`), which rebuilds the
+  browser module first; not in CI, which has no GPU. It ends once the
+  edited reply differs from the original, without waiting for it to end.
 
 ## Relationship to Charlotte
 
@@ -129,6 +142,15 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   both are estimates until slice 3 measures the peak.
 - Nothing is computed beside the model: no probabilities derived on the CPU,
   no second pass to keep in step with the first.
+- The page sets no limit on a reply's length: it sends the engine's own
+  "no other limit", so a reply ends when the model ends its turn or the
+  context (32,768 tokens) is full. A strong edit can make the model repeat
+  itself to the end of the context: setting layer 12 neuron 4031 to 100 and
+  layer 6 neuron 100 to -200 does, at seed 7, for "Name three colours of the
+  rainbow.", natively and in the browser. Running again supersedes it; the
+  page has no Stop of its own.
+- The page runs the original reply, then the edited one from the same seed,
+  one after the other, since the engine runs one turn at a time.
 
 ## Engine requirements
 

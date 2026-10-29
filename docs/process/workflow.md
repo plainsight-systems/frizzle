@@ -159,8 +159,9 @@ program, cache, sampler or turn loop.
   suites on the native build, the kernels suite among them, which needs a
   GPU. The oracle runs by hand when the inference path changes, and the
   replay and edits scenario when edits, the graph or the turn loop change
-  ([inventory](../../tests/README.md)); the end-to-end scenario runs in a
-  browser.
+  ([inventory](../../tests/README.md)). The browser scenario runs before
+  every push, as the pre-push hook (`scripts/pre_push.py`, enabled with
+  `git config core.hooksPath .githooks`), and not in CI, which has no GPU.
 - A build passing, or the page loading, is not evidence of correctness.
   Report the checks actually run.
 

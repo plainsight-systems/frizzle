@@ -80,10 +80,11 @@ tests, then its code.
 4. **The plain page** (`views/prompt/`, H). A message box, pins by number
    (layer, neuron, kind, value), the two replies side by side, the same
    seed. Tests first, the integration scenario Browser, end to end
-   (slot 3 of 5): in a real browser with WebGPU, download and verify the
-   pinned file, generate a reply, pin neurons in two layers, and get an
-   edited reply that differs from the original beside it.
-   Decision: the browser driver and the browser it runs, and their pins.
+   (slot 3 of 5): in a real browser with WebGPU, fetch and verify the
+   pinned file (answered from the local copy, no network), generate a
+   reply, pin neurons in two layers, and get an edited reply that differs
+   from the original beside it. Run as the pre-push hook, not in CI.
+   Decision: puppeteer-core driving Chrome for Testing, at their pins.
 5. **Measure.** Decode speed for Gemma 3 1B in the browser, edits off and
    on (the accepted cost of the edit launch), recorded in MEMORY with the
    browser, its version, the machine and the workload.
@@ -92,6 +93,10 @@ tests, then its code.
 
 - Captures at the last prompt position for every layer, sent with each run,
   with their kernel outputs added to the kernels suite.
+- The browser scenario reads the pinned neurons back from the captures:
+  each holds the value it was set to in the edited run, and its own in the
+  original. That checks every edit crosses the page, worker and module
+  exactly as sent, which a changed reply only suggests.
 - The layer deck (one folded grid per layer, sliding away as you scroll),
   ranked list, search, the neuron card with its push-toward tokens, and the
   pinned list, in the night-glass theme.
