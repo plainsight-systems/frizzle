@@ -1,6 +1,5 @@
-// The page: React, the browser's DOM. protocol/ and engine/ join when their
-// first modules land (slice 3, step 4); the worker has its own project
-// (tsconfig.worker.json).
+// The page: React, the browser's DOM, and the protocol and edit types it
+// shares with the worker, which has its own project (tsconfig.worker.json).
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
@@ -8,5 +7,10 @@
     "jsx": "react-jsx",
     "types": []
   },
-  "include": ["src/main.tsx", "src/App.tsx"]
+  "include": [
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/protocol/**/*.ts",
+    "src/engine/**/*.ts"
+  ]
 }

@@ -115,7 +115,8 @@ shape/                 H(shape)  folding, ranking
 engine/captures.ts     O         the store's layout, read from the wire
 engine/edits.ts        Q         the edit kinds, as sent
 protocol/              R         messages, ids, the page's client
-worker/worker.ts       R         the worker's entry; loads the module
+worker/worker.ts       R         the worker's entry; answers the page's requests
+worker/engine/         R         the engine's module, behind the worker's calls
 worker/delivery/       L         fetch, SHA-256, OPFS, streaming into the engine
 worker/template/       T         Gemma's chat template; @huggingface/jinja from npm
 ```

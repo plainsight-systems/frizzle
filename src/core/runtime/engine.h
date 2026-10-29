@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -72,6 +73,19 @@ namespace frizzle::runtime {
 //     - Invariant, between runs: the cache holds only entries computed
 //       without edits. So a later prompt that contains an edited run's reply
 //       (a conversation) never reuses that reply's edited entries.
+//   chat_template(), once begin_load has accepted a file: the chat template
+//     the file carries (tokenizer.chat_template) and its BOS and EOS tokens'
+//     text, read at begin_load, for the host that renders conversations (T,
+//     the worker); none when the file carries no template, which the host
+//     refuses by name. The engine itself never renders it.
+//   cancel(): ends the running turn at its next report; on_end is then
+//     called once, Cancelled (runtime.h). With no turn running, nothing. The
+//     turn's steps already run report first and are discarded (turn.h), and
+//     a run with edits still rewinds the cache.
+//   A begin_load refused as Index because `front` ends before the index
+//     does carries bytes_needed: the least front that could hold it, so a
+//     host holding only the file's first bytes reads that many and begins
+//     again, rather than parsing the subject.
 //   - One operation at a time. Callbacks run on the thread that processes
 //     the device's events, and a callback may run before the call that
 //     started it returns: the upload refuses some files and accepts a first
@@ -137,7 +151,8 @@ namespace frizzle::runtime {
 // Corpus guidance
 //   C++ Core Guidelines
 //     I.1    Make interfaces explicit: the stages and the order of load, and
-//            when callbacks may run, are stated above.
+//            when callbacks may run, are stated above; the bytes a short
+//            front needs cross as a number, not inside a sentence.
 //     I.11   Never transfer ownership by a raw pointer or reference: the
 //            device is borrowed; everything else is owned.
 //     E.27   Use error codes systematically: LoadError and OperationError,
@@ -174,7 +189,17 @@ enum class LoadError : std::uint8_t {
 struct LoadResult {
   LoadError error = LoadError::Ok;
   std::string subject;  // what was refused, and why
+  // For Index, when `front` ended before the index: the bytes it needs; 0
+  // otherwise.
+  std::uint64_t bytes_needed = 0;
   [[nodiscard]] bool ok() const noexcept { return error == LoadError::Ok; }
+};
+
+// The chat template a file carries, for the host that renders it.
+struct ChatTemplate {
+  std::string text;  // tokenizer.chat_template, as the file holds it
+  std::string bos;   // the BOS token's text, "<bos>" for Gemma 3
+  std::string eos;   // the EOS token's text
 };
 
 using LoadCallback = void (*)(const LoadResult& result, void* userdata);
@@ -226,8 +251,14 @@ class Engine {
                                         TextCallback on_text,
                                         EndCallback on_end, void* userdata);
 
+  // Ends the running turn at its next report (above); with none, nothing.
+  void cancel() noexcept;
+
   // The context the loaded model offers; 0 when none is loaded.
   [[nodiscard]] std::uint32_t context() const noexcept;
+
+  // The file's chat template, once begin_load has accepted it (above).
+  [[nodiscard]] std::optional<ChatTemplate> chat_template() const;
 
   // What the engine and its callbacks in flight share; defined only where
   // the engine is.

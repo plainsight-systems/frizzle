@@ -1,11 +1,12 @@
 // The engine's worker: the Web Worker's types, not the DOM's, so worker code
-// cannot reach for the page's globals. protocol/ and engine/ join when their
-// first modules land (slice 3, step 4).
+// cannot reach for the page's globals; with the protocol and edit types it
+// shares with the page.
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023", "WebWorker"],
+    "resolveJsonModule": true,
     "types": []
   },
-  "include": ["src/worker/**/*.ts"]
+  "include": ["src/worker/**/*.ts", "src/protocol/**/*.ts", "src/engine/**/*.ts"]
 }

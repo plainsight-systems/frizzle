@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 
-from tooling import ROOT, SEPARATE_BUILDS, SOURCE_ROOTS, SUFFIXES, TRANSLATION_SUFFIXES, LLVM_VERSION, find_tool, source_files
+from tooling import ROOT, BROWSER_ONLY, SEPARATE_BUILDS, SOURCE_ROOTS, SUFFIXES, TRANSLATION_SUFFIXES, LLVM_VERSION, find_tool, source_files
 
 
 def macos_arguments(arguments):
@@ -78,7 +78,7 @@ def run(build, jobs):
     # Missing authored translation units must fail coverage, not disappear from lint.
     expected = {str(p.resolve()) for p in source_files()
                 if p.suffix in TRANSLATION_SUFFIXES and p.resolve() not in unchanged
-                and not any(p.is_relative_to(ROOT / name) for name in SEPARATE_BUILDS)}
+                and not any(p.is_relative_to(ROOT / name) for name in SEPARATE_BUILDS + BROWSER_ONLY)}
     found = {entry['file'] for entry in commands}
     if not commands or expected - found:
         raise ValueError(f'Incomplete analysis database; missing: {sorted(expected - found)}. Configure the native build with tests enabled.')

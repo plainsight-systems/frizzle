@@ -1,0 +1,106 @@
+// Axis R: the messages between the page and the engine's worker. Both sides
+// import this file, so every kind is spelled once.
+//
+// Contract
+//   - The page sends requests; each carries an id, a number the page has not
+//     used before. The worker answers every request exactly once, finally:
+//     with "done" and its value, or with "failed" and a named WorkerFailure.
+//     Before that it may send "progress" (a load) or "text" (a generation)
+//     with the same id. A request the worker does not know is answered
+//     "failed" at the "protocol" stage.
+//   - Notices carry no id: the worker sends "device" once, unprompted, when
+//     the GPU device is acquired or cannot be.
+//   - Requests:
+//       load       Download the pinned model if it is not kept, verify it,
+//                  and load it into the engine. Progress: {phase:
+//                  "download" | "load", done, total} in bytes. Done:
+//                  {contextTokens}.
+//       generate   {messages, edits, seed, maxTokens}: render the
+//                  conversation through the model's chat template, run it
+//                  with the edit set, and stream the reply. Done:
+//                  {end, tokens, promptTokens, reusedTokens}.
+//       cancel     {target}: end the request `target` early: a load while
+//                  it downloads (once it streams into the engine it runs to
+//                  its end), a generation running, or either not yet
+//                  started. Done: whether there was one to end. The target
+//                  is still answered, once: a load "failed" at stage
+//                  "cancelled", a generation "done" with end "cancelled".
+//
+// Design
+//   - Plain data only, so a message is structured-cloned unchanged.
+//   - The page renders nothing: it sends whole messages, and the worker
+//     renders the template (logical-overview.md, the parts).
+
+import type { Edit } from "../engine/edits.ts";
+
+export type Id = number;
+
+// One turn of a conversation, as the page holds it and the chat template
+// reads it (worker/template/template.ts).
+export interface Message {
+  readonly role: "system" | "user" | "assistant";
+  readonly content: string;
+}
+
+export interface LoadRequest {
+  readonly kind: "load";
+  readonly id: Id;
+}
+
+export interface GenerateRequest {
+  readonly kind: "generate";
+  readonly id: Id;
+  readonly messages: readonly Message[];
+  readonly edits: readonly Edit[];
+  readonly seed: number; // an integer below 2^53
+  readonly maxTokens: number;
+}
+
+export interface CancelRequest {
+  readonly kind: "cancel";
+  readonly id: Id;
+  readonly target: Id;
+}
+
+export type Request = LoadRequest | GenerateRequest | CancelRequest;
+
+export interface Progress {
+  readonly phase: "download" | "load";
+  readonly done: number;
+  readonly total: number;
+}
+
+export interface Loaded {
+  readonly contextTokens: number;
+}
+
+export interface Generated {
+  readonly end: "stop" | "limit" | "context" | "cancelled";
+  readonly tokens: number;
+  readonly promptTokens: number;
+  readonly reusedTokens: number;
+}
+
+// Why a request did not complete: where (`stage`), and the engine's or the
+// module's own words (`message`); `code` names what the page may act on.
+export interface WorkerFailure {
+  readonly stage: string;
+  readonly message: string;
+  readonly code?: string;
+}
+
+export type Reply =
+  | { readonly kind: "progress"; readonly id: Id; readonly progress: Progress }
+  | { readonly kind: "text"; readonly id: Id; readonly text: string }
+  | { readonly kind: "done"; readonly id: Id; readonly value: unknown }
+  | {
+      readonly kind: "failed";
+      readonly id: Id;
+      readonly failure: WorkerFailure;
+    };
+
+export type DeviceNotice =
+  | { readonly kind: "device"; readonly ok: true; readonly adapter: string }
+  | { readonly kind: "device"; readonly ok: false; readonly error: string };
+
+export type FromWorker = Reply | DeviceNotice;

@@ -115,6 +115,18 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   The tool wraps one message only, by hand, untested. The engine checks
   nothing of the template; text wrapped otherwise runs, and the reply is what
   the model makes of it (without `<bos>`, often nothing).
+- In the browser the engine runs in a plain Web Worker, as one ES module
+  (`frizzle.mjs` and its `.wasm`, built by the `wasm-release` preset), with
+  no SharedArrayBuffer, so no cross-origin isolation is needed. The worker
+  downloads the pinned file, keeps it in OPFS only once its size and SHA-256
+  match the pin, and streams it into the engine in 16 MiB chunks. A kept
+  copy is trusted by its record, written only after it matched, and is not
+  hashed again at every load (about 2 s for 722 MB).
+- A load can be cancelled while it downloads; once it streams into the
+  engine it runs to its end, a few seconds, since the engine cannot abandon
+  a load half made. A generation can be cancelled at any time.
+- The module's heap starts at 128 MiB and may grow to 1 GiB as a fallback;
+  both are estimates until slice 3 measures the peak.
 - Nothing is computed beside the model: no probabilities derived on the CPU,
   no second pass to keep in step with the first.
 

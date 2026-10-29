@@ -61,6 +61,7 @@ struct Engine::State {
   policy::CachePrecision precision = policy::CachePrecision::F16;
   std::unique_ptr<tokenizer::Tokenizer> tokenizer;  // until the generator
   StopSet stops;
+  std::optional<ChatTemplate> chat;  // the file's, for the host (engine.h)
 
   // The loaded model. Declared so the generator, whose program borrows the
   // upload's buffers, is released before the upload.
@@ -175,6 +176,46 @@ std::string unreadable_key(gguf::MetadataError error, std::string_view key) {
              : std::string(key) + " is not a string";
 }
 
+// The file's chat template and its BOS and EOS tokens' text, into `out`;
+// none when the file carries no template. A template key of another type,
+// or ends that are unreadable or past the vocabulary, refuses the load as
+// Tokenizer: the file is malformed, not merely without a template.
+LoadResult chat_of(const gguf::TensorIndex& index,
+                   const tokenizer::Vocabulary& vocabulary,
+                   std::optional<ChatTemplate>& out) {
+  constexpr std::string_view kTemplate = "tokenizer.chat_template";
+  std::string_view text;
+  if (const auto e = index.read_string(kTemplate, text);
+      e == gguf::MetadataError::MissingKey) {
+    out.reset();
+    return {};
+  } else if (e != gguf::MetadataError::Ok) {
+    return {LoadError::Tokenizer, unreadable_key(e, kTemplate)};
+  }
+  const auto end = [&](std::string_view key, std::string& into) -> LoadResult {
+    std::uint32_t id = 0;
+    if (index.read_u32(key, id) != gguf::MetadataError::Ok ||
+        id >= vocabulary.size()) {
+      return {LoadError::Tokenizer,
+              std::string(key) +
+                  " is missing, not a u32, or past the "
+                  "vocabulary, so the chat template's ends are "
+                  "unknown"};
+    }
+    into = vocabulary.text(static_cast<tokenizer::TokenId>(id));
+    return {};
+  };
+  ChatTemplate chat{std::string(text), {}, {}};
+  if (LoadResult r = end("tokenizer.ggml.bos_token_id", chat.bos); !r.ok()) {
+    return r;
+  }
+  if (LoadResult r = end("tokenizer.ggml.eos_token_id", chat.eos); !r.ok()) {
+    return r;
+  }
+  out = std::move(chat);
+  return {};
+}
+
 std::optional<residency::BufferRange> scratch(
     const residency::ResidencyPlan& plan, std::string_view purpose) {
   for (const residency::PlannedScratch& s : plan.scratch) {
@@ -199,6 +240,7 @@ void settle(std::unique_ptr<LoadCall> call, LoadError error,
     s.generator.reset();
     s.upload.reset();
     s.tokenizer.reset();
+    s.chat.reset();
   }
   const LoadResult result{error, std::move(subject)};
   call->done(result, call->userdata);
@@ -350,6 +392,7 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
   s.generator.reset();
   s.upload.reset();
   s.tokenizer.reset();
+  s.chat.reset();
   s.phase = Phase::Unloaded;
 
   gguf::TensorIndex index;
@@ -359,6 +402,7 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
     if (read.error == gguf::ReadError::NeedMoreBytes) {
       subject += " (the first " + std::to_string(read.bytes_needed) +
                  " bytes are needed)";
+      return {LoadError::Index, std::move(subject), read.bytes_needed};
     }
     return {LoadError::Index, std::move(subject)};
   }
@@ -443,6 +487,11 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
     return {LoadError::Stops,
             "the stop tokens cannot be resolved: " + r.subject};
   }
+  std::optional<ChatTemplate> chat;
+  if (const LoadResult r = chat_of(index, loaded->vocabulary(), chat);
+      !r.ok()) {
+    return r;
+  }
 
   // Begin the upload. Its callback may run before this returns.
   s.description = description;
@@ -450,6 +499,7 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
   s.precision = policy.cache_precision;
   s.tokenizer = std::move(loaded);
   s.stops = stops;
+  s.chat = std::move(chat);
   s.phase = Phase::Beginning;
   s.call_pending = true;
   residency::Upload::begin(*s.device, index, plan, front.size(),
@@ -521,6 +571,16 @@ OperationStart Engine::generate(std::string_view text,
     return {OperationError::Start, {}, started};
   }
   return {};
+}
+
+void Engine::cancel() noexcept {
+  if (state_->generator != nullptr) state_->generator->cancel();
+}
+
+std::optional<ChatTemplate> Engine::chat_template() const {
+  const State& s = *state_;
+  if (s.phase == Phase::Unloaded) return std::nullopt;
+  return s.chat;
 }
 
 std::uint32_t Engine::context() const noexcept {

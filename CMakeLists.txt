@@ -191,7 +191,29 @@ if(EMSCRIPTEN)
     # The browser's event loop runs every callback (core/gpu/callback_mode.h).
     target_compile_definitions(frizzle_gpu PUBLIC
         FRIZZLE_GPU_PROCESS_EVENTS=0 FRIZZLE_GPU_DAWN_NATIVE=0)
-    # The browser module and its boundary, src/wasm/, join in slice 3.
+    # The browser module (axis R): the engine and its boundary,
+    # src/wasm/bindings.cpp, the only Emscripten-aware C++. An ES module
+    # for the worker (app/src/worker/engine/), written to web/ beside its
+    # .wasm. The heap starts at 128 MiB: the 16 MiB chunk buffer, the 16 MiB
+    # front the worker passes at begin, the tokenizer's tables and the
+    # plan; it may grow to 1 GiB as a fallback, never silently past it
+    # (WASM.1). Both figures are estimates until slice 3 measures the peak.
+    add_executable(frizzle_web src/wasm/bindings.cpp)
+    target_link_libraries(frizzle_web PRIVATE frizzle_gpu)
+    set_target_properties(frizzle_web PROPERTIES
+        OUTPUT_NAME frizzle
+        SUFFIX ".mjs"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web")
+    target_link_options(frizzle_web PRIVATE
+        --use-port=emdawnwebgpu
+        -sMODULARIZE=1
+        -sEXPORT_ES6=1
+        -sENVIRONMENT=worker
+        -sINITIAL_HEAP=134217728
+        -sALLOW_MEMORY_GROWTH=1
+        -sMAXIMUM_MEMORY=1073741824
+        -sEXPORTED_FUNCTIONS=['_malloc','_free']
+        -sEXPORTED_RUNTIME_METHODS=['HEAPU8'])
 else()
     target_link_libraries(frizzle_gpu PUBLIC dawn::webgpu_dawn)
     # Callbacks run only inside wgpuInstanceProcessEvents, on the caller's

@@ -66,29 +66,25 @@ tests, then its code.
    joins the first user turn; turns that do not alternate are refused by
    name. Against Charlotte's Gemma template fixture, rewritten to these
    contracts.
-3. **Delivery** (`worker/delivery/`, L). Fetch the pinned file in chunks,
-   SHA-256 as it streams, keep it in OPFS, and stream it into the engine;
-   a cached copy is verified before use. Tests first, a new unit suite,
-   Delivery: SHA-256 against published test vectors, whole and fed in
-   pieces; a file of the wrong size or hash is refused by name and not
-   kept. The real download is the browser scenario's (step 5).
-4. **The boundary and the worker** (`src/wasm/bindings.cpp`, R;
-   `worker/worker.ts`, `protocol/`). The Emscripten build of the engine;
-   the boundary offers load (in its three calls) and generate with edits,
-   streaming text and the turn's end to the worker; the protocol carries
-   requests with ids, and the page's client shows only the answer to its
-   latest request. Tests first, a new unit suite, Protocol: replies to an
-   earlier request are dropped once a later one is sent; every request is
-   answered once, with its result or a named refusal. The boundary itself
-   is thin translation, locked by the browser scenario.
-5. **The plain page** (`views/prompt/`, H). A message box, pins by number
+3. **The worker side, end to end** (`worker/delivery/`, L; `src/wasm/`,
+   R; `worker/engine/`, `worker/worker.ts`, `protocol/`). Delivery: fetch
+   the pinned file in chunks, SHA-256 as it streams, keep it in OPFS only
+   once it matches, and stream it into the engine. The Emscripten build of
+   the engine and its boundary: load (in its three calls) and generate with
+   edits, streaming text; the engine reports the file's chat template,
+   cancels a turn, and gives the bytes a short front needs as a number.
+   The worker answers load, generate and cancel; the page's client gives
+   each request one answer, the latest generation winning. Tests first,
+   two new unit suites: Delivery and Protocol (tests/README.md). The
+   boundary is thin translation, locked by the browser scenario.
+4. **The plain page** (`views/prompt/`, H). A message box, pins by number
    (layer, neuron, kind, value), the two replies side by side, the same
    seed. Tests first, the integration scenario Browser, end to end
    (slot 3 of 5): in a real browser with WebGPU, download and verify the
    pinned file, generate a reply, pin neurons in two layers, and get an
    edited reply that differs from the original beside it.
    Decision: the browser driver and the browser it runs, and their pins.
-6. **Measure.** Decode speed for Gemma 3 1B in the browser, edits off and
+5. **Measure.** Decode speed for Gemma 3 1B in the browser, edits off and
    on (the accepted cost of the edit launch), recorded in MEMORY with the
    browser, its version, the machine and the workload.
 

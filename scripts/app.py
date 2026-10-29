@@ -54,4 +54,6 @@ def suites():
         print('TypeScript suites: none yet (tests/README.md)', flush=True)
         return
     _node()
-    subprocess.run(['node', '--test', *map(str, files)], cwd=ROOT, check=True)
+    # A test that never settles fails at a minute, by name, rather than
+    # holding the run open.
+    subprocess.run(['node', '--test', '--test-timeout=60000', *map(str, files)], cwd=ROOT, check=True)

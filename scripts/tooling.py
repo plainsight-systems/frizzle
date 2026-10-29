@@ -14,6 +14,10 @@ SUFFIXES = TRANSLATION_SUFFIXES | {'.h', '.hh', '.hpp', '.hxx'}
 # Built in a project of its own against llama.cpp, never in Frizzle's build,
 # so no compilation database of Frizzle's can hold it: formatted, not analyzed.
 SEPARATE_BUILDS = ('tools/reference_logits',)
+# Compiled only by the browser build (Emscripten), so no native compilation
+# database holds it: formatted, and reviewed rather than analyzed
+# (docs/process/workflow.md, Checks).
+BROWSER_ONLY = ('src/wasm',)
 
 
 def find_tool(name):

@@ -58,16 +58,14 @@
 //     text, far below a turn's prefill.
 
 import { Environment, Interpreter, Template } from "@huggingface/jinja";
+import type { Message } from "../../protocol/messages.ts";
+
+export type { Message };
 
 export interface ChatTemplate {
   readonly template: string; // tokenizer.chat_template
   readonly bosToken: string; // the BOS token's text, "<bos>" for Gemma 3
   readonly eosToken: string; // the EOS token's text
-}
-
-export interface Message {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
 }
 
 export type Render = (messages: readonly Message[]) => string;
