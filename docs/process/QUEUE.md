@@ -85,9 +85,6 @@ tests, then its code.
    reply, pin neurons in two layers, and get an edited reply that differs
    from the original beside it. Run as the pre-push hook, not in CI.
    Decision: puppeteer-core driving Chrome for Testing, at their pins.
-5. **Measure.** Decode speed for Gemma 3 1B in the browser, edits off and
-   on (the accepted cost of the edit launch), recorded in MEMORY with the
-   browser, its version, the machine and the workload.
 
 ## 4. MLP workbench## 4. MLP workbench
 
@@ -128,6 +125,10 @@ tests, then its code.
 - An early readout: what the model would predict if it stopped at a layer.
 - Workbenches for stages other than the MLP.
 - Supported browsers and devices.
+- Measuring decode speed in the browser, edits off and on, if it comes to
+  seem slow; until then MEMORY's figures are estimates.
+- Measuring the module's heap peak, if a load comes to fail or strain for
+  memory; until then its 128 MiB start and 1 GiB limit are estimates.
 - Measuring Gemma 3 1B's sampling settings; until then it runs on the
   defaults for an unmeasured model (policy.h).
 - Which libc++ the native build links on macOS: today the system's

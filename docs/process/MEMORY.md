@@ -139,7 +139,8 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   engine it runs to its end, a few seconds, since the engine cannot abandon
   a load half made. A generation can be cancelled at any time.
 - The module's heap starts at 128 MiB and may grow to 1 GiB as a fallback;
-  both are estimates until slice 3 measures the peak.
+  both are estimates, not measured. Measuring the peak is deferred
+  (2026-10-29) until there is a sign it matters (QUEUE, open decisions).
 - Nothing is computed beside the model: no probabilities derived on the CPU,
   no second pass to keep in step with the first.
 - The page sets no limit on a reply's length: it sends the engine's own
