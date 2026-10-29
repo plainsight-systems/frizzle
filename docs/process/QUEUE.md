@@ -88,20 +88,43 @@ tests, then its code.
 
 ## 4. MLP workbench## 4. MLP workbench
 
-- Captures at the last prompt position for every layer, sent with each run,
-  with their kernel outputs added to the kernels suite.
-- The browser scenario reads the pinned neurons back from the captures:
-  each holds the value it was set to in the edited run, and its own in the
-  original. That checks every edit crosses the page, worker and module
-  exactly as sent, which a changed reply only suggests.
-- The layer deck (one folded grid per layer, sliding away as you scroll),
-  ranked list, search, the neuron card with its push-toward tokens, and the
-  pinned list, in the night-glass theme.
+Ends with the layer deck in the night-glass theme: every run's neurons at
+the last position, in all 26 layers, with the ranked list, search, the
+neuron card and the pins beside it. Captures are the neurons only; the
+residual and Q come with the pass map. Each step: headers and tests
+reviewed, then its code, then review.
+
+1. **Captures in the engine** (C++, O). The capture store in
+   `core/capture/`, a slot per layer, filled at the last prompt position
+   after the edit launch, so an edited run holds the value each pin set;
+   decode steps leave it as it is. `generate` returns it. Tests: one unit
+   test of the capture on the GPU, with no model, in the kernels suite
+   (the design settles whether it is a kernel or a copy): the last row,
+   after the edits, in a step that scores a token and no other, into its
+   own layer's slot. No integration test is added: the browser read-back
+   (step 2) checks the wiring, and the oracle the values the model makes.
+2. **Captures reach the page** (bindings, worker, `protocol/`, session).
+   Each run's store crosses to the page; the session keeps the original's
+   and the edited's. The plain page shows each pin's neuron in both runs.
+   Tests: Protocol, captures arrive once, with the result; the browser
+   scenario reads each pin back from the page: the value it was set to in
+   the edited run, and its own in the original. That checks every edit
+   crosses the page, worker and module exactly as sent, which a changed
+   reply only suggests. Before the theme, so the check never depends on the
+   scene.
+3. **Night glass and the layer deck** (`theme/`, `views/`). The theme, the
+   IBM Plex fonts kept in the app, and the deck: one folded 96 × 72 grid
+   per layer, sliding away as you scroll. three.js and react-three-fiber
+   join the app, a dependency change declared as one.
+4. **The panels beside the deck.** For the front layer: the ranked list,
+   search by neuron number, the neuron card with Set, Scale × and Zero;
+   the pinned neurons across all layers.
 
 ## 5. Pass map
 
 - The isometric layer in three.js, stages at their real widths, layer
   stepping, clicking into a workbench.
+- Captures gain the residual and Q at the last position.
 - Attention weights written out at the last position (new kernel output),
   with its kernel test.
 
@@ -125,6 +148,8 @@ tests, then its code.
 - An early readout: what the model would predict if it stopped at a layer.
 - Workbenches for stages other than the MLP.
 - Supported browsers and devices.
+- The tokens a neuron pushes toward, on the neuron card: computed from the
+  weights rather than produced by the model, and approximate in Gemma 3.
 - Measuring decode speed in the browser, edits off and on, if it comes to
   seem slow; until then MEMORY's figures are estimates.
 - Measuring the module's heap peak, if a load comes to fail or strain for

@@ -98,8 +98,11 @@ which comes over whole.
   layer, its neurons as the grid, positive amber and negative cool blue;
   scrolling slides the front card away to the next layer. Beside it, for the
   front layer: a ranked list, search by neuron number, a neuron card with
-  Set, Scale × and Zero and the tokens the neuron pushes toward, and the
-  pinned neurons across all layers.
+  Set, Scale × and Zero, and the pinned neurons across all layers. The
+  tokens a neuron pushes toward are deferred (2026-10-29): the model never
+  produces them; they would be computed from the weights, and in Gemma 3
+  only approximately, since the norm after the MLP scales each neuron by
+  the whole layer's output (QUEUE, open decisions).
 - **What can change:** MLP neurons (set, scale, zero), any number at once, in
   one layer or several; each pinned neuron is listed and removable. Editing
   the last position's residual dimensions (set or nudge) is wanted next.
@@ -155,10 +158,11 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 
 ## Engine requirements
 
-- Capture, at the last position for every layer: the residual, Q, attention
-  weights over earlier positions and itself, and the neurons. Every run
-  sends all 26 layers to the page (about 1.1 MiB for a 512-token prompt), so
-  switching layers needs no request.
+- Capture, at the last position for every layer: the neurons from slice 4
+  (6,912 a layer, after the edits: about 686 KiB a run at f32); the
+  residual and Q with the pass map (slice 5), and the attention weights
+  over earlier positions and itself after them. Every run sends all 26
+  layers to the page, so switching layers needs no request.
 - Edits are a set, applied together in one pass: any number of neurons in
   any layers.
 - Apply edits inside the pass, at the last prompt position and at every
