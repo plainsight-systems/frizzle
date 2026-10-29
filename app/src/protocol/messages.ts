@@ -18,7 +18,11 @@
 //       generate   {messages, edits, seed, maxTokens}: render the
 //                  conversation through the model's chat template, run it
 //                  with the edit set, and stream the reply. Done:
-//                  {end, tokens, promptTokens, reusedTokens}.
+//                  {end, tokens, promptTokens, reusedTokens, captures}:
+//                  captures (Captures below) are every layer's neurons at
+//                  the last prompt position, after this run's edits, as
+//                  the engine read them back (runtime/engine.h); they come
+//                  once, with the answer, never on their own.
 //       cancel     {target}: end the request `target` early: a load while
 //                  it downloads (once it streams into the engine it runs to
 //                  its end), a generation running, or either not yet
@@ -27,7 +31,10 @@
 //                  "cancelled", a generation "done" with end "cancelled".
 //
 // Design
-//   - Plain data only, so a message is structured-cloned unchanged.
+//   - Plain data only, so a message is structured-cloned unchanged. The one
+//     typed array, a run's neurons (702 KiB for Gemma 3 1B), is
+//     transferred, not copied: the worker made it for this message and
+//     keeps no hold on it (worker.ts).
 //   - The page renders nothing: it sends whole messages, and the worker
 //     renders the template (logical-overview.md, the parts).
 
@@ -74,11 +81,28 @@ export interface Loaded {
   readonly contextTokens: number;
 }
 
+// A layer's place among the neurons: its first word and its width.
+export interface Slot {
+  readonly first: number;
+  readonly width: number;
+}
+
+// A run's captures, as the engine gave them (runtime/engine.h, Captured).
+export type Captures =
+  | {
+      readonly kind: "taken";
+      readonly slots: readonly Slot[]; // one a layer, in layer order
+      readonly neurons: Float32Array; // every slot's words, bit for bit
+    }
+  | { readonly kind: "not-taken" } // the turn was cancelled
+  | { readonly kind: "unread"; readonly reason: string }; // the read back failed
+
 export interface Generated {
   readonly end: "stop" | "limit" | "context" | "cancelled";
   readonly tokens: number;
   readonly promptTokens: number;
   readonly reusedTokens: number;
+  readonly captures: Captures;
 }
 
 // Why a request did not complete: where (`stage`), and the engine's or the

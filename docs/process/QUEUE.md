@@ -106,12 +106,13 @@ reviewed, then its code, then review.
 2. **Captures reach the page** (bindings, worker, `protocol/`, session).
    Each run's store crosses to the page; the session keeps the original's
    and the edited's. The plain page shows each pin's neuron in both runs.
-   Tests: Protocol, captures arrive once, with the result; the browser
-   scenario reads each pin back from the page: the value it was set to in
-   the edited run, and its own in the original. That checks every edit
-   crosses the page, worker and module exactly as sent, which a changed
-   reply only suggests. Before the theme, so the check never depends on the
-   scene.
+   Tests: the browser scenario, with one pin of each kind, reads each pin
+   back from the page: in the edited run, exactly what it sent (a set's
+   value, zero, or the original's value scaled, in f32). That checks every
+   edit crosses the page, worker and module exactly as sent, which a
+   changed reply only suggests. No protocol test: the client passes the
+   answer through untouched, so one would lock only the browser's message
+   copying. Before the theme, so the check never depends on the scene.
 3. **Night glass and the layer deck** (`theme/`, `views/`). The theme, the
    IBM Plex fonts kept in the app, and the deck: one folded 96 × 72 grid
    per layer, sliding away as you scroll. three.js and react-three-fiber

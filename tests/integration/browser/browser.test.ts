@@ -2,8 +2,11 @@
 //
 // Contract locked: in a real browser with WebGPU, the app as it ships
 // fetches and verifies the pinned file, generates a reply, and, with
-// neurons pinned in two layers, gives an edited reply from the same seed
-// that differs from the original shown beside it.
+// neurons pinned in three layers, gives an edited reply from the same seed
+// that differs from the original shown beside it; and each pinned neuron,
+// read back from the page, holds in the edited run exactly what its pin
+// sent: every edit crosses the page, the worker and the module as sent, and
+// every run's captures come back from the engine.
 //
 // Inputs
 //   - The app as it ships: app/ built by its own `npm run build` (with the
@@ -23,11 +26,21 @@
 //     puppeteer-core's version is made for (a bump of one is a bump of
 //     both), headless, installed by `npm run install-browser` into
 //     .cache/browsers/.
-//   - The replay scenario's message, seed and two of its edits: "Name
-//     three colours of the rainbow.", seed 7, layer 12 neuron 4031 set to
-//     100 and layer 6 neuron 100 set to -200. The replay saw them change
-//     the reply natively; if the model or its settings change, they may no
-//     longer, and others are chosen then, said so in the commit.
+//   - The replay scenario's message and seed, "Name three colours of the
+//     rainbow." and 7, and three pins, one of each kind, chosen in step 2's
+//     code by running them natively (tools/frizzle with --pin) against two
+//     criteria: they change the reply, and the edited reply still ends by
+//     itself, "stop", well within the deadline. The captures arrive with a
+//     run's end (runtime/engine.h), so the edited reply must end; the
+//     replay's two set pins make the model repeat itself to the context
+//     (32,768 tokens), and are not used. The scale pin is in the earliest
+//     pinned layer: nothing edited runs before it, so its input in the
+//     edited run is the original run's, bit for bit (the kernels are batch-
+//     invariant, graph/graph.h), and its edited value is exactly
+//     Math.fround(original × k). Its k is not 1, which the edit kernel
+//     leaves alone (edit/edit_kernel.h). If the model or its settings
+//     change and the pins stop meeting the criteria, others are chosen,
+//     said so in the commit.
 //
 // What is asserted, in order
 //   1. The WebGPU status reads "Ready". A device failure fails here, in
@@ -38,28 +51,42 @@
 //      (worker/delivery/download.ts), so a ready model is a verified one.
 //   3. After Run, the original reply is done, ended "stop" (the model
 //      ended its turn: the page sets no limit of its own), with text. Then
-//      the edited reply, from the same seed, differs from it: its text, as
-//      it streams, stops being a prefix of the original's, or it finishes
-//      as other text. The scenario stops there, without waiting for the
-//      edited reply to end: these pins make the model repeat itself until
-//      the context is full (natively too: tools/frizzle with --pin), and
-//      its ending is not this scenario's contract.
+//      the edited reply, from the same seed, is done, ended "stop", with
+//      text other than the original's.
+//   4. Each pin, read back from the page (PromptView.tsx's "Pin n original
+//      value" and "Pin n edited value"):
+//        - in the original, a number: the run's captures came back;
+//        - set to v: the edited value is exactly v, as the page writes it;
+//        - zero: the edited value is exactly 0;
+//        - scale by k: the edited value is exactly Math.fround(original ×
+//          k), the original being the value the page shows for it.
+//   5. Nothing was asked of any host but the two local servers.
 //
-//   What the pins check, and what they do not. The edit kernel's unit test
-//   locks that an edit writes its value into its neuron; the replay
-//   scenario, that an edit set changes the reply, natively. What only this
-//   scenario runs is the edits' way in: the page, the worker, engine.ts
-//   packing each edit as four words, bindings.cpp reading them back. A
-//   changed reply shows that way is connected: an edit set the way drops,
-//   or one it garbles so far that the engine refuses it, fails here. It
-//   does not show each edit arrives as sent: one that crossed with another
-//   kind, value or neuron would most likely change the reply too, and pass.
-//   That is checked exactly once the page can read the neurons back
-//   (slice 4's captures: the pinned neuron holds its value). That these
-//   pins change this reply is a fact observed for this file, message and
-//   seed, not a law: if the model, its settings or the kernels change and
-//   they no longer do, this fails by name, and others are chosen.
-//   4. Nothing was asked of any host but the two local servers.
+//   What the read-back checks, and what it does not. The capture's unit
+//   test locks the copy and the reader on a synthetic plan; the edit
+//   kernel's, that an edit writes its value; the oracle, that the model's
+//   activations are right. What only this scenario runs is the whole way,
+//   on the real model: the page packs each pin, the worker and engine.ts
+//   pass it as four words, bindings.cpp reads it back, the engine applies
+//   it and captures the layer after the edit, reads the store back, and the
+//   neurons cross the module, the worker and the page to the value shown.
+//   So these fail here, by name: a pin's kind, value, layer or neuron
+//   garbled on the way in; the engine reading the wrong buffer back, or
+//   none; a layer's slot misplaced in the module or the page; captures
+//   dropped or not transferred. What still passes:
+//     - a wrong value at a neuron nobody pinned: only pinned neurons are
+//       read back;
+//     - a capture taken at the wrong step: a set or zero pin holds at
+//       every scoring step, so its value would match there too; only the
+//       scale pin, whose original it is tied to, would likely fail;
+//     - the original's values themselves: nothing independent says what
+//       they should be, so they are checked as numbers, and the scale
+//       pin's original only through its edited value;
+//     - a NaN's payload: the page writes every NaN as "NaN".
+//   That these pins change this reply and let it end is a fact observed
+//   for this file, message and seed, not a law: if the model, its
+//   settings or the kernels change and they no longer do, this fails by
+//   name, and others are chosen.
 //
 // Design
 //   - Runs before every push, as the pre-push hook (scripts/pre_push.py),
@@ -106,9 +133,13 @@ const MODEL = join(ROOT, ".cache", "models", `${pin.id}.gguf`);
 
 const MESSAGE = "Name three colours of the rainbow.";
 const SEED = "7";
+// One of each kind, the scale pin in the earliest layer (the header's
+// Inputs). Natively, at this seed, they change the reply, which still ends
+// "stop": 24 tokens, where the original is 37.
 const PINS = [
-  { layer: "12", neuron: "4031", kind: "set", value: "100" },
-  { layer: "6", neuron: "100", kind: "set", value: "-200" },
+  { layer: "2", neuron: "1000", kind: "scale", value: "-4" },
+  { layer: "16", neuron: "3000", kind: "set", value: "8" },
+  { layer: "24", neuron: "100", kind: "zero", value: null },
 ] as const;
 
 // The whole run, under a minute on an Apple M3 Max. The runner's own
@@ -305,7 +336,10 @@ test("the pinned model is fetched, runs, and an edit changes its reply", async (
       await page.locator(aria("textbox", `Pin ${n} layer`)).fill(p.layer);
       await page.locator(aria("textbox", `Pin ${n} neuron`)).fill(p.neuron);
       await page.locator(aria("combobox", `Pin ${n} kind`)).fill(p.kind);
-      await page.locator(aria("textbox", `Pin ${n} value`)).fill(p.value);
+      // A zero takes no value: its field is disabled.
+      if (p.value !== null) {
+        await page.locator(aria("textbox", `Pin ${n} value`)).fill(p.value);
+      }
     }
     await page.locator(aria("button", "Run")).click();
 
@@ -320,34 +354,43 @@ test("the pinned model is fetched, runs, and an edit changes its reply", async (
     const originalText = await textOf(page, "Original reply");
     assert.notEqual(originalText.trim(), "", "the original reply is empty");
 
-    // The edited reply differs once its text is not a prefix of the
-    // original's, or it has ended as other text; or it failed.
-    const editedText = await page.waitForSelector(
-      aria("status", "Edited reply"),
+    // 3. The edited reply ends by itself, as other text.
+    const edited = await settledStatus(
+      page,
+      "Edited reply ending",
+      /^(Done|Failed)/,
+      start,
     );
-    const editedEnding = await page.waitForSelector(
-      aria("status", "Edited reply ending"),
-    );
-    assert.ok(editedText !== null && editedEnding !== null);
-    await page.waitForFunction(
-      (text, ending, original) => {
-        const t = text.textContent ?? "";
-        const e = ending.textContent ?? "";
-        return !original.startsWith(t) || /^(Done|Failed)/.test(e);
-      },
-      { timeout: remaining(start), polling: "mutation" },
-      editedText,
-      editedEnding,
-      originalText,
-    );
-    const ending = await textOf(page, "Edited reply ending");
-    assert.doesNotMatch(ending, /^Failed/, ending);
-    const edited = await textOf(page, "Edited reply");
+    assert.match(edited.text, stopped, edited.text);
     assert.notEqual(
-      edited,
+      await textOf(page, "Edited reply"),
       originalText,
       "the pins no longer change this reply at this seed; choose others",
     );
+
+    // 4. Each pin, read back: what its pin sent, in the edited run.
+    for (const [index, p] of PINS.entries()) {
+      const n = index + 1;
+      const before = await textOf(page, `Pin ${n} original value`);
+      const after = await textOf(page, `Pin ${n} edited value`);
+      const original = Number(before);
+      assert.ok(
+        before.trim() !== "" && Number.isFinite(original),
+        `pin ${n}: the original run's captures did not come back (${before})`,
+      );
+      const sent =
+        p.kind === "set"
+          ? Number(p.value)
+          : p.kind === "zero"
+            ? 0
+            : Math.fround(original * Number(p.value));
+      assert.equal(
+        after,
+        Object.is(sent, -0) ? "-0" : String(sent), // as the page writes it
+        `pin ${n} (layer ${p.layer}, neuron ${p.neuron}, ${p.kind}): the ` +
+          `edited run used ${after}, not what the pin sent`,
+      );
+    }
     assert.deepEqual(elsewhere, [], "the page asked another host");
   } finally {
     await browser.close();

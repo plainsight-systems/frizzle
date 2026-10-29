@@ -166,6 +166,22 @@ flowchart TD
   one word and stop, about 40 µs a token, as the edit launch costs; once a
   run, 702 KiB copied on the GPU and one readback.
 
+How a run's neurons reach the page, once a run, with its answer:
+
+```mermaid
+flowchart LR
+  S["engine<br/>the store read back<br/>(capture/reader.h)"]
+  B["bindings.cpp<br/>answer JSON with slots;<br/>neurons sliced out of the heap,<br/>same call"]
+  E["engine.ts<br/>captures checked:<br/>taken fills its slots,<br/>or fails by name"]
+  W["worker.ts<br/>done, the neurons'<br/>buffer transferred"]
+  C["client.ts<br/>passed through<br/>untouched"]
+  P["session and page<br/>a pin's value looked up:<br/>slot.first + neuron"]
+  S -->|"span, valid in the callback"| B -->|"one copy"| E --> W -->|"no copy"| C --> P
+```
+
+One copy in all, out of the module's memory: the worker hands the buffer to
+the page, and the page reads it where it lies.
+
 ## The loop
 
 ```mermaid

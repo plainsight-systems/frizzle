@@ -47,6 +47,9 @@
 //     if the edited were sent beside it.
 //   - The conversation is one user message: the plain page holds no
 //     history (slice 4's workbench decides more).
+//   - A reply's answer holds its run's captures (messages.ts), so a run
+//     holds two sets of neurons, the original's and the edited's, 702 KiB
+//     each for Gemma 3 1B; a new run replaces both.
 //   - A rejection that is not the worker's (WorkerError) or a supersede
 //     shows as failed at stage "page", with its message, never silently.
 

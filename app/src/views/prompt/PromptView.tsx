@@ -33,6 +33,16 @@
 //                                | "Failed at {stage}: {message}"; the
 //                                edited also "Waiting for the original" |
 //                                "No pins"
+//       For pin n of the run shown, counting from 1 in the order sent (the
+//       pins as Run sent them, not the fields as edited since), a row
+//       naming its layer, neuron, kind and value, and the neuron as each
+//       reply's run used it, at the last prompt position:
+//       status "Pin n original value", status "Pin n edited value"
+//                                "Waiting" until that reply is done; then
+//                                the captured value, written exactly
+//                                (below); or "Not captured: the run was
+//                                cancelled" | "Not read back: {reason}" |
+//                                "None: the reply failed"
 //     A field that does not parse shows its problem beside it, named by
 //     aria-describedby, and Run stays disabled.
 //   - Run sends the message, the parsed pins and the seed as typed when
@@ -42,7 +52,17 @@
 //
 // Design
 //   - Numbers are written with Intl.NumberFormat("en-US"), named, never the
-//     browser's locale, so the page reads the same everywhere.
+//     browser's locale, so the page reads the same everywhere. A captured
+//     value is the exception: it is written exactly, as JavaScript writes
+//     the f32 widened to a double (String), with a negative zero as "-0",
+//     which String drops. Every f32 is exact as a double, String is
+//     locale-free and round-trips, and rounding it to a few digits would
+//     show 100 for 100.00001. The page shows what the model used, not a
+//     summary of it.
+//   - A pin's value is looked up, not computed: the reply's captures hold
+//     each layer's slot (messages.ts), and the neuron is word slot.first +
+//     neuron of the neurons. That lookup is this view's; the session holds
+//     the captures as the engine gave them.
 //   - No theme: the night-glass theme arrives with the workbench (slice 4).
 //     Two columns side by side on a wide screen, one above the other on a
 //     narrow one.
@@ -51,6 +71,7 @@
 
 import { type ReactNode, useId, useState, useSyncExternalStore } from "react";
 
+import type { Edit } from "../../engine/edits.ts";
 import type {
   DeviceState,
   ModelState,
@@ -159,6 +180,7 @@ export function PromptView({ session }: { readonly session: Session }) {
         <Reply label="Original reply" run={run} reply={run?.original ?? null} />
         <Reply label="Edited reply" run={run} reply={run?.edited ?? null} />
       </div>
+      {run !== null && run.edits.length > 0 && <Pins run={run} />}
     </main>
   );
 }
@@ -181,6 +203,85 @@ function Reply(props: {
       </output>
     </section>
   );
+}
+
+// The run's pins, as Run sent them, and each neuron as each reply's run
+// used it.
+function Pins({ run }: { readonly run: Run }) {
+  return (
+    <section aria-label="Pinned neurons">
+      <h2>Pinned neurons, as each run used them</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Pin</th>
+            <th>Original</th>
+            <th>Edited</th>
+          </tr>
+        </thead>
+        <tbody>
+          {run.edits.map((edit, index) => {
+            const n = index + 1;
+            return (
+              <tr key={n}>
+                <td>
+                  {n}: {pinText(edit)}
+                </td>
+                <td>
+                  <output aria-label={`Pin ${n} original value`}>
+                    {valueText(run.original, edit)}
+                  </output>
+                </td>
+                <td>
+                  <output aria-label={`Pin ${n} edited value`}>
+                    {valueText(run.edited, edit)}
+                  </output>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function pinText(edit: Edit): string {
+  const where = `layer ${edit.layer}, neuron ${edit.neuron}`;
+  switch (edit.kind) {
+    case "set":
+      return `${where}, set to ${exact(edit.value)}`;
+    case "scale":
+      return `${where}, scaled by ${exact(edit.value)}`;
+    case "zero":
+      return `${where}, zeroed`;
+  }
+}
+
+// The pinned neuron in one reply's captures: looked up, never computed.
+function valueText(reply: ReplyState | null, edit: Edit): string {
+  if (reply === null) return "";
+  if (reply.kind === "failed") return "None: the reply failed";
+  if (reply.kind !== "done") return "Waiting";
+  const captures = reply.answer.captures;
+  switch (captures.kind) {
+    case "not-taken":
+      return "Not captured: the run was cancelled";
+    case "unread":
+      return `Not read back: ${captures.reason}`;
+    case "taken": {
+      const slot = captures.slots[edit.layer];
+      if (slot === undefined || edit.neuron >= slot.width) {
+        return `Not captured: no layer ${edit.layer}, neuron ${edit.neuron}`;
+      }
+      return exact(captures.neurons[slot.first + edit.neuron] ?? Number.NaN);
+    }
+  }
+}
+
+// A value exactly as the model used it (the header's Design).
+function exact(value: number): string {
+  return Object.is(value, -0) ? "-0" : String(value);
 }
 
 function deviceText(device: DeviceState): string {

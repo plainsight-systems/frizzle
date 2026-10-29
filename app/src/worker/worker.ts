@@ -12,7 +12,10 @@
 //   - generate: refused, "failed" at stage "generate", before load; render
 //     the messages (worker/template/template.ts), refusing a TemplateError
 //     by name at stage "template"; Engine.generate with the edits, the seed
-//     and maxTokens, streaming "text"; done with its answer.
+//     and maxTokens, streaming "text"; done with its answer, captures and
+//     all, the neurons' buffer transferred to the page, not copied
+//     (messages.ts). A generation cancelled before it started is done with
+//     end "cancelled" and captures "not-taken": it ran nothing.
 //   - cancel {target}: a load still downloading is aborted, answered
 //     "failed" at stage "cancelled"; once it streams into the engine it
 //     runs to its end (engine/engine.ts). A generation running is ended
@@ -51,7 +54,9 @@ import {
   compileTemplate,
 } from "./template/template.ts";
 
-const post = (message: FromWorker): void => self.postMessage(message);
+// `transfer`: buffers the page takes over, not copies (messages.ts).
+const post = (message: FromWorker, transfer: Transferable[] = []): void =>
+  self.postMessage(message, transfer);
 
 const engine = Engine.start((outcome) =>
   post(
@@ -97,17 +102,25 @@ async function answer(request: Exclude<Request, CancelRequest>): Promise<void> {
               tokens: 0,
               promptTokens: 0,
               reusedTokens: 0,
+              captures: { kind: "not-taken" },
             },
           },
     );
     return;
   }
   try {
-    const value =
-      request.kind === "load"
-        ? await load(request.id)
-        : await generate(request);
-    post({ kind: "done", id: request.id, value });
+    if (request.kind === "load") {
+      post({ kind: "done", id: request.id, value: await load(request.id) });
+    } else {
+      const value = await generate(request);
+      // A run's neurons go to the page as they are: made for this answer
+      // (engine/engine.ts), and kept by nobody here.
+      const c = value.captures;
+      post(
+        { kind: "done", id: request.id, value },
+        c.kind === "taken" ? [c.neurons.buffer as ArrayBuffer] : [],
+      );
+    }
   } catch (error) {
     post({
       kind: "failed",

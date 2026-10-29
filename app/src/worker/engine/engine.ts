@@ -16,14 +16,21 @@
 //     half made, and a later load would be refused as busy.
 //   - generate(text, edits, seed, maxTokens, onText): one turn over the
 //     rendered text; onText receives each piece as it completes; resolves
-//     with the module's answer (messages.ts's Generated), or rejects with
-//     its refusal or failure. One turn at a time, as the engine allows.
+//     with the module's answer (messages.ts's Generated), its captures
+//     included: "taken" with the slots from the answer and the neurons that
+//     came in the same call (bindings.cpp), "not-taken", or "unread" with
+//     the module's reason. An answer that says "taken" without neurons, or
+//     with neurons that do not fill its slots, rejects as a broken module,
+//     at stage "generate", rather than resolving with captures that are not
+//     there. Rejects with its refusal or failure otherwise. One turn at a
+//     time, as the engine allows.
 //   - cancel(): the running turn ends, answered "cancelled".
 //
 // Algorithm, a call
 //   Each call into the module gets a request number and a pending promise;
-//   frizzleOnAnswer(request, json) settles it, frizzleOnText(request, text)
-//   streams into it. Bytes for a call are copied into the module's memory
+//   frizzleOnAnswer(request, json, neurons?) settles it, with the neurons
+//   when the module sent them; frizzleOnText(request, text) streams into
+//   it. Bytes for a call are copied into the module's memory
 //   through a view made just then, and freed when the call returns, the
 //   module having read them (bindings.cpp).
 //
@@ -33,6 +40,9 @@
 //     engine cannot take is its to refuse (edit::check).
 //   - A load is 2 + ceil(size / 16 MiB) calls, plus one if the front is
 //     short; nothing crosses between page and worker but progress.
+//   - The neurons arrive as a Float32Array the module sliced out of its
+//     heap for this answer (bindings.cpp): this file's to hand on, not a
+//     view of the heap, so it survives the heap growing.
 //   - The module and a promise per call: request 0 is the device's answer;
 //     every other call takes the next number.
 //   - Ported from Charlotte e003048's web/wasm_runtime.js and web/load.js,
@@ -42,7 +52,7 @@
 import createModule, { type FrizzleModule } from "@frizzle/engine";
 
 import type { Edit } from "../../engine/edits.ts";
-import type { Generated } from "../../protocol/messages.ts";
+import type { Captures, Generated } from "../../protocol/messages.ts";
 import type { ChatTemplate } from "../template/template.ts";
 
 const FRONT_BYTES = 16 * 2 ** 20;
@@ -64,9 +74,20 @@ interface Answer {
 }
 
 declare global {
-  // The module calls these by name (bindings.cpp).
-  var frizzleOnAnswer: (request: number, answer: Answer) => void;
+  // The module calls these by name (bindings.cpp); a run's neurons ride
+  // with its answer.
+  var frizzleOnAnswer: (
+    request: number,
+    answer: Answer,
+    neurons?: Float32Array,
+  ) => void;
   var frizzleOnText: (request: number, text: string) => void;
+}
+
+// An answer, and the neurons the module sent with it, if any.
+interface Answered {
+  readonly answer: Answer;
+  readonly neurons: Float32Array | undefined;
 }
 
 export class EngineError extends Error {
@@ -91,7 +112,7 @@ export type DeviceOutcome =
 
 export class Engine {
   readonly #module: FrizzleModule;
-  readonly #answers = new Map<number, (answer: Answer) => void>();
+  readonly #answers = new Map<number, (answer: Answered) => void>();
   readonly #texts = new Map<number, (text: string) => void>();
   #nextRequest = START + 1;
 
@@ -105,14 +126,14 @@ export class Engine {
     const engine = new Engine(await createModule());
     // The module answers through these, by name (bindings.cpp); it calls
     // neither before frizzle_start.
-    globalThis.frizzleOnAnswer = (request, answer) => {
+    globalThis.frizzleOnAnswer = (request, answer, neurons) => {
       const settle = engine.#answers.get(request);
       engine.#answers.delete(request);
-      settle?.(answer);
+      settle?.({ answer, neurons });
     };
     globalThis.frizzleOnText = (request, text) =>
       engine.#texts.get(request)?.(text);
-    engine.#answers.set(START, (answer) =>
+    engine.#answers.set(START, ({ answer }) =>
       onDevice(
         answer.ok
           ? { ok: true, adapter: String(answer["adapter"] ?? "") }
@@ -132,7 +153,7 @@ export class Engine {
     let begun: Answer;
     for (;;) {
       begun = await this.#withBytes(read(handle, 0, front), (pointer) =>
-        this.#call((request) =>
+        this.#ask((request) =>
           this.#module._frizzle_load_begin(request, pointer, front, size),
         ),
       );
@@ -162,7 +183,7 @@ export class Engine {
       }
       settled(
         "load",
-        await this.#call((request) =>
+        await this.#ask((request) =>
           this.#module._frizzle_load_chunk(request, offset, length),
         ),
       );
@@ -170,7 +191,7 @@ export class Engine {
     }
     const finished = settled(
       "load",
-      await this.#call((request) => this.#module._frizzle_load_finish(request)),
+      await this.#ask((request) => this.#module._frizzle_load_finish(request)),
     );
     const chat = begun["chat"] as
       { template: string; bos: string; eos: string } | null | undefined;
@@ -200,7 +221,7 @@ export class Engine {
         i * 4,
       );
     });
-    const answer = await this.#withBytes(bytes, (textPointer) =>
+    const { answer, neurons } = await this.#withBytes(bytes, (textPointer) =>
       this.#withBytes(new Uint8Array(words.buffer), (editsPointer) =>
         this.#call(
           (request) =>
@@ -223,6 +244,7 @@ export class Engine {
       tokens: Number(done["tokens"]),
       promptTokens: Number(done["promptTokens"]),
       reusedTokens: Number(done["reusedTokens"]),
+      captures: capturesOf(done["captures"], neurons),
     };
   }
 
@@ -236,14 +258,19 @@ export class Engine {
   #call(
     start: (request: number) => void,
     onText?: (text: string) => void,
-  ): Promise<Answer> {
+  ): Promise<Answered> {
     const request = this.#nextRequest++;
-    const answered = new Promise<Answer>((resolve) =>
+    const answered = new Promise<Answered>((resolve) =>
       this.#answers.set(request, resolve),
     );
     if (onText !== undefined) this.#texts.set(request, onText);
     start(request);
     return answered.finally(() => this.#texts.delete(request));
+  }
+
+  // A call whose answer carries no neurons: a load stage's.
+  async #ask(start: (request: number) => void): Promise<Answer> {
+    return (await this.#call(start)).answer;
   }
 
   // `bytes` copied into the module's memory for `use`, and freed once the
@@ -279,6 +306,49 @@ function read(
     );
   }
   return bytes;
+}
+
+// The answer's "captures", with the neurons that came beside it, as
+// messages.ts's Captures; a "taken" without neurons that fill its slots is
+// a broken module, refused by name, never captures that are not there.
+function capturesOf(
+  field: unknown,
+  neurons: Float32Array | undefined,
+): Captures {
+  const c = field as
+    | { status?: string; slots?: [number, number][]; reason?: string }
+    | undefined;
+  switch (c?.status) {
+    case "not-taken":
+      return { kind: "not-taken" };
+    case "unread":
+      return { kind: "unread", reason: String(c.reason ?? "") };
+    case "taken": {
+      const slots = (c.slots ?? []).map(([first, width]) => ({ first, width }));
+      const words = slots.reduce(
+        (end, s) => Math.max(end, s.first + s.width),
+        0,
+      );
+      if (
+        neurons === undefined ||
+        slots.length === 0 ||
+        neurons.length !== words
+      ) {
+        throw new EngineError(
+          "generate",
+          `the module said its captures were taken but sent ${
+            neurons === undefined ? "no neurons" : `${neurons.length} words`
+          } for ${slots.length} slots of ${words} words`,
+        );
+      }
+      return { kind: "taken", slots, neurons };
+    }
+    default:
+      throw new EngineError(
+        "generate",
+        `the module's answer has no captures it names (${String(c?.status)})`,
+      );
+  }
 }
 
 function describe(answer: Answer): string {

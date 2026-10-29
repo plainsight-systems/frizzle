@@ -43,7 +43,18 @@
 //     The seed is a double holding an integer below 2^53. Each piece of the
 //     reply crosses as it completes, to globalThis.frizzleOnText(request,
 //     text); then the answer: {"ok": true, "end": "stop" | "limit" |
-//     "context" | "cancelled", "tokens", "promptTokens", "reusedTokens"}.
+//     "context" | "cancelled", "tokens", "promptTokens", "reusedTokens",
+//     "captures"}, where "captures" is the engine's Captured
+//     (runtime/engine.h), as it gave it:
+//       {"status": "taken", "slots": [[first, width], ...]}, one pair a
+//         layer, with the neurons themselves crossing in the same call as
+//         the answer: frizzleOnAnswer(request, answer, neurons), `neurons`
+//         a Float32Array of every slot's words, bit for bit;
+//       {"status": "not-taken"}: the turn was cancelled, so there are none;
+//       {"status": "unread", "reason"}: the read back failed, named by
+//         residency::Mapped ("cancelled", "device-lost", "unexplained",
+//         "internal").
+//     A turn that failed is refused as before, and carries no captures.
 //   frizzle_cancel()
 //     engine.cancel(): the running turn ends Cancelled and is answered so.
 //
@@ -68,6 +79,12 @@
 //     worker at once, before the next call can grow the heap.
 //   - JSON for answers: one small object a call, escaped here; nothing a
 //     token but the text itself.
+//   - The neurons, 702 KiB for Gemma 3 1B, cross once a run, in the
+//     answer's own call (WASM.2): the engine's span is valid only during
+//     its callback, so they are copied out of the heap there, by a slice of
+//     a view made at that moment and not kept (WASM.1). One copy, bits
+//     intact: a typed array's slice copies bytes, never values. Slots are
+//     26 pairs in the JSON, so the worker never reckons a layer's place.
 //   - Session state at namespace scope, which I.1 cautions against: the
 //     module has one engine, as a page has one, and every function names
 //     what it reads; nothing outside this file sees it.
@@ -79,8 +96,11 @@
 //     I.1    Make interfaces explicit: each crossing's bytes, ownership and
 //            answer are stated above; the namespace-scope state is named.
 //   C++ performance guidelines
-//     WASM.1 Size linear memory, and never hold a view across growth.
-//     WASM.2 Batch work across the JS boundary: a phase a crossing.
+//     WASM.1 Size linear memory, and never hold a view across growth: the
+//            neurons are sliced out of a view made in the call that uses
+//            it.
+//     WASM.2 Batch work across the JS boundary: a phase a crossing; the
+//            neurons ride with the answer, one crossing a run.
 //     WASM.9 Stream in bounded chunks: one chunk buffer, reused.
 
 #include <emscripten.h>
@@ -98,10 +118,12 @@
 #include <utility>
 #include <vector>
 
+#include "core/capture/capture.h"
 #include "core/edit/edit.h"
 #include "core/gguf/byte_source.h"
 #include "core/gpu/device.h"
 #include "core/policy/policy.h"
+#include "core/residency/mapping.h"
 #include "core/runtime/engine.h"
 #include "core/runtime/runtime.h"
 
@@ -109,6 +131,16 @@
 EM_JS_DEPS(frizzle_bindings, "$UTF8ToString");
 EM_JS(void, frizzle_answer, (std::uint32_t request, const char* json),
       { globalThis.frizzleOnAnswer(request, JSON.parse(UTF8ToString(json))); });
+// An answer with a run's neurons: sliced out of a view made now, so the
+// copy is the worker's and survives the heap growing (the header, WASM.1).
+EM_JS(void, frizzle_answer_neurons,
+      (std::uint32_t request, const char* json, const float* neurons,
+       std::uint32_t count),
+      {
+        const first = neurons >> 2;
+        globalThis.frizzleOnAnswer(request, JSON.parse(UTF8ToString(json)),
+                                   HEAPF32.slice(first, first + count));
+      });
 EM_JS(void, frizzle_text,
       (std::uint32_t request, const char* text, std::uint32_t length),
       { globalThis.frizzleOnText(request, UTF8ToString(text, length)); });
@@ -284,20 +316,62 @@ void on_text(std::string_view text, void* userdata) {
                static_cast<std::uint32_t>(text.size()));
 }
 
-// The captures cross to the page in slice 4, step 2; until then a run's
-// answer carries its reply alone.
+std::string_view name(frizzle::residency::Mapped mapped) {
+  switch (mapped) {
+    case frizzle::residency::Mapped::Ok:
+      return "ok";
+    case frizzle::residency::Mapped::Cancelled:
+      return "cancelled";
+    case frizzle::residency::Mapped::Internal:
+      return "internal";
+    case frizzle::residency::Mapped::DeviceLost:
+      return "device-lost";
+    case frizzle::residency::Mapped::Unexplained:
+      return "unexplained";
+  }
+  return "unknown";
+}
+
+// The answer's "captures" (the header's frizzle_generate).
+std::string captures_json(const runtime::Captured& captured) {
+  switch (captured.status) {
+    case runtime::CaptureStatus::Taken: {
+      std::string slots;
+      for (const frizzle::capture::Slot& s : captured.slots) {
+        if (!slots.empty()) slots += ',';
+        slots +=
+            "[" + std::to_string(s.first) + "," + std::to_string(s.width) + "]";
+      }
+      return "{\"status\":\"taken\",\"slots\":[" + slots + "]}";
+    }
+    case runtime::CaptureStatus::NotTaken:
+      return "{\"status\":\"not-taken\"}";
+    case runtime::CaptureStatus::Unread:
+      return "{\"status\":\"unread\",\"reason\":" +
+             quoted(name(captured.mapped)) + "}";
+  }
+  return "{\"status\":\"unread\",\"reason\":\"unknown\"}";
+}
+
 void on_end(const runtime::TurnResult& result,
-            const runtime::Captured& /*captured*/, void* userdata) {
+            const runtime::Captured& captured, void* userdata) {
   const std::uint32_t request = request_of(userdata);
   if (result.failure != runtime::TurnFailure::None) {
     refuse(request, "generate", name(result.failure), result.message);
     return;
   }
-  answer(request, "{\"ok\":true,\"end\":" + quoted(name(result.end)) +
-                      ",\"tokens\":" + std::to_string(result.emitted) +
-                      ",\"promptTokens\":" + std::to_string(result.prompt) +
-                      ",\"reusedTokens\":" + std::to_string(result.reused) +
-                      "}");
+  const std::string json =
+      "{\"ok\":true,\"end\":" + quoted(name(result.end)) +
+      ",\"tokens\":" + std::to_string(result.emitted) +
+      ",\"promptTokens\":" + std::to_string(result.prompt) +
+      ",\"reusedTokens\":" + std::to_string(result.reused) +
+      ",\"captures\":" + captures_json(captured) + "}";
+  if (captured.status == runtime::CaptureStatus::Taken) {
+    frizzle_answer_neurons(request, json.c_str(), captured.neurons.data(),
+                           static_cast<std::uint32_t>(captured.neurons.size()));
+    return;
+  }
+  answer(request, json);
 }
 
 // A generate refused at once, named as the engine names it.

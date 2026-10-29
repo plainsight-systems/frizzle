@@ -76,8 +76,11 @@ estimated at about 140 tok/s and has not been measured.
 - The scenario answers the pinned URL from the local copy and blocks every
   other host, so it needs no network. It runs before every push as the
   pre-push hook (`.githooks/`, `scripts/pre_push.py`), which rebuilds the
-  browser module first; not in CI, which has no GPU. It ends once the
-  edited reply differs from the original, without waiting for it to end.
+  browser module first; not in CI, which has no GPU. Its pins are one of
+  each kind (layer 2 neuron 1000 scaled by -4, layer 16 neuron 3000 set to
+  8, layer 24 neuron 100 zeroed, seed 7): they change the reply and let it
+  end by itself, since captures arrive with a run's end, and each pin is
+  read back from the page, exactly.
 
 ## Relationship to Charlotte
 
