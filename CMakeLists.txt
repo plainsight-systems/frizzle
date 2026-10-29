@@ -76,6 +76,7 @@ add_library(frizzle_core STATIC
     src/core/cache/kv.cpp
     src/core/cache/prefix.cpp
     src/core/capability/capability.cpp
+    src/core/capture/capture.cpp
     src/core/edit/edit.cpp
     src/core/edit/edit_kernel.cpp
     src/core/gguf/arrays.cpp
@@ -137,6 +138,7 @@ frizzle_embed_shaders(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/kernels/topk/topk.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/sampler/draw.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/edit/edit.wgsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/core/capture/capture.wgsl"
 )
 
 # ---------------------------------------------------------------------------
@@ -144,6 +146,7 @@ frizzle_embed_shaders(
 # Dawn; in the browser build, the emdawnwebgpu port of the same release.
 # ---------------------------------------------------------------------------
 add_library(frizzle_gpu STATIC
+    src/core/capture/reader.cpp
     src/core/gpu/device.cpp
     src/core/gpu/self_check.cpp
     src/core/kernels/program.cpp
@@ -163,6 +166,7 @@ endif()
 # Every public header that holds WebGPU objects compiles on its own, in both
 # builds: one generated translation unit each.
 set(FRIZZLE_GPU_HEADERS
+    core/capture/reader.h
     core/gpu/callback_mode.h
     core/gpu/device.h
     core/gpu/self_check.h

@@ -159,7 +159,7 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 ## Engine requirements
 
 - Capture, at the last position for every layer: the neurons from slice 4
-  (6,912 a layer, after the edits: about 686 KiB a run at f32); the
+  (6,912 a layer, after the edits: about 702 KiB a run at f32); the
   residual and Q with the pass map (slice 5), and the attention weights
   over earlier positions and itself after them. Every run sends all 26
   layers to the page, so switching layers needs no request.
@@ -173,6 +173,12 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   for bit.
 - Between runs the cache holds only entries computed without edits: a run
   with edits rewinds it, when it ends, to just before the edits began.
+- Captures are taken in the step that ends the prompt, after that layer's
+  edit, and read back once a run, after the turn; a turn that is cancelled
+  or fails reports none, since the store may still hold an earlier run's.
+  The capture launch runs once a layer in every step that scores a token
+  and stops at once in decode: about 40 µs a token, an estimate, as for
+  edits.
 - Edits cost something when they are off, by decision (2026-10-28): the edit
   kernel runs once a layer in every step that scores a token, edits or not.
   About 40 µs a token, from Charlotte's 1.5 µs a dispatch on one machine; an

@@ -82,9 +82,13 @@ record of its axis.
   `writeBuffer` and readback has a cost of its own (Charlotte measured about
   1.5 µs per dispatch and about 0.5 ms per readback, on one machine).
 - Design optimizations in, marked `Optimization:` with their reason.
-- Captures must not slow the normal path when they are off. Edits may, by a
-  stated fixed cost (MEMORY, Engine requirements). Measure decode speed with
-  each off and on.
+- Edits and captures may slow the normal path by a stated, counted fixed
+  cost: both launches run in every scoring step (MEMORY, Engine
+  requirements). Measuring decode speed with each is deferred until speed
+  seems to matter (QUEUE, open decisions); until then their costs are
+  counted estimates, labelled as such. Changed 2026-10-29: captures were to
+  cost nothing when off, and decode speed was to be measured with each off
+  and on; captures are never off, and the measurement is deferred.
 - Record the browser, its version, the machine and the workload with every
   number. A figure from a desktop app's built-in browser is not a Chrome
   figure.

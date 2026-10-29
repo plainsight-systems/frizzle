@@ -88,7 +88,7 @@ slice 1 and the TypeScript rules from slice 3.
 | `core/runtime/runtime.*`, `turn.*`, `stops.*` | M | [P] | The turn loop |
 | `core/runtime/generator.*` | M | [P] | Text in, text out over the turn loop |
 | `core/runtime/engine.*` | M | [N] | `load` and `generate`, the operations every host calls |
-| `core/capture/` | O | [N] | The store, a slot per layer, its layout |
+| `core/capture/` | O | [N] | The store, a slot per layer, its layout (`capture.h`); `capture.wgsl` and its launcher; the reader that brings the store back once a run (`reader.h`) |
 | `core/edit/` | Q | [N] | Edit kinds and what each does as a plain function; `edit.wgsl` and its launcher |
 | `core/diagnostics.h` | U | [P] | The build's instrumentation gate |
 | `ported.json` | V | [N] | Each ported file's SHA-256 as ported, written by `scripts/port_charlotte.py`; tells unchanged files from changed ones |

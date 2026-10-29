@@ -44,8 +44,8 @@
 //   - Cost when nothing is edited: 26 more dispatches in each scoring step,
 //     one workgroup each, that read two words and stop. At Charlotte's
 //     measured 1.5 µs a dispatch in the browser (one machine), about 40 µs a
-//     token. Not yet measured against Gemma 3's decode step here; to measure
-//     in slice 3's browser work, edits off and on.
+//     token. Not measured against Gemma 3's decode step here; measuring
+//     decode speed is deferred (QUEUE, open decisions).
 //   - That cost is not zero. Accepted by the user (MEMORY, Engine
 //     requirements): speed is not this demo's aim. The alternatives
 //     considered:

@@ -197,6 +197,8 @@ std::string_view name(runtime::LoadError error) {
       return "graph";
     case runtime::LoadError::Program:
       return "program";
+    case runtime::LoadError::Capture:
+      return "capture";
     case runtime::LoadError::Cancelled:
       return "cancelled";
   }
@@ -282,7 +284,10 @@ void on_text(std::string_view text, void* userdata) {
                static_cast<std::uint32_t>(text.size()));
 }
 
-void on_end(const runtime::TurnResult& result, void* userdata) {
+// The captures cross to the page in slice 4, step 2; until then a run's
+// answer carries its reply alone.
+void on_end(const runtime::TurnResult& result,
+            const runtime::Captured& /*captured*/, void* userdata) {
   const std::uint32_t request = request_of(userdata);
   if (result.failure != runtime::TurnFailure::None) {
     refuse(request, "generate", name(result.failure), result.message);

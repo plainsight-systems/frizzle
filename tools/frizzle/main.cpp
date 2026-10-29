@@ -550,7 +550,9 @@ int reply(runtime::Engine& engine, WGPUInstance instance,
         put(stdout, piece);
         std::fflush(stdout);
       },
-      [](const runtime::TurnResult& result, void* userdata) {
+      // The tool prints the reply; it shows nothing of the captures.
+      [](const runtime::TurnResult& result,
+         const runtime::Captured& /*captured*/, void* userdata) {
         auto& r = *static_cast<Reply*>(userdata);
         r.result = result;
         r.message = result.message;  // valid only during the call

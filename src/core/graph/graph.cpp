@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <string_view>
 
+#include "core/capture/capture.h"
 #include "core/edit/edit.h"
 #include "core/edit/edit_kernel.h"
 #include "core/kernels/attention/attention.h"
@@ -196,6 +197,9 @@ residency::WorkingSet decoder_working_set(
               // (edit/edit.h); the engine writes it before each run.
               {"edit_table", 1,
                (2ULL * model.layers.size()) + (3ULL * edit::kMaxEdits)},
+              // Every layer's neurons at the last prompt position, a slot a
+              // layer, u32 words (capture/capture.h).
+              {"captures", 1, capture::layout(model).words},
           },
           true,
           partial_rows};
@@ -217,7 +221,8 @@ Builder::Builder(const model::ModelDescription& model,
                scratch(plan, "logits"),     scratch(plan, "partials_a"),
                scratch(plan, "partials_b"), scratch(plan, "candidates"),
                scratch(plan, "sampled"),    scratch(plan, "range_sums"),
-               scratch(plan, "edit_table")} {
+               scratch(plan, "edit_table"), scratch(plan, "captures")},
+      slots_(capture::layout(model).slots) {
   for (const residency::PlannedTensor& t : plan.tensors) {
     const std::size_t i = index_of(t.tensor);
     if (i >= views_.size()) views_.resize(i + 1, nullptr);
@@ -376,6 +381,10 @@ GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
   out_->push_back(edit::edit_launch(layer, b.activation, b.edit_table,
                                     l.feed_forward_width));
   named(*out_, at, "ffn.edit", layer);
+  at = out_->size();
+  out_->push_back(
+      capture::capture_launch(b.activation, b.captures, slots_.at(layer)));
+  named(*out_, at, "ffn.capture", layer);
   at = out_->size();
   product(*role(layer, Role::Down), b.activation, b.output,
           kernels::Rows::EveryToken);

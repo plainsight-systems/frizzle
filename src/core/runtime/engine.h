@@ -8,10 +8,12 @@
 #include <string>
 #include <string_view>
 
+#include "core/capture/capture.h"
 #include "core/edit/edit.h"
 #include "core/gguf/byte_source.h"
 #include "core/gpu/device.h"
 #include "core/policy/policy.h"
+#include "core/residency/mapping.h"
 #include "core/runtime/generator.h"
 
 namespace frizzle::runtime {
@@ -47,8 +49,10 @@ namespace frizzle::runtime {
 //        `max_chunk` a call, each accepted through its callback before the
 //        next; `chunk` may be reused once accepted.
 //     3. finish_load(done): checks the upload is complete, builds the graph
-//        and its program (pipelines compile asynchronously), then makes the
-//        cache and the turn loop. `done` reports Ok or a named failure.
+//        and its program (pipelines compile asynchronously), makes the
+//        capture store's reader (capture/reader.h), then makes the cache and
+//        the turn loop. `done` reports Ok or a named failure; a reader
+//        WebGPU refuses is Capture, with its message.
 //     write and finish_load are refused at once, NotLoading, outside a load,
 //     and Busy while the previous call's callback is pending.
 //   generate(text, edits, policy, on_text, on_end)
@@ -61,7 +65,23 @@ namespace frizzle::runtime {
 //       reply is what the model makes of it.
 //     - Runs the model over `text` and streams the reply as text, under
 //       `policy`: its sampling settings, seed and token limit; then calls
-//       back once with the turn's result (runtime.h).
+//       back once, `on_end`, with the turn's result (runtime.h) and the
+//       run's captures (Captured below).
+//     - Captured: every layer's neurons at the last prompt position, after
+//       this run's edits (capture/capture.h), with the store's layout, one
+//       slot a layer; or why there are none:
+//         - Taken: the turn ended Stop, Limit or Context, so its step that
+//           ends the prompt ran, and the store was read back whole; the
+//           words are this run's, valid only during the call.
+//         - NotTaken: the turn was Cancelled or failed. The step that ends
+//           the prompt may not have run, so the store may still hold an
+//           earlier run's neurons; it is not read, and nothing is reported.
+//         - Unread: the turn ended as Taken says, but the read back failed;
+//           `mapped` says how (residency/mapping.h). The turn's own result
+//           stands. An engine destroyed while the store is read reports
+//           Unread, Cancelled.
+//       The turn's result is reported as it was in every case; a capture
+//       never turns a reply into a failure, nor a failure into a reply.
 //     - `edits` (edit/edit.h) applies to this run only: at the last prompt
 //       position and every generated token, never earlier. No edits, or
 //       Scale × 1 edits, give the run without edits, bit for bit, from the
@@ -108,8 +128,12 @@ namespace frizzle::runtime {
 //      holds from the turn before, and recomputes the rest (runtime.h).
 //   4. Stream its text. When it ends, however it ends, and the set had
 //      edits: rewind the cache to just before the edits began, the turn's
-//      prompt tokens less one (Generator::rewind, runtime.h). Then call back
-//      once with how it ended.
+//      prompt tokens less one (Generator::rewind, runtime.h).
+//   5. If it ended Stop, Limit or Context, read the capture store back
+//      (Reader::read), after every step the turn submitted. Then call back
+//      once with how it ended and what was captured. The engine stays
+//      running until then, so no turn starts while the store is read, and
+//      the turn's message is copied to outlive the read.
 //
 // Design and cost
 //   - The engine is the composition Charlotte's browser bindings made
@@ -145,8 +169,17 @@ namespace frizzle::runtime {
 //     table's largest size, and the table is whole u32 words.
 //   - A turn costs what the turn loop's does (runtime.h). The engine adds a
 //     record a call, the edit set's check and table, at most 48 KiB, and one
-//     queue write (GPU.1): nothing a token. The edit kernel runs in every
-//     scoring step, edits or not (edit/edit_kernel.h).
+//     queue write (GPU.1): nothing a token. The edit kernel and the capture
+//     launch run in every scoring step (edit/edit_kernel.h,
+//     capture/capture.h). A run that ends Stop, Limit or Context adds one
+//     read back of the store, 702 KiB for Gemma 3 1B, before its end is
+//     reported (capture/reader.h).
+//   - Captures cross with the result, not in a call of their own: a host
+//     gets them exactly once, with the run they belong to, and never asks
+//     for "the last run's" (logical-overview.md, invariant 5).
+//   - on_end's type is RunEndCallback, not the generator's EndCallback: the
+//     native tool and the replay scenario take the captures and read nothing
+//     of them; the browser bindings send them to the page (slice 4, step 2).
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -169,7 +202,7 @@ namespace frizzle::runtime {
 //     MEM.9  Allocate at init: the cache and the program at load; a turn
 //            allocates only the engine's record for it and its edit table.
 //     GPU.1  Keep data on the device: the edit table is written once a run;
-//            nothing is read back.
+//            the capture store is read back once a run, at its end.
 
 enum class LoadError : std::uint8_t {
   Ok,
@@ -183,6 +216,7 @@ enum class LoadError : std::uint8_t {
   Upload,        // the upload refused or failed; the subject names how
   Graph,         // the graph does not build over the plan
   Program,       // the kernels did not build; the subject is WebGPU's
+  Capture,       // the capture store's readback was refused; WebGPU's words
   Cancelled,     // the engine was destroyed with the stage in flight
 };
 
@@ -219,6 +253,25 @@ struct OperationStart {
   [[nodiscard]] bool ok() const noexcept { return error == OperationError::Ok; }
 };
 
+// A run's captures (generate, above).
+enum class CaptureStatus : std::uint8_t {
+  Taken,
+  NotTaken,  // the turn was Cancelled or failed
+  Unread,    // the read back failed; `mapped` says how
+};
+
+struct Captured {
+  CaptureStatus status = CaptureStatus::NotTaken;
+  residency::Mapped mapped = residency::Mapped::Ok;  // for Unread
+  // For Taken: every layer's slot, in layer order, and the store's words,
+  // valid only during the callback.
+  std::span<const capture::Slot> slots;
+  std::span<const float> neurons;
+};
+
+using RunEndCallback = void (*)(const TurnResult& result,
+                                const Captured& captured, void* userdata);
+
 class Engine {
  public:
   // Preconditions: `device` outlives the engine.
@@ -249,7 +302,7 @@ class Engine {
                                         std::span<const edit::Edit> edits,
                                         const policy::TurnPolicy& policy,
                                         TextCallback on_text,
-                                        EndCallback on_end, void* userdata);
+                                        RunEndCallback on_end, void* userdata);
 
   // Ends the running turn at its next report (above); with none, nothing.
   void cancel() noexcept;

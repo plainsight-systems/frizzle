@@ -24,6 +24,8 @@
 #include "core/arch/architecture.h"
 #include "core/cache/kv.h"
 #include "core/capability/capability.h"
+#include "core/capture/capture.h"
+#include "core/capture/reader.h"
 #include "core/edit/edit.h"
 #include "core/gguf/index.h"
 #include "core/gguf/reader.h"
@@ -67,7 +69,12 @@ struct Engine::State {
   // upload's buffers, is released before the upload.
   std::unique_ptr<residency::Upload> upload;
   std::unique_ptr<Generator> generator;
+  // Reads the plan's capture store, which it borrows from the upload, so it
+  // is released before the upload too.
+  std::unique_ptr<capture::Reader> reader;
   residency::BufferRange edit_table{};  // the plan's, written each run
+  residency::BufferRange captures{};    // the plan's, the capture store
+  capture::Layout layout{};             // each layer's slot in it
 
   bool running = false;  // a turn is in flight
 };
@@ -87,9 +94,13 @@ struct LoadCall {
 struct GenerateCall {
   std::shared_ptr<State> state;
   TextCallback on_text;
-  EndCallback on_end;
+  RunEndCallback on_end;
   void* userdata;
   bool edited;  // the run had edits, so its cache entries are rewound
+  // The turn's result while the store is read, its message copied to
+  // outlive the turn's callback.
+  TurnResult result{};
+  std::string message;
 };
 
 // --- Names, for refusals and failures ------------------------------------
@@ -238,6 +249,7 @@ void settle(std::unique_ptr<LoadCall> call, LoadError error,
   if (error != LoadError::Ok) {
     s.phase = Phase::Unloaded;
     s.generator.reset();
+    s.reader.reset();
     s.upload.reset();
     s.tokenizer.reset();
     s.chat.reset();
@@ -274,6 +286,24 @@ void on_accepted(residency::UploadError error, void* userdata) {
   settle(std::move(call), LoadError::Ok, {});
 }
 
+void on_reader_made(std::unique_ptr<capture::Reader> reader,
+                    std::string_view message, void* userdata) {
+  auto call = gpu::take_back<LoadCall>(userdata);
+  State& s = *call->state;
+  if (s.cancelled) {
+    settle(std::move(call), LoadError::Cancelled, {});
+    return;
+  }
+  if (reader == nullptr) {
+    settle(std::move(call), LoadError::Capture,
+           "the capture store's readback was refused: " + std::string(message));
+    return;
+  }
+  s.reader = std::move(reader);
+  s.phase = Phase::Loaded;
+  settle(std::move(call), LoadError::Ok, {});
+}
+
 void on_built(std::unique_ptr<kernels::Program> program,
               kernels::ProgramError error, std::string_view message,
               void* userdata) {
@@ -294,8 +324,9 @@ void on_built(std::unique_ptr<kernels::Program> program,
       std::make_unique<Runtime>(std::move(program), std::move(cache), s.stops);
   s.generator =
       std::make_unique<Generator>(std::move(s.tokenizer), std::move(turns));
-  s.phase = Phase::Loaded;
-  settle(std::move(call), LoadError::Ok, {});
+  const residency::Upload& upload = *s.upload;
+  capture::Reader::make(*s.device, upload.buffer(s.captures.buffer), s.captures,
+                        on_reader_made, gpu::hand_off(std::move(call)));
 }
 
 void on_finished(residency::UploadError error, void* userdata) {
@@ -338,6 +369,15 @@ void on_finished(residency::UploadError error, void* userdata) {
     return;
   }
   s.edit_table = *edit_table;
+  const std::optional<residency::BufferRange> captures =
+      scratch(plan, "captures");
+  if (!captures) {
+    settle(std::move(call), LoadError::Graph,
+           "the plan has no buffer for the capture store");
+    return;
+  }
+  s.captures = *captures;
+  s.layout = capture::layout(s.description);
   const kernels::Binding draw_record{sampled->buffer, sampled->offset,
                                      sizeof(sampler::SampledRecord)};
   const residency::Upload& upload = *s.upload;
@@ -352,6 +392,35 @@ void on_generate_text(std::string_view text, void* userdata) {
   call.on_text(text, call.userdata);
 }
 
+// Whether the turn's step that ends the prompt ran: a turn that ended Stop,
+// Limit or Context drew at least once, and its first draw is that step's
+// (runtime/turn.h).
+bool prompt_step_ran(const TurnResult& result) noexcept {
+  return result.failure == TurnFailure::None &&
+         result.end != TurnEnd::Cancelled;
+}
+
+void on_captures_read(residency::Mapped outcome, std::span<const float> words,
+                      void* userdata) {
+  auto call = gpu::take_back<GenerateCall>(userdata);
+  State& s = *call->state;
+  Captured captured;
+  if (s.cancelled) {
+    captured.status = CaptureStatus::Unread;
+    captured.mapped = residency::Mapped::Cancelled;
+  } else if (outcome != residency::Mapped::Ok) {
+    captured.status = CaptureStatus::Unread;
+    captured.mapped = outcome;
+  } else {
+    captured.status = CaptureStatus::Taken;
+    captured.slots = s.layout.slots;
+    captured.neurons = words;
+  }
+  call->result.message = call->message;
+  s.running = false;
+  call->on_end(call->result, captured, call->userdata);
+}
+
 void on_generate_end(const TurnResult& result, void* userdata) {
   auto call = gpu::take_back<GenerateCall>(userdata);
   State& s = *call->state;
@@ -363,8 +432,22 @@ void on_generate_end(const TurnResult& result, void* userdata) {
       !s.generator->rewind(result.prompt - 1)) {
     std::abort();
   }
-  s.running = false;
-  call->on_end(result, call->userdata);
+  // A loaded engine has its reader (on_reader_made); a turn runs only on a
+  // loaded one, and no load begins while it runs.
+  if (s.reader == nullptr) std::abort();
+  // Only a turn whose prompt step ran has this run's neurons in the store;
+  // any other may hold an earlier run's, which are never reported.
+  if (!prompt_step_ran(result) || s.cancelled) {
+    s.running = false;
+    call->on_end(result, Captured{}, call->userdata);
+    return;
+  }
+  // Still running: no turn starts while the store is read. The queue orders
+  // the read's copy after every step the turn submitted.
+  call->result = result;
+  call->message = std::string(result.message);
+  capture::Reader& reader = *s.reader;
+  reader.read(on_captures_read, gpu::hand_off(std::move(call)));
 }
 
 }  // namespace
@@ -388,8 +471,10 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
       (s.phase != Phase::Unloaded && s.phase != Phase::Loaded)) {
     return {LoadError::Busy, "a load or a turn is in progress"};
   }
-  // The model loaded before goes first: its generator, then its buffers.
+  // The model loaded before goes first: its generator and reader, then its
+  // buffers.
   s.generator.reset();
+  s.reader.reset();
   s.upload.reset();
   s.tokenizer.reset();
   s.chat.reset();
@@ -543,7 +628,7 @@ LoadResult Engine::finish_load(LoadCallback done, void* userdata) {
 OperationStart Engine::generate(std::string_view text,
                                 std::span<const edit::Edit> edits,
                                 const policy::TurnPolicy& policy,
-                                TextCallback on_text, EndCallback on_end,
+                                TextCallback on_text, RunEndCallback on_end,
                                 void* userdata) {
   State& s = *state_;
   if (s.phase != Phase::Loaded) return {OperationError::NotLoaded, {}, {}};
@@ -562,7 +647,7 @@ OperationStart Engine::generate(std::string_view text,
   // returns.
   s.running = true;
   void* call = gpu::hand_off(std::make_unique<GenerateCall>(
-      GenerateCall{state_, on_text, on_end, userdata, !edits.empty()}));
+      GenerateCall{state_, on_text, on_end, userdata, !edits.empty(), {}, {}}));
   const GenerateResult started =
       s.generator->start(text, policy, on_generate_text, on_generate_end, call);
   if (!started.ok()) {

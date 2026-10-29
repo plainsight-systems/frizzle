@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "core/capture/capture.h"
 #include "core/formats/format.h"
 #include "core/kernels/interface.h"
 #include "core/model/model_description.h"
@@ -22,7 +23,7 @@ namespace frizzle::graph {
 // family runs them in, and what its family does that the model description
 // does not carry, such as Gemma 3's embedding scale (arch/gemma3/gemma3.cpp).
 // The edit point (✎, docs/architecture/file-mapping.md) is here, in the
-// feed-forward block.
+// feed-forward block, and the neurons' capture point (◉) just after it.
 //
 // Contract
 //   - Builder appends a step's launches to `out`, block by block, in the
@@ -60,20 +61,24 @@ namespace frizzle::graph {
 //     in steps that score a token (edit/edit_kernel.h); with a table of no
 //     edits it writes nothing, so the graph computes what it computed
 //     without it.
+//   - The capture launch follows it in every layer: in the step that ends
+//     the prompt it copies the activation's last row, as edited, into the
+//     layer's slot of `captures` (capture/capture.h), and it writes nothing
+//     the model reads, so the graph computes what it computed without it.
 //   - Names: every launch carries its role and layer (kernels/interface.h),
 //     for a profile: "embed"; "attention.norm", "attention.qkv" — or
 //     "attention.q", ".k" and ".v" where the three are not one group —
 //     "attention.rope", "attention.scores", "attention.combine",
-//     "attention.output"; "ffn.norm", "ffn.gate_up", "ffn.edit", "ffn.down";
-//     and "output.norm", "output.head", "output.select", "output.draw",
-//     which belong to no layer.
+//     "attention.output"; "ffn.norm", "ffn.gate_up", "ffn.edit", "ffn.capture",
+//     "ffn.down"; and "output.norm", "output.head", "output.select",
+//     "output.draw", which belong to no layer.
 //   - Determinism (GDSA.2): every kernel the blocks launch is
 //     batch-invariant — the gather, norms and rope work a row alone,
 //     attention folds chunks fixed by position, each matrix product adds in
-//     an order fixed by K, the edit kernel adds nothing — and no block adds
-//     a reduction of its own. So a token's logits are the same bits whether
-//     its prompt was prefilled in one step, in several, or decoded a token
-//     at a time, as each kernel states.
+//     an order fixed by K, the edit and capture kernels add nothing — and
+//     no block adds a reduction of its own. So a token's logits are the same
+//     bits whether its prompt was prefilled in one step, in several, or decoded
+//     a token at a time, as each kernel states.
 //
 // Algorithm, the launches each block appends, in order
 //   - embed(scale): the token embedding's gather, one launch a piece, into
@@ -97,7 +102,10 @@ namespace frizzle::graph {
 //          activation(gate) × up into `activation`.
 //       8. The edit: the run's edits for the layer, from `edit_table`,
 //          applied to `activation`'s last row (edit/edit_kernel.h).
-//       9. Down: `activation` into `output`.
+//       9. The capture: `activation`'s last row into the layer's slot of
+//          `captures`, in the step that ends the prompt
+//          (capture/capture.h).
+//      10. Down: `activation` into `output`.
 //   - output(): the final norm, `output` added into `hidden` and normalized
 //     with the output norm's gain; the head, `normed` into `logits` — the
 //     output head's weight, or the token embedding's where the file ties
@@ -120,6 +128,14 @@ namespace frizzle::graph {
 //     40 µs a token at Charlotte's 1.5 µs a dispatch; not measured here.
 //     Rebuilding the graph for each edit set, or folding the edit into
 //     gate·up's epilogue, were the alternatives (edit/edit_kernel.h).
+//   - The capture launch is the graph's own too, always present: one a
+//     layer, over the last token, after the edit launch. It adds 26 more
+//     dispatches in each scoring step for Gemma 3 1B, which in decode read
+//     one word and stop: about 40 µs a token at the same estimate, not
+//     measured. `captures` is one working buffer of every layer's slot,
+//     702 KiB, planned in decoder_working_set. The alternatives, folding
+//     the copy into the edit kernel or skipping it in the schedule, are in
+//     capture/capture.h.
 //   - Charlotte's count, for Qwen3 0.6B at Q4_0 with an F16 cache, before
 //     the edit launch; not recounted for Gemma 3: 8 dispatches a layer a
 //     step, where a launch an operation would be 17 (GPU.6); 231 a step,
@@ -188,11 +204,12 @@ struct GraphResult {
 // kernels::kSplitGate — Q, K and V, fused or each alone, the output and down
 // projections — at least one float: 13.5 MiB for Gemma 3; and
 // `edit_table`, one row of 2 × layers + 3 × edit::kMaxEdits u32 words, the
-// run's edits (edit/edit.h), 48 KiB for Gemma 3 1B. Every product's launches
-// take that gate and that buffer (kernels/matmul/matmul.h). A decoder keeps
-// a KV cache. Which buffers a graph
-// binds is the graph's to say, and where they lie the planner's
-// (docs/architecture/change-axes.md).
+// run's edits (edit/edit.h), 48 KiB for Gemma 3 1B; and `captures`, one row
+// of capture::layout's words, every layer's neurons at the last prompt
+// position (capture/capture.h), 702 KiB for Gemma 3 1B. Every product's
+// launches take that gate and that buffer (kernels/matmul/matmul.h). A decoder
+// keeps a KV cache. Which buffers a graph binds is the graph's to say, and
+// where they lie the planner's (docs/architecture/change-axes.md).
 //
 // Selection and the draw have four working buffers of their own
 // (sampler/sampler.h): `partials_a` and `partials_b`, which its passes
@@ -246,7 +263,7 @@ class Builder {
   struct Buffers {
     residency::BufferRange hidden, normed, query, key, value, attention,
         partials, partial_stats, output, activation, logits, partials_a,
-        partials_b, candidates, sampled, range_sums, edit_table;
+        partials_b, candidates, sampled, range_sums, edit_table, captures;
   };
 
   [[nodiscard]] const residency::WeightView& view(gguf::TensorId tensor) const;
@@ -267,6 +284,7 @@ class Builder {
   std::vector<const residency::WeightView*>
       views_;  // by tensor id; null for a tensor the plan did not place
   Buffers buffers_;
+  std::vector<capture::Slot> slots_;  // each layer's slot in `captures`
   Pending pending_;
 };
 

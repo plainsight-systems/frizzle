@@ -155,7 +155,10 @@ class Loaded {
         [](std::string_view piece, void* userdata) {
           static_cast<Reply*>(userdata)->text += piece;
         },
-        [](const frz::runtime::TurnResult& result, void* userdata) {
+        // The scenario guards replies and the cache, not captures
+        // (tests/README.md).
+        [](const frz::runtime::TurnResult& result,
+           const frz::runtime::Captured& /*captured*/, void* userdata) {
           auto& r = *static_cast<Reply*>(userdata);
           r.failure = result.failure;
           r.end = result.end;

@@ -97,11 +97,11 @@ reviewed, then its code, then review.
 1. **Captures in the engine** (C++, O). The capture store in
    `core/capture/`, a slot per layer, filled at the last prompt position
    after the edit launch, so an edited run holds the value each pin set;
-   decode steps leave it as it is. `generate` returns it. Tests: one unit
-   test of the capture on the GPU, with no model, in the kernels suite
-   (the design settles whether it is a kernel or a copy): the last row,
-   after the edits, in a step that scores a token and no other, into its
-   own layer's slot. No integration test is added: the browser read-back
+   decode steps leave it as it is; `generate`'s end carries it, read back
+   once a run. Tests: one unit test of the capture kernel and its reader
+   on the GPU, with no model, in the kernels suite: the last row, in the
+   step that ends the prompt and no other, into its own layer's slot, bit
+   for bit. No integration test is added: the browser read-back
    (step 2) checks the wiring, and the oracle the values the model makes.
 2. **Captures reach the page** (bindings, worker, `protocol/`, session).
    Each run's store crosses to the page; the session keeps the original's

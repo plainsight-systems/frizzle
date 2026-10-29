@@ -56,7 +56,7 @@ the file it is read from.
 | Operation | Does | Returns |
 | --- | --- | --- |
 | `load(file)` | Read the GGUF, put the weights on the GPU | Ready, or a named refusal |
-| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; captures (slice 4) |
+| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; then its end and every layer's neurons at the last prompt position |
 
 Frizzle shows what the model produces and computes nothing beside it. The
 cache keeps the prompt's prefix between runs, so running the same prompt
@@ -101,13 +101,13 @@ per layer, so it holds what the model used even if the buffer it came from
 is reused. Every run sends the whole store to the page, so switching layers
 never asks the engine for anything.
 
-| Per layer, at f32 | Size |
-| --- | --- |
-| Residual, 1,152 | 4.5 KiB |
-| Q, 4 heads × 256 | 4 KiB |
-| Neurons, 6,912 | 27 KiB |
-| Attention weights, 4 heads × positions (slice 5) | 16 B per position |
-| **All 26 layers, 512-token prompt** | **about 1.1 MiB** |
+| Per layer, at f32 | Size | Captured |
+| --- | --- | --- |
+| Neurons, 6,912 | 27 KiB | From slice 4: 702 KiB a run for 26 layers |
+| Residual, 1,152 | 4.5 KiB | With the pass map (slice 5) |
+| Q, 4 heads × 256 | 4 KiB | With the pass map (slice 5) |
+| Attention weights, 4 heads × positions | 16 B per position | After them (slice 5) |
+| **All of them, 26 layers, 512-token prompt** | **about 1.1 MiB** | |
 
 That is a small fraction of one decode step's reads (the 722 MB of
 weights). An edited stage is captured after its
@@ -116,6 +116,55 @@ store from the run without edits, which the app keeps.
 
 Editing the residual (slice 7) lands between the add and the normalization,
 which are one kernel today. How to open that up is slice 7's design.
+
+## A run's captures: when the store is written and read
+
+The store is written once a run, inside the step that ends the prompt, and
+read once, after the turn ends. The capture launch runs in every step that
+asks for logits; it tells the step that ends the prompt from a decode step by
+whether the step's token was fed from the last draw
+([capture.h](../../src/core/capture/capture.h)).
+
+```mermaid
+flowchart TD
+  G["generate(text, edits)<br/>edit table written once"]
+  P{"next step"}
+  PF["prefill block, not the last<br/>logits 0"]
+  PE["the step that ends the prompt<br/>logits 1, tokens given (fed 0)"]
+  DE["decode step<br/>logits 1, fed 1"]
+  SKIP["edit and capture launches<br/>not dispatched"]
+  subgraph L["each of the 26 layers, in order"]
+    E["ffn.edit<br/>pins applied to the last row"]
+    C["ffn.capture<br/>last row → the layer's slot"]
+    D["ffn.down"]
+    E --> C --> D
+  end
+  EXIT["ffn.edit holds the pins;<br/>ffn.capture reads fed, stops"]
+  END{"how the turn ended"}
+  READ["Reader::read<br/>one copy, one mapping, 702 KiB"]
+  T(["on_end: reply's end + Taken neurons"])
+  N(["on_end: reply's end + NotTaken"])
+  U(["on_end: reply's end + Unread, why"])
+
+  G --> P
+  P --> PF --> SKIP --> P
+  P --> PE --> L --> P
+  P --> DE --> EXIT --> P
+  P -->|"turn over"| END
+  END -->|"Stop, Limit, Context"| READ
+  END -->|"Cancelled or failed:<br/>the store may hold<br/>an earlier run's"| N
+  READ -->|"mapped"| T
+  READ -->|"mapping failed"| U
+```
+
+- The store is never cleared. Only a turn whose step that ends the prompt
+  ran is read, so the page is never shown an earlier run's neurons as this
+  run's.
+- The turn's own result is reported as it was in every case: a capture never
+  turns a reply into a failure, or a failure into a reply.
+- Cost, estimated and not measured: 26 dispatches a decode step that read
+  one word and stop, about 40 µs a token, as the edit launch costs; once a
+  run, 702 KiB copied on the GPU and one readback.
 
 ## The loop
 
@@ -126,10 +175,10 @@ sequenceDiagram
   participant Worker as Worker and engine
   You->>App: type a prompt
   App->>Worker: generate(text, no edits, seed)
-  Worker-->>App: the original reply, streamed; captures
+  Worker-->>App: the original reply, streamed, then its captures
   You->>App: pin neurons
   App->>Worker: generate(text, whole edit set, same seed)
-  Worker-->>App: the edited reply, beside the original; captures
+  Worker-->>App: the edited reply, beside the original, then its captures
 ```
 
 The original reply is generated once per prompt, before any edit, and kept.
