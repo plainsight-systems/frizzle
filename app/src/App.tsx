@@ -5,8 +5,9 @@
 // Contract
 //   - App({session}): renders, on night glass (theme/), for that session:
 //       header   "Frizzle"; status "WebGPU" and status "Model" (their words
-//                below); button "Load model", enabled once WebGPU is ready
-//                while the model is not loading or loaded.
+//                below), the model's with a progress bar while it loads.
+//                Load model itself is on the prompt (views/prompt/), where
+//                the person starts.
 //       page     the conversation (views/prompt/): the prompt, then the
 //                original and edited replies side by side.
 //       layer    the workbench (views/deck/), a dialog over the whole
@@ -114,16 +115,6 @@ export function App({ session }: { readonly session: Session }) {
               />
             )}
           </span>
-          {model.kind !== "ready" && (
-            <button
-              type="button"
-              className="primary"
-              disabled={!canLoad}
-              onClick={() => session.load()}
-            >
-              Load model
-            </button>
-          )}
         </header>
         <PromptView
           session={session}
@@ -132,6 +123,8 @@ export function App({ session }: { readonly session: Session }) {
           onMessage={setMessage}
           seedText={seedText}
           onSeedText={setSeedText}
+          canLoad={canLoad}
+          onLoad={() => session.load()}
           canRun={canRun}
           onRun={run}
           onOpen={openOn}

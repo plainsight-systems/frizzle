@@ -15,8 +15,13 @@
 //       the pins held, as chips (PinChips.tsx); a chip's "Show …" opens
 //         the workbench on its neurons
 //       button "Open neurons": opens the workbench (onOpen)
-//       button "Run": enabled once the model is ready and the seed parses;
-//         Ctrl+Enter or ⌘+Enter in the message runs too
+//       until the model is ready, button "Load model" in Run's place,
+//         enabled when canLoad (onLoad), and beside it the model's size
+//         (config/model.json) before it starts, then the load's progress in
+//         megabytes with a bar, or its failure; the person's first step
+//         sits where they type
+//       once the model is ready, button "Run": enabled once the seed
+//         parses; Ctrl+Enter or ⌘+Enter in the message runs too
 //       status "Original reply", status "Edited reply": the reply's text,
 //         each in a pane of at most about half the window's height that
 //         scrolls on its own, focusable so the keys scroll it too
@@ -62,6 +67,8 @@ import type {
   SessionState,
 } from "../../session/session.ts";
 import type { Which } from "../deck/cards.ts";
+import pin from "../../../../config/model.json" with { type: "json" };
+import { megabytes } from "../../shape/numbers.ts";
 import { PinChips } from "./PinChips.tsx";
 import { parseSeed } from "./fields.ts";
 
@@ -74,12 +81,15 @@ export function PromptView(props: {
   readonly onMessage: (message: string) => void;
   readonly seedText: string;
   readonly onSeedText: (text: string) => void;
+  readonly canLoad: boolean;
+  readonly onLoad: () => void;
   readonly canRun: boolean;
   readonly onRun: () => void;
   readonly onOpen: (reply?: Which, chosen?: Selection) => void;
 }) {
   const { session, state, message, onMessage, seedText, onSeedText } = props;
-  const { canRun, onRun, onOpen } = props;
+  const { canLoad, onLoad, canRun, onRun, onOpen } = props;
+  const { model } = state;
   const seedProblemId = useId();
   const seed = parseSeed(seedText);
   const { pins, run } = state;
@@ -156,9 +166,23 @@ export function PromptView(props: {
               ? "No pins yet"
               : `${pins.length} ${pins.length === 1 ? "pin" : "pins"} held`}
           </span>
-          <button type="submit" className="primary" disabled={!canRun}>
-            Run
-          </button>
+          {model.kind === "ready" ? (
+            <button type="submit" className="primary" disabled={!canRun}>
+              Run
+            </button>
+          ) : (
+            <>
+              <span className="load-progress">{loadText(model)}</span>
+              <button
+                type="button"
+                className="primary"
+                disabled={!canLoad}
+                onClick={onLoad}
+              >
+                Load model
+              </button>
+            </>
+          )}
         </div>
         {!seed.ok && (
           <p id={seedProblemId} role="note">
@@ -262,6 +286,33 @@ function Reply(props: {
       )}
     </section>
   );
+}
+
+// Beside Load model: what loading costs, how far it is, or why it failed.
+function loadText(model: SessionState["model"]) {
+  switch (model.kind) {
+    case "idle":
+      return `${megabytes(pin.sizeBytes)}, kept after the first visit`;
+    case "starting":
+      return "Starting";
+    case "downloading":
+    case "loading":
+      return (
+        <>
+          {model.kind === "downloading" ? "Downloading" : "Loading"}{" "}
+          {megabytes(model.done).replace(" MB", "")} of {megabytes(model.total)}
+          <progress
+            aria-hidden
+            value={model.done}
+            max={Math.max(1, model.total)}
+          />
+        </>
+      );
+    case "failed":
+      return `Failed at ${model.failure.stage}: ${model.failure.message}`;
+    case "ready":
+      return "";
+  }
 }
 
 // The run's ending for one reply: nothing before the first run.

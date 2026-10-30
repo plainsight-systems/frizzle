@@ -286,8 +286,23 @@ fieldset > div {
   gap: 10px;
   margin-top: 10px;
 }
-.actions .primary {
+.actions .primary,
+.actions .load-progress {
   margin-left: auto;
+}
+.actions .load-progress + .primary {
+  margin-left: 0;
+}
+.load-progress {
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+.load-progress progress {
+  width: 100px;
+  height: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+  accent-color: var(--accent);
 }
 .seed input {
   padding: 3px 6px;

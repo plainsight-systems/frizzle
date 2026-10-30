@@ -26,10 +26,14 @@
 //     set as it was notifies no one. Changing the pins changes nothing
 //     shown of the run already made: a run keeps the edits it was sent.
 //   - run(message, seed): only once the model is ready; otherwise it
-//     throws. It sends the pins held now. The run replaces the one shown. The original reply runs
-//     first, with no edits; then, when edits were given and the original
-//     is done, the edited reply, with the same message and seed. With no
-//     edits there is no edited reply (`edited` is null). Each reply streams
+//     throws. It sends the pins held now. The run replaces the one shown.
+//     When the run shown has the same message and seed and its original
+//     reply is done, the new run keeps that original as it is, captures and
+//     all, and generates only the edited reply: the original is the same
+//     whatever the pins, so it is never generated twice. Otherwise the
+//     original reply runs first, with no edits; then, when edits were given
+//     and the original is done, the edited reply, with the same message and
+//     seed. With no edits there is no edited reply (`edited` is null). Each reply streams
 //     its text as it comes, then is "done" with the engine's answer (how it
 //     ended, its tokens), or "failed" with the stage and message. The
 //     edited reply does not run after a failed original.
@@ -206,16 +210,29 @@ export class Session {
     }
     const edits = this.#state.pins;
     const number = ++this.#runNumber;
+    const shown = this.#state.run;
+    const kept =
+      shown !== null &&
+      shown.message === message &&
+      shown.seed === seed &&
+      shown.original.kind === "done"
+        ? shown.original
+        : null;
     this.#set({
       run: {
         message,
         seed,
         edits,
-        original: { kind: "running", text: "" },
-        edited: edits.length > 0 ? { kind: "waiting" } : null,
+        original: kept ?? { kind: "running", text: "" },
+        edited:
+          edits.length === 0
+            ? null
+            : kept !== null
+              ? { kind: "running", text: "" }
+              : { kind: "waiting" },
       },
     });
-    void this.#replies(number, message, edits, seed);
+    void this.#replies(number, message, edits, seed, kept !== null);
   }
 
   async #replies(
@@ -223,7 +240,14 @@ export class Session {
     message: string,
     edits: readonly Edit[],
     seed: number,
+    originalKept: boolean,
   ): Promise<void> {
+    if (originalKept) {
+      if (edits.length > 0) {
+        await this.#reply(number, "edited", message, edits, seed);
+      }
+      return;
+    }
     const original = await this.#reply(number, "original", message, [], seed);
     if (original !== "done" || edits.length === 0) return;
     if (number !== this.#runNumber) return;

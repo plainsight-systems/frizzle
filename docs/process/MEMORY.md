@@ -129,7 +129,11 @@ which comes over whole.
   card a pinned cell shows the value it will send, so a pin answers on
   the grid at once; the edited reply's card shows what its run used. The
   workbench gives the deck the focus on opening, so the wheel and keys
-  work without a first click on the grid. Each
+  work without a first click on the grid.
+- **The prompt starts it all (2026-10-30):** Load model, with the model's
+  size and then its progress, sits on the prompt in Run's place until the
+  model is ready. A Run that changes only the pins keeps the original
+  reply it already has and generates only the edited one. Each
   card is coloured against its own layer's 99th-percentile magnitude, so a
   few outliers do not darken the rest; the legend gives that scale to two
   significant digits; infinities are full heat, NaN
