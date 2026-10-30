@@ -46,6 +46,8 @@ flowchart LR
   frame --> theme
   views --> session
   views --> shape
+  views --> theme
+  theme --> shape
   session --> mirrors
   session --> protocol
   protocol --> mirrors
@@ -61,6 +63,7 @@ flowchart LR
 | --- | --- |
 | `src/core/` includes nothing from `src/wasm/`, `tools/` or `tests/` | The core never knows it is in a browser, so it builds and tests natively |
 | React is imported only by the root, `views/` and `theme/` | Swapping React touches H only ([not an axis](change-axes.md#not-axes)) |
+| three.js and react-three-fiber are imported only by `views/` | The scene is a view's; `theme/` hands it colours as plain numbers, and `shape/` stays testable in Node |
 | `session/`, `shape/`, `engine/`, `protocol/` and `worker/` are plain TypeScript | Tested without React; the worker pulls no React into its bundle |
 | `worker/` imports nothing from `views/`, `session/`, `shape/` or `theme/` | The worker is the engine's side; the page talks to it only through `protocol/` |
 
@@ -107,11 +110,17 @@ in WGSL, and adding an edit kind changes both files.
 main.tsx, App.tsx      H(frame)
 views/prompt/          H(view)   prompt, both replies
 views/pass-map/        H(view)   slice 5
-views/deck/            H(view)   the MLP workbench
+views/deck/            H(view)   the MLP workbench (slice 4): Workbench.tsx, Deck.tsx
+                                 (the layer deck), Inspector.tsx, cards.ts
 views/residual/        H(view)   slice 7
-theme/                 H(theme)  night-glass tokens, fonts
-session/               H(session)
-shape/                 H(shape)  folding, ranking
+theme/                 H(theme)  night glass: theme.css (tokens, the page's elements),
+                                 palette.ts (the deck's colours), fonts/ (Plex, kept)
+session/               H(session) session.ts (the page's state), pins.ts (the pin set:
+                                 adding, removing, grouping, what a pin sends)
+shape/                 H(shape)  fold.ts (a slot into the deck's grid, a box of cells
+                                 back to neurons), paint.ts (a slot into pixels, a heat
+                                 map of size, and overlays), rank.ts (the
+                                 strongest), numbers.ts (MB, values for reading)
 engine/captures.ts     O         the store's layout, read from the wire
 engine/edits.ts        Q         the edit kinds, as sent
 protocol/              R         messages, ids, the page's client, starting the worker

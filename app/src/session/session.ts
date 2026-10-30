@@ -18,8 +18,15 @@
 //     failure's stage and message.
 //   - load(): only from "idle" or "failed", once the device is ready;
 //     otherwise it throws, a page bug, never a state.
-//   - run(message, edits, seed): only once the model is ready; otherwise it
-//     throws. The run replaces the one shown. The original reply runs
+//   - pins: the edit set held for the next run, at most one edit a neuron,
+//     in the order first pinned (pins.ts). pinAll(edits) adds them, each
+//     replacing the edit on its layer and neuron in place, as one change;
+//     unpinAll(layer, neurons) removes theirs, as one change; pin(edit) and
+//     unpin(layer, neuron) are the same for one. A change that leaves the
+//     set as it was notifies no one. Changing the pins changes nothing
+//     shown of the run already made: a run keeps the edits it was sent.
+//   - run(message, seed): only once the model is ready; otherwise it
+//     throws. It sends the pins held now. The run replaces the one shown. The original reply runs
 //     first, with no edits; then, when edits were given and the original
 //     is done, the edited reply, with the same message and seed. With no
 //     edits there is no edited reply (`edited` is null). Each reply streams
@@ -60,6 +67,7 @@ import {
   WorkerError,
 } from "../protocol/client.ts";
 import type { DeviceNotice, Generated } from "../protocol/messages.ts";
+import { withPins, withoutPins } from "./pins.ts";
 
 // The engine's own "no other limit" (policy.h, TurnPolicy::max_tokens): the
 // largest count a 32-bit word carries, which the context bounds first.
@@ -111,6 +119,7 @@ export interface Run {
 export interface SessionState {
   readonly device: DeviceState;
   readonly model: ModelState;
+  readonly pins: readonly Edit[];
   readonly run: Run | null;
 }
 
@@ -122,6 +131,7 @@ export class Session {
   #state: SessionState = {
     device: { kind: "waiting" },
     model: { kind: "idle" },
+    pins: [],
     run: null,
   };
   // The run shown, by number: replies of an earlier run change nothing.
@@ -170,10 +180,31 @@ export class Session {
       );
   }
 
-  run(message: string, edits: readonly Edit[], seed: number): void {
+  pin(edit: Edit): void {
+    this.pinAll([edit]);
+  }
+
+  pinAll(edits: readonly Edit[]): void {
+    const { pins } = this.#state;
+    const next = withPins(pins, edits);
+    if (next !== pins) this.#set({ pins: next });
+  }
+
+  unpin(layer: number, neuron: number): void {
+    this.unpinAll(layer, [neuron]);
+  }
+
+  unpinAll(layer: number, neurons: readonly number[]): void {
+    const { pins } = this.#state;
+    const kept = withoutPins(pins, layer, neurons);
+    if (kept !== pins) this.#set({ pins: kept });
+  }
+
+  run(message: string, seed: number): void {
     if (this.#state.model.kind !== "ready") {
       throw new Error(`run() with the model ${this.#state.model.kind}`);
     }
+    const edits = this.#state.pins;
     const number = ++this.#runNumber;
     this.#set({
       run: {

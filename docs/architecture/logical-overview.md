@@ -182,6 +182,29 @@ flowchart LR
 One copy in all, out of the module's memory: the worker hands the buffer to
 the page, and the page reads it where it lies.
 
+How the deck draws them (slice 4, step 3), on the page, when the shown
+captures change and never per frame:
+
+```mermaid
+flowchart TD
+  R["the run shown<br/>(session.ts snapshot)"]
+  Q{"Neurons from:<br/>original or edited reply"}
+  A{"that reply's<br/>captures"}
+  N["no cards; status Deck says why:<br/>Waiting, Not captured,<br/>Not read back, None"]
+  F["each slot l, in layer order:<br/>fold(slot.width), 96 to a row<br/>(shape/fold.ts)"]
+  P["paint the slot's words:<br/>scale = 99th-percentile |v|,<br/>heat by size, either sign<br/>(shape/paint.ts, theme/palette.ts)"]
+  T["one texture a card,<br/>one texel a neuron<br/>(views/deck/Deck.tsx)"]
+  D["the deck: front card = layer l,<br/>its scale in the legend;<br/>strip, keys, wheel step layers;<br/>click or drag to select, zoom, pan;<br/>on the original's cards, a pin's cell<br/>shows what it will send"]
+  R --> Q --> A
+  A -->|"taken"| F --> P --> T --> D
+  A -->|"waiting, not-taken,<br/>unread, failed"| N
+```
+
+The deck and the inspector read the same snapshot as the conversation; the
+only thing they change in the session is the pins held for the next run.
+The scale is per layer and is shown in the legend, and every value is still
+the model's own, rounded for reading and exact in the inspector's data.
+
 ## The loop
 
 ```mermaid

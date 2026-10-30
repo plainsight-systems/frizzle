@@ -1,0 +1,643 @@
+/*
+ * Axis H (theme): night glass, the app's look. Imported once, by main.tsx.
+ *
+ * Contract
+ *   - Tokens, as custom properties on :root; views use these, never their
+ *     own colours:
+ *       --page     #0d1422  the page
+ *       --night    #090f1a  behind the deck
+ *       --panel    #121b2c  a panel, a field, a card
+ *       --rule     #253247  lines and borders
+ *       --ink      #eee6d3  text
+ *       --muted    #9aa0a8  labels and secondary text
+ *       --accent   #e2b866  focus, the chosen option
+ *       --edit     #ffcf73  what an edit changed: the edited reply, a pin
+ *       --cool     #9fc0e8  negative values in text
+ *       --serif    "Plex Serif", Georgia, serif
+ *       --mono     "Plex Mono", ui-monospace, monospace
+ *   - Fonts, kept in the app (fonts/, with IBM's OFL licence and where each
+ *     file came from): IBM Plex Serif and Plex Mono, Regular (400) and
+ *     Medium (500), woff2, font-display swap. No font is fetched
+ *     from anywhere else.
+ *   - The page's elements on night glass: body, headings, text, the
+ *     fields, buttons and selects, and their focus, disabled and invalid
+ *     states. Prose and replies are serif; numbers, labels and fields are
+ *     mono.
+ *   - The frame's layout (App.tsx): a header, then the conversation, the
+ *     replies two columns side by side (one under 900px), each reply's
+ *     text in a pane capped at the window's height less the header and
+ *     prompt (at least 14rem), scrolling inside; the workbench a
+ *     layer over the whole window, its deck taking the width beside a
+ *     320px inspector (stacked under 900px).
+ *   - The parts the views name by class: the composer and its chips, the
+ *     replies, the deck and its zoom, strip, legend and tip, the inspector's
+ *     segmented choice, ranked list, neuron card and Go to.
+ *   - Contrast: --ink and --muted on --page and --panel meet WCAG AA for
+ *     body text (4.5:1); --muted is not used below 12px.
+ *   - Reduced motion: no transition here moves anything; the deck's slide
+ *     honours prefers-reduced-motion itself (views/deck/Deck.tsx).
+ *
+ * Design
+ *   - Values from the reviewed concepts (docs/design/concepts/deck.html and
+ *     transition.html): the app is night glass, the site ivory (slice 6).
+ *   - The fonts are four files copied from IBM's npm packages
+ *     (@ibm/plex-serif 2.0.0, @ibm/plex-mono 2.5.0), not installed as
+ *     packages: both depend on @ibm/telemetry-js, whose install script the
+ *     app's .npmrc would block, but which would still enter the lockfile.
+ *     Their SHA-256s are in fonts/README.md.
+ */
+
+@font-face {
+  font-family: "Plex Serif";
+  src: url("./fonts/IBMPlexSerif-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plex Serif";
+  src: url("./fonts/IBMPlexSerif-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("./fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("./fonts/IBMPlexMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  --page: #0d1422;
+  --night: #090f1a;
+  --panel: #121b2c;
+  --rule: #253247;
+  --ink: #eee6d3;
+  --muted: #9aa0a8;
+  --accent: #e2b866;
+  --edit: #ffcf73;
+  --cool: #9fc0e8;
+  --serif: "Plex Serif", Georgia, serif;
+  --mono: "Plex Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 16px/1.5 var(--serif);
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 400;
+  margin: 0 0 0.6rem;
+}
+h2,
+h3,
+legend {
+  font: 12px/1.6 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+label {
+  color: var(--muted);
+  font: 13px/1.6 var(--mono);
+}
+
+output,
+data {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.muted {
+  color: var(--muted);
+}
+.hint {
+  color: var(--muted);
+  font: 12px/1.6 var(--mono);
+}
+.edited {
+  color: var(--edit);
+}
+
+input,
+textarea,
+select,
+button {
+  font: 14px/1.4 var(--mono);
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 5px 8px;
+}
+textarea {
+  width: 100%;
+  resize: vertical;
+}
+button {
+  background: transparent;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1b1407;
+  font-weight: 500;
+  padding: 6px 16px;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--edit);
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+:is(input, textarea, select, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+:is(input, textarea, select, button):disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
+[aria-invalid="true"] {
+  border-color: var(--edit);
+}
+[role="note"] {
+  color: var(--edit);
+  font: 13px var(--mono);
+}
+
+fieldset {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+fieldset > div {
+  margin: 0.25rem 0;
+}
+
+/* The frame */
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--rule);
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+.wordmark {
+  font: 500 19px var(--serif);
+  color: var(--ink);
+  margin-right: auto;
+}
+.pill::before {
+  content: "●";
+  color: var(--accent);
+  font-size: 9px;
+  margin-right: 7px;
+}
+.pill output {
+  color: var(--ink);
+  margin-left: 4px;
+}
+.masthead progress {
+  width: 120px;
+  height: 4px;
+  margin-left: 10px;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+.column {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+/* The conversation */
+.conversation {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 24px;
+}
+.composer {
+  max-width: 52rem;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 10px;
+}
+.composer textarea {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: 15px/1.5 var(--serif);
+  outline: 0;
+}
+.composer:focus-within {
+  border-color: var(--accent);
+}
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 0;
+}
+.chip {
+  display: flex;
+  border: 1px solid #6d5a2c;
+  border-radius: 3px;
+}
+.chip button {
+  border: 0;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: var(--edit);
+}
+.chip .chip-remove {
+  color: var(--muted);
+  padding-left: 0;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.actions .primary {
+  margin-left: auto;
+}
+.seed input {
+  padding: 3px 6px;
+  font-size: 12px;
+}
+.replies {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.5rem;
+  margin-top: 28px;
+}
+@media (max-width: 900px) {
+  .replies {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.reply {
+  border-top: 1px solid var(--rule);
+  padding-top: 12px;
+  min-width: 0;
+}
+.reply .neurons {
+  margin-top: 14px;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.reply h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.reply h3 output {
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.reply-edited h3 > span {
+  color: var(--edit);
+}
+.reply-text {
+  display: block;
+  white-space: pre-wrap;
+  font: 15px/1.6 var(--serif);
+  max-height: max(14rem, 100vh - 26rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+  border-radius: 3px;
+}
+.reply-text:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* The workbench */
+.workbench {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--page);
+  outline: 0;
+}
+.workbench-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--rule);
+}
+.workbench-bar .chips {
+  margin: 0;
+}
+.prompt-summary {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 15px var(--serif);
+}
+.prompt-summary .muted {
+  font: 12px var(--mono);
+}
+.workbench-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: 0;
+}
+.workbench-body > .column + .column {
+  border-left: 1px solid var(--rule);
+}
+@media (max-width: 900px) {
+  .workbench-bar {
+    flex-wrap: wrap;
+  }
+  .workbench-body {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+  .deck {
+    height: 60vh;
+  }
+}
+
+/* The deck */
+.deck-column {
+  display: flex;
+  flex-direction: column;
+}
+.deck-column h2 output {
+  margin-left: 0.75rem;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.deck {
+  position: relative;
+  flex: 1;
+  user-select: none;
+  min-height: 420px;
+  border-radius: 4px;
+  outline-offset: 2px;
+}
+.deck:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.deck.panning {
+  cursor: grabbing;
+}
+.zoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  font: 11px var(--mono);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.zoom button {
+  min-width: 28px;
+  padding: 3px 7px;
+}
+.zoom output {
+  min-width: 3.5em;
+  text-align: center;
+}
+.deck-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  margin: 0;
+  color: var(--muted);
+  font: 14px var(--mono);
+  border: 1px dashed var(--rule);
+  border-radius: 4px;
+}
+.tip {
+  position: absolute;
+  pointer-events: none;
+  font: 12px var(--mono);
+  background: #1a2438;
+  border: 1px solid var(--rule);
+  padding: 3px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.strip {
+  display: flex;
+  gap: 3px;
+  margin-top: 10px;
+}
+.strip button {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--muted);
+  position: relative;
+}
+.strip button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1b1407;
+}
+.strip button.pinned::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--edit);
+}
+.legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font: 11px var(--mono);
+}
+.legend .ramp {
+  width: 180px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* The inspector */
+.segmented {
+  display: flex;
+  padding: 0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.segmented legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.segmented label {
+  flex: 1;
+  text-align: center;
+  padding: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.segmented label.on {
+  background: var(--panel);
+  color: var(--ink);
+}
+.segmented label:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+.segmented input {
+  position: absolute;
+  opacity: 0;
+}
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+}
+.ranked {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+.ranked button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 64px 1fr 54px;
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  text-align: left;
+}
+.ranked button span:last-child {
+  text-align: right;
+}
+.ranked button[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--edit);
+}
+.bar {
+  height: 6px;
+  background: #1f2a3d;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #c44822, #ffa03c);
+}
+.pin-dot {
+  color: var(--edit);
+}
+.neuron-card {
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 1rem;
+}
+.neuron-card h3 {
+  font: 500 16px var(--serif);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+}
+.neuron-card h3 .muted {
+  font: 12px var(--mono);
+}
+.neuron-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font: 13px var(--mono);
+}
+.neuron-card dt {
+  color: var(--muted);
+}
+.neuron-card dt.edited {
+  color: var(--edit);
+}
+.neuron-card dd {
+  margin: 0;
+  text-align: right;
+}
+.pin-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pin-controls button {
+  font-size: 12px;
+  padding: 4px 9px;
+}
+.go-to {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 6px;
+  align-items: center;
+}
+.go-to label {
+  font-size: 12px;
+}
+.go-to h3 {
+  width: 100%;
+  margin: 0;
+}
+.go-to input {
+  padding: 3px 6px;
+  font-size: 12px;
+  width: 3.8em;
+}
+.go-to button {
+  padding: 3px 10px;
+  font-size: 12px;
+}

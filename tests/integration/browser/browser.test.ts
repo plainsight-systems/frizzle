@@ -53,8 +53,19 @@
 //      ended its turn: the page sets no limit of its own), with text. Then
 //      the edited reply, from the same seed, is done, ended "stop", with
 //      text other than the original's.
-//   4. Each pin, read back from the page (PromptView.tsx's "Pin n original
-//      value" and "Pin n edited value"):
+//   3a. The pins are made as a person makes them without a mouse: Open
+//      neurons, Go to the layer and neuron, then the inspector's Set,
+//      Scale × or Zero (views/deck/Inspector.tsx), and Run from the
+//      workbench's bar, which closes it; the deck's click selects through
+//      the same card, and is not driven here. Nor are a dragged box, Set
+//      on many, zoom and pan: they reach the engine as the same per-neuron
+//      edits, in one change of the pin set, which the Pins suite locks
+//      (tests/contracts/pins/); the box's cells, the Shape suite. A box
+//      that maps the wrong cells on screen would still pass all three.
+//   4. Each pin, read back from the page: Open neurons, Go to it, then the
+//      inspector's
+//      "Neuron original value" and "Neuron edited value", the exact f32 in
+//      each one's <data value>:
 //        - in the original, a number: the run's captures came back;
 //        - set to v: the edited value is exactly v, as the page writes it;
 //        - zero: the edited value is exactly 0;
@@ -92,7 +103,8 @@
 //   - Runs before every push, as the pre-push hook (scripts/pre_push.py),
 //     and by hand; not in CI, which has no GPU.
 //   - The page is driven by role and accessible name, as a person reads it
-//     (views/prompt/PromptView.tsx lists them); it has no test hooks.
+//     (App.tsx, views/prompt/PromptView.tsx and views/deck/Inspector.tsx
+//     list them); it has no test hooks.
 //   - No sleeps: each wait is on the page's state, within one deadline for
 //     the whole run; a page that stops changing fails at the deadline.
 //   - A missing prerequisite fails by name, and nothing is installed or
@@ -136,6 +148,7 @@ const SEED = "7";
 // One of each kind, the scale pin in the earliest layer (the header's
 // Inputs). Natively, at this seed, they change the reply, which still ends
 // "stop": 24 tokens, where the original is 37.
+const KIND_BUTTON = { set: "Set", scale: "Scale ×", zero: "Zero" } as const;
 const PINS = [
   { layer: "2", neuron: "1000", kind: "scale", value: "-4" },
   { layer: "16", neuron: "3000", kind: "set", value: "8" },
@@ -267,6 +280,26 @@ async function settledStatus(
   };
 }
 
+// The inspector's neuron card for that neuron, by Go to.
+async function goTo(page: Page, layer: string, neuron: string): Promise<void> {
+  await page.locator(aria("textbox", "Go to layer")).fill(layer);
+  await page.locator(aria("textbox", "Go to neuron")).fill(neuron);
+  await page.locator(aria("button", "Go")).click();
+  await page.waitForSelector(
+    aria("heading", `Neuron #${neuron} · layer ${layer}`),
+  );
+}
+
+// A value's exact text: its <data value>, or the status's words when it
+// has none.
+async function exactOf(page: Page, name: string): Promise<string> {
+  return page.$eval(
+    aria("status", name),
+    (el) =>
+      el.querySelector("data")?.getAttribute("value") ?? el.textContent ?? "",
+  );
+}
+
 async function textOf(page: Page, name: string): Promise<string> {
   return page.$eval(aria("status", name), (el) => el.textContent ?? "");
 }
@@ -327,19 +360,22 @@ test("the pinned model is fetched, runs, and an edit changes its reply", async (
     assert.equal(Number(downloaded), pin.sizeBytes);
     assert.equal(model.asked.count, 1);
 
-    // 3. One message, one seed, two pins in two layers.
+    // 3. One message, one seed, three pins in three layers, made in the
+    // inspector and held on the prompt.
     await page.locator(aria("textbox", "Message")).fill(MESSAGE);
     await page.locator(aria("textbox", "Seed")).fill(SEED);
-    for (const [index, p] of PINS.entries()) {
-      const n = index + 1;
-      await page.locator(aria("button", "Add pin")).click();
-      await page.locator(aria("textbox", `Pin ${n} layer`)).fill(p.layer);
-      await page.locator(aria("textbox", `Pin ${n} neuron`)).fill(p.neuron);
-      await page.locator(aria("combobox", `Pin ${n} kind`)).fill(p.kind);
-      // A zero takes no value: its field is disabled.
+    await page.locator(aria("button", "Open neurons")).click();
+    for (const p of PINS) {
+      await goTo(page, p.layer, p.neuron);
+      // A zero takes no value.
       if (p.value !== null) {
-        await page.locator(aria("textbox", `Pin ${n} value`)).fill(p.value);
+        await page.locator(aria("textbox", "Pin value")).fill(p.value);
       }
+      await page.locator(aria("button", KIND_BUTTON[p.kind])).click();
+      await page.waitForSelector(
+        aria("button", `Unpin layer ${p.layer} neuron ${p.neuron}`),
+        { timeout: remaining(start) },
+      );
     }
     await page.locator(aria("button", "Run")).click();
 
@@ -369,10 +405,12 @@ test("the pinned model is fetched, runs, and an edit changes its reply", async (
     );
 
     // 4. Each pin, read back: what its pin sent, in the edited run.
+    await page.locator(aria("button", "Open neurons")).click();
     for (const [index, p] of PINS.entries()) {
       const n = index + 1;
-      const before = await textOf(page, `Pin ${n} original value`);
-      const after = await textOf(page, `Pin ${n} edited value`);
+      await goTo(page, p.layer, p.neuron);
+      const before = await exactOf(page, "Neuron original value");
+      const after = await exactOf(page, "Neuron edited value");
       const original = Number(before);
       assert.ok(
         before.trim() !== "" && Number.isFinite(original),

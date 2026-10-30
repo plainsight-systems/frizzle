@@ -1,11 +1,13 @@
 // The page: React, the browser's DOM, and the protocol and edit types it
 // shares with the worker, which has its own project (tsconfig.worker.json).
+// Vite's client types declare what the page imports that is not code (the
+// theme's CSS, which Vite bundles with its fonts).
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": []
+    "types": ["vite/client"]
   },
   "include": [
     "src/main.tsx",

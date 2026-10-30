@@ -57,6 +57,24 @@ estimated at about 140 tok/s and has not been measured.
   [logical overview](../architecture/logical-overview.md)).
 - The interface is React, react-three-fiber, TypeScript and Vite, with npm at
   exact versions and a committed lockfile. The site is Hugo.
+- The deck's dependency change (slice 4, step 3): three 0.186.1 (MIT, no
+  dependencies of its own) and @react-three/fiber 9.8.2 (MIT), with
+  @types/three 0.186.0 for the type check only. They added 19 packages to
+  the lockfile, none with an install script: 13 at run time (three, fiber
+  and its zustand, its-fine, suspend-react, react-use-measure,
+  use-sync-external-store, buffer, base64-js, ieee754, @babel/runtime and
+  two type packages) and 6 for the type check (@types/three and what it
+  names, never bundled). Fiber's peers cap React below 19.4, so a React
+  bump past that waits on fiber; fiber 10 is still alpha and canary. The
+  page's script grew from 220 KB to 1,150 KB (317 KB gzipped), mostly
+  three.js, past Vite's 500 KB warning; splitting it is not done. three.js
+  and fiber are imported only by `views/` (`check.py boundaries`).
+- IBM Plex Serif and Plex Mono, Regular and Medium, are kept in the app as
+  four woff2 files with IBM's OFL licence (`app/src/theme/fonts/`), copied
+  from @ibm/plex-serif 2.0.0 and @ibm/plex-mono 2.5.0 and recorded by
+  SHA-256. The packages are not installed: both depend on
+  @ibm/telemetry-js, which would enter the lockfile with an install script
+  that only `.npmrc` keeps from running.
 - The app runs on Node 24.12.0, pinned in `app/.nvmrc` and refused otherwise,
   as LLVM is. Packages are installed by hand with `npm ci`, with no install
   scripts. TypeScript 7's native `tsc` only type-checks; Vite builds.
@@ -98,10 +116,31 @@ which comes over whole.
   last position's vector at its real width. Arrow keys step layers.
 - **Workbenches:** a working view per stage, wide vectors folded into
   grids (neurons 96 × 72). The MLP workbench is the layer deck: one card per
-  layer, its neurons as the grid, positive amber and negative cool blue;
+  layer, its neurons as the grid, a heat map of each neuron's size, either sign
+  (2026-10-29: a neuron pushes the residual as far either way, so the
+  sign is the tip's and the inspector's; small values stay dark);
   scrolling slides the front card away to the next layer. Beside it, for the
-  front layer: a ranked list, search by neuron number, a neuron card with
-  Set, Scale × and Zero, and the pinned neurons across all layers. The
+  front layer: the strongest neurons, the neuron card with Set, Scale ×
+  and Zero, and Go to a neuron by number. Neurons are picked by clicking
+  the grid, many by dragging a box (2026-10-30), and a card zooms and
+  pans; Set, Scale × and Zero apply to the whole selection, the engine
+  judging how many pins a run takes. The pins wait on the prompt, as
+  chips, one a layer and edit, for the next run. On the original reply's
+  card a pinned cell shows the value it will send, so a pin answers on
+  the grid at once; the edited reply's card shows what its run used. The
+  workbench gives the deck the focus on opening, so the wheel and keys
+  work without a first click on the grid. Each
+  card is coloured against its own layer's 99th-percentile magnitude, so a
+  few outliers do not darken the rest; the legend gives that scale to two
+  significant digits; infinities are full heat, NaN
+  magenta, and none sets the scale. The deck shows one reply's neurons at
+  a time, the original's or the edited's, by choice; the neuron card shows
+  both. The page is the conversation, full width, with the replies side
+  by side; the workbench is a layer over the whole window, opened from the
+  prompt or a reply, and Run closes it so the replies show as they
+  stream: reading and working on neurons happen in turns, and side by
+  side each was too narrow. Sizes are in megabytes; values are
+  rounded for reading, exact in a `<data value>`. The
   tokens a neuron pushes toward are deferred (2026-10-29): the model never
   produces them; they would be computed from the weights, and in Gemma 3
   only approximately, since the norm after the MLP scales each neuron by

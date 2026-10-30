@@ -86,7 +86,7 @@ tests, then its code.
    from the original beside it. Run as the pre-push hook, not in CI.
    Decision: puppeteer-core driving Chrome for Testing, at their pins.
 
-## 4. MLP workbench## 4. MLP workbench
+## 4. MLP workbench
 
 Ends with the layer deck in the night-glass theme: every run's neurons at
 the last position, in all 26 layers, with the ranked list, search, the
@@ -113,13 +113,30 @@ reviewed, then its code, then review.
    changed reply only suggests. No protocol test: the client passes the
    answer through untouched, so one would lock only the browser's message
    copying. Before the theme, so the check never depends on the scene.
-3. **Night glass and the layer deck** (`theme/`, `views/`). The theme, the
-   IBM Plex fonts kept in the app, and the deck: one folded 96 × 72 grid
-   per layer, sliding away as you scroll. three.js and react-three-fiber
-   join the app, a dependency change declared as one.
-4. **The panels beside the deck.** For the front layer: the ranked list,
-   search by neuron number, the neuron card with Set, Scale × and Zero;
-   the pinned neurons across all layers.
+3. **The workbench** (`theme/`, `views/`, `shape/`, session). Night glass
+   and the IBM Plex fonts kept in the app; a header with the GPU and the
+   model in megabytes; the conversation full width (the prompt with Run
+   on it and the pins as chips, then the two replies side by side); and
+   the workbench, a layer over the whole window opened from the prompt or
+   a reply and closed by Run: the layer deck (one 96 × 72 card per layer,
+   sliding away as you scroll, a heat map of each neuron's size; neurons
+   picked by clicking, or many by dragging a box; zoom and pan; a pinned
+   cell on the original reply's card showing what it will send) beside the
+   inspector (which reply, the strongest in the front layer, the neuron
+   or selection card with Set, Scale × and Zero, Go to a neuron). A range
+   pinned at once is one change and one chip. The panels, planned as a step 4, are in this
+   step: without them the deck could not be used as designed. three.js
+   and react-three-fiber join the app, a dependency change declared as one
+   (MEMORY, Platform). Tests: a new unit suite, Shape: what the deck shows
+   at a cell is the neuron folded there, a heat map of its size against
+   its layer's 99th-percentile magnitude, with infinities, NaN and empty
+   cells named; a box of cells back to neurons; overlays at the slot's
+   scale; ranking by strength; sizes and values as people read them. A
+   second, Pins: the pin set (adding, removing, grouping) and what a pin
+   sends.
+   The browser scenario makes its pins through Go to and the neuron card,
+   and reads them back from the card's exact values (a contract change of
+   how it drives the page, not of what it checks).
 
 ## 5. Pass map
 

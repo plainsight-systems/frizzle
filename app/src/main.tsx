@@ -3,12 +3,16 @@
 // without #root is a broken build, so its absence is thrown, not tolerated.
 //
 // Contract
+//   - The theme (theme/theme.css, night glass and its fonts) is imported
+//     here, once, before anything renders.
 //   - One Session (session/session.ts) per page, made here with
 //     startEngine (protocol/start.ts) before React renders, and handed to
 //     App inside StrictMode: the frame owns it, and nothing else makes one.
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+
+import "./theme/theme.css";
 
 import { App } from "./App.tsx";
 import { startEngine } from "./protocol/start.ts";

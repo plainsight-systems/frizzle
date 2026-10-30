@@ -9,6 +9,9 @@ TypeScript, under app/src/:
   files, views/ and theme/.
 - session/, shape/, engine/, protocol/ and worker/ are plain TypeScript: no
   .tsx files, and no React.
+- three.js (three and its subpaths) and react-three-fiber (@react-three/*)
+  are imported only by views/: the scene is a view's, and theme/ hands it
+  colours as plain numbers.
 - worker/ imports nothing from the root files, views/, session/, shape/ or
   theme/.
 - Nothing outside worker/ imports from worker/: the page reaches the worker
@@ -38,6 +41,8 @@ SPECIFIER = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]""", re.MULTILINE)
 REACT = re.compile(r'^(react|react-dom)(/|$)')
 REACT_ALLOWED = {'', 'views', 'theme'}  # '' is the root files
+SCENE = re.compile(r'^(three|@react-three/[^/]+)(/|$)')
+SCENE_ALLOWED = {'views'}
 PLAIN = {'session', 'shape', 'engine', 'protocol', 'worker'}
 WORKER_FORBIDDEN = {'', 'views', 'session', 'shape', 'theme'}
 
@@ -76,6 +81,8 @@ def _typescript():
             number = text.count('\n', 0, match.start()) + 1
             if REACT.match(spec) and area not in REACT_ALLOWED:
                 found.append(f'{where}:{number}: React ({spec}) outside the root, views/ and theme/')
+            if SCENE.match(spec) and area not in SCENE_ALLOWED:
+                found.append(f'{where}:{number}: three.js or react-three-fiber ({spec}) outside views/')
             if not spec.startswith('.'):
                 continue
             target = (path.parent / spec).resolve()
