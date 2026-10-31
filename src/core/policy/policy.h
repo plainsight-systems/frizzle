@@ -22,11 +22,19 @@ namespace frizzle::policy {
 // The context offered is not policy: it is derived from the file, the memory
 // budget and the cache precision.
 
-enum class CachePrecision {
+enum class CachePrecision : std::uint8_t {
   F16,
   BF16,
   Q8_0,
 };
+
+// The defaults below, named.
+inline constexpr std::uint64_t kDefaultMemoryBudget = 2ULL << 30U;  // 2 GiB
+inline constexpr std::uint32_t kDefaultRollbackReserve = 4096;
+inline constexpr float kDefaultTemperature = 0.8F;
+inline constexpr std::uint32_t kDefaultTopK = 40;
+inline constexpr float kDefaultTopP = 0.95F;
+inline constexpr float kDefaultMinP = 0.05F;
 
 struct LoadPolicy {
   CachePrecision cache_precision = CachePrecision::F16;
@@ -35,12 +43,12 @@ struct LoadPolicy {
   // per model on the devices it is listed for. The default covers a model of
   // about 1 GB with a working cache; a larger unmeasured model is rejected
   // at preflight's Fit stage, by name, rather than attempted.
-  std::uint64_t memory_budget = 2ull * 1024 * 1024 * 1024;
+  std::uint64_t memory_budget = kDefaultMemoryBudget;
   // Tokens a sliding-window layer's cache keeps beyond what one step needs,
   // so a turn can roll the cache back that far without restarting it:
   // enough to regenerate a long reply. A deeper rollback restarts the cache
   // from the first token.
-  std::uint32_t rollback_reserve = 4096;
+  std::uint32_t rollback_reserve = kDefaultRollbackReserve;
   // Stop tokens, by their text, beyond the end-of-generation tokens the
   // file names, where the model's generation config lists more than its
   // file carries (runtime/stops.h). Each must be one control token of the
@@ -51,10 +59,10 @@ struct LoadPolicy {
 // Defaults are llama.cpp's, the most widely exercised settings for models
 // without a card of their own.
 struct SamplingSettings {
-  float temperature = 0.8f;
-  std::uint32_t top_k = 40;
-  float top_p = 0.95f;
-  float min_p = 0.05f;
+  float temperature = kDefaultTemperature;
+  std::uint32_t top_k = kDefaultTopK;
+  float top_p = kDefaultTopP;
+  float min_p = kDefaultMinP;
 };
 
 // The randomness of a run. Its own type, so a seed cannot be passed where a
@@ -63,7 +71,7 @@ enum class Seed : std::uint64_t {};
 
 struct TurnPolicy {
   SamplingSettings sampling;
-  Seed seed;
+  Seed seed{};
   // The most tokens the reply may draw, at least 1; the context offered
   // bounds it first, so the largest value asks for no other limit.
   std::uint32_t max_tokens = UINT32_MAX;

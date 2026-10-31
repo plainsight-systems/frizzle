@@ -13,14 +13,11 @@ constexpr std::uint64_t kOutstanding = kernels::Order::kOutstanding;
 
 }  // namespace
 
-Turn::Turn(std::uint32_t cached, std::uint32_t prompt, std::uint32_t capacity,
-           std::uint32_t max_tokens) noexcept
-    : cached_(cached),
-      prompt_(prompt),
-      capacity_(capacity),
-      max_tokens_(max_tokens),
-      blocks_((prompt - cached + residency::kPrefillBlock - 1) /
-              residency::kPrefillBlock) {}
+Turn::Turn(const TurnSize& size) noexcept
+    : cached_(size.cached),
+      prompt_(size.prompt),
+      capacity_(size.capacity),
+      max_tokens_(size.max_tokens) {}
 
 std::optional<Planned> Turn::next() noexcept {
   if (ended_ || run_ - reported_ >= kOutstanding) return std::nullopt;
@@ -96,8 +93,9 @@ TurnFailure Turn::failure() const noexcept { return failure_; }
 TurnEnd Turn::end() const noexcept { return end_; }
 
 std::uint32_t Turn::kept() const noexcept {
-  if (failure_ == TurnFailure::Step || failure_ == TurnFailure::DeviceLost)
+  if (failure_ == TurnFailure::Step || failure_ == TurnFailure::DeviceLost) {
     return 0;
+  }
   return std::min(written(), prompt_ + accepted_);
 }
 

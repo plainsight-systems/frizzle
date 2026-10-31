@@ -268,7 +268,10 @@ StartResult Runtime::start(std::span<const tokenizer::TokenId> prompt,
 
   s.step = {};
   sampler::apply(policy.sampling, policy.seed, s.step);
-  s.turn.emplace(kept, length, s.cache.capacity(), policy.max_tokens);
+  s.turn.emplace(TurnSize{.cached = kept,
+                          .prompt = length,
+                          .capacity = s.cache.capacity(),
+                          .max_tokens = policy.max_tokens});
   s.on_token = on_token;
   s.on_turn = on_turn;
   s.userdata = userdata;

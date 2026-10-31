@@ -88,7 +88,7 @@ namespace frizzle::runtime {
 //            it feeds is known, and its draw is read a step behind.
 
 // How a turn ended, when it did not fail.
-enum class TurnEnd {
+enum class TurnEnd : std::uint8_t {
   Stop,       // a stop token was drawn
   Limit,      // the turn's max_tokens were emitted
   Context,    // the next step would be at the context offered
@@ -96,7 +96,7 @@ enum class TurnEnd {
 };
 
 // Why a turn failed.
-enum class TurnFailure {
+enum class TurnFailure : std::uint8_t {
   None,
   NonFinite,  // the top candidate's logit was not finite
   Step,  // a step failed validation, or the device reported an internal error
@@ -104,7 +104,7 @@ enum class TurnFailure {
 };
 
 // Why a step did not complete, as the program reports it (kernels/program.h).
-enum class StepFailure {
+enum class StepFailure : std::uint8_t {
   Step,
   DeviceLost,
   Cancelled,  // the program was destroyed with the step in flight
@@ -121,7 +121,7 @@ struct Planned {
 };
 
 // What becomes of a draw.
-enum class Draw {
+enum class Draw : std::uint8_t {
   None,     // the step asked for no logits: nothing was drawn
   Emit,     // accepted and emitted
   Stop,     // accepted, not emitted; the turn has ended
@@ -129,12 +129,19 @@ enum class Draw {
   Failed,   // not accepted; the turn has ended NonFinite
 };
 
+// A turn's counts (above), named so none is passed in another's place.
+struct TurnSize {
+  std::uint32_t cached;
+  std::uint32_t prompt;
+  std::uint32_t capacity;
+  std::uint32_t max_tokens;
+};
+
 class Turn {
  public:
   // Preconditions: cached < prompt <= capacity <= kernels::kMaxPositions,
   // max_tokens >= 1.
-  Turn(std::uint32_t cached, std::uint32_t prompt, std::uint32_t capacity,
-       std::uint32_t max_tokens) noexcept;
+  explicit Turn(const TurnSize& size) noexcept;
 
   // The next step to run, counted run; none when kOutstanding steps are
   // outstanding or nothing more is planned.
@@ -180,8 +187,6 @@ class Turn {
   std::uint32_t prompt_;
   std::uint32_t capacity_;
   std::uint32_t max_tokens_;
-  std::uint32_t blocks_;  // prefill blocks; the last, and every step after,
-                          // asks for logits
   std::uint32_t prefilled_ = 0;  // prompt tokens planned past `cached`
   std::uint32_t decodes_ = 0;    // decode steps planned
   std::uint32_t drawn_ = 0;      // draws reported, whatever became of them
