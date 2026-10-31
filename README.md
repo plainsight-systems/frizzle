@@ -12,9 +12,11 @@ have written.
 The model is Gemma 3 1B, running entirely on your device through WebGPU, with
 an engine in C++ compiled to WebAssembly. Nothing runs on a server.
 
-**Status:** being designed. The repository holds the process, the decisions so
-far and design concepts; no engine or app code has been written yet. The
-[work queue](docs/process/QUEUE.md) says what comes next.
+**Status:** working, run locally; not yet hosted. The engine runs Gemma 3 1B
+in the browser through WebGPU. The app writes a reply, opens a workbench of
+every layer's MLP neurons, pins the ones you choose, and writes the steered
+reply beside it from the same seed. Steering from any word of the reply is
+next; the [work queue](docs/process/QUEUE.md) says what follows.
 
 ## Why Frizzle
 
@@ -35,7 +37,7 @@ under Plainsight Systems LLC.
 | --- | --- |
 | `src/` | The C++ engine, compiled to WebAssembly for the browser and natively for tests |
 | `app/` | The interface: React, react-three-fiber, TypeScript and Vite |
-| `web/` | The project site, which hosts the app |
+| `web/` | The project site, which will host the app (not yet built) |
 | `config/model.json` | The one pinned model file |
 | `tests/` | The tests, and the inventory of what each one guards |
 | `tools/`, `scripts/` | Reference and fixture generators; checks and pinned tooling |

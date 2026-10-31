@@ -10,9 +10,58 @@ under CC BY 4.0. Suggested attribution:
 Third-party components and weights
 =================================
 
+Gemma
+-----
 Model weights are not bundled. The browser downloads the pinned file in
 config/model.json, unsloth/gemma-3-1b-it-GGUF, which is distributed under
 Google's Gemma terms of use.
 
-No third-party code is included yet. Each dependency added later is recorded
-here with its version, license and role.
+The tests carry material taken or derived from that model:
+  - tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.gguf: the pinned file's
+    tokenizer metadata (vocabulary, scores, token types, special tokens,
+    chat template), copied byte for byte, with no weights
+    (scripts/make_tokenizer_fixture.py).
+  - tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.inc: token identifiers from
+    Hugging Face tokenizers on google/gemma-3-1b-it.
+  - tests/fixtures/reference/gemma-3-1b-it-q4_0.inc: logits from llama.cpp
+    on the pinned file.
+  - tests/fixtures/template/gemma-3-1b-it-q4_0.json: hashes of conversations
+    rendered with the model's chat template.
+
+Gemma is provided under and subject to the Gemma Terms of Use found at
+ai.google.dev/gemma/terms. Its use is also subject to the Gemma Prohibited
+Use Policy at ai.google.dev/gemma/prohibited_use_policy.
+
+Ported code
+-----------
+The Gemma 3 path in src/ starts from Charlotte (commit e003048), by the same
+author, under Apache-2.0. src/ported.json lists each ported file and whether
+it has changed since.
+
+Fonts
+-----
+IBM Plex Serif and IBM Plex Mono, in app/src/theme/fonts/, copyright 2017
+IBM Corp., under the SIL Open Font License 1.1 (app/src/theme/fonts/
+LICENSE.txt).
+
+Dependencies
+------------
+Not included in this repository: each is fetched by npm, CMake or a script
+at its pinned version.
+
+App (app/package.json):
+  - react, react-dom 19.3.1, MIT: the page.
+  - three 0.186.1 and @react-three/fiber 9.8.2, MIT: the neuron deck.
+  - @huggingface/jinja 0.5.10, MIT: renders the chat template in the worker.
+  - Build and checks: vite 8.3.4 and @vitejs/plugin-react 6.1.2, MIT;
+    typescript 7.0.2, Apache-2.0; prettier 3.9.10, MIT; @types packages,
+    MIT.
+Browser scenario (tests/integration/browser/package.json):
+  - puppeteer-core 25.15.0 and @puppeteer/browsers 3.2.5, Apache-2.0,
+    driving Chrome for Testing.
+Native:
+  - Dawn, BSD-3-Clause: WebGPU for native builds and tests, a prebuilt
+    release fetched by scripts/fetch_dawn.py.
+  - doctest 2.4.12, MIT: the native test framework (tests/CMakeLists.txt).
+  - Emscripten, in the emscripten/emsdk:6.0.8 container: builds the
+    browser module.
