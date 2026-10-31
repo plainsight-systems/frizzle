@@ -32,9 +32,11 @@ set(FRIZZLE_MODEL_FILE "${PROJECT_SOURCE_DIR}/.cache/models/gemma-3-1b-it-q4_0.g
 
 add_executable(frizzle_tests
     support/main.cpp
+    contracts/cache/prefix_test.cpp
     contracts/edits/edit_specs_test.cpp
     contracts/gguf/model_file_test.cpp
     contracts/tokenizer/tokenizer_test.cpp
+    contracts/turn/turn_test.cpp
 )
 target_link_libraries(frizzle_tests PRIVATE frizzle_core doctest::doctest)
 target_include_directories(frizzle_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

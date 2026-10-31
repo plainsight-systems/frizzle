@@ -1,19 +1,19 @@
 // Axis H (view): the layer deck, the workbench's centre column. Every
-// layer's neurons at the last prompt position, as one reply's run used
-// them: one card per layer, its neurons in a grid you point at, click and
+// layer's neurons at the branch point, as one side used them (cards.ts,
+// neuronsOf): one card per layer, its neurons in a grid you point at, click and
 // drag across, zoom and pan, the front card sliding away to show the next
 // (docs/design/concepts/deck.html, the reviewed concept).
 //
 // Contract
-//   - Deck({run, reply, cards, faces, previewing, layer, onLayer, pins,
-//     selection, onSelect, autoFocus}): `cards` are the reply's layers
-//     (cards.ts), null when it has none; `faces` the pixels each card
+//   - Deck({neurons, cards, faces, previewing, layer, onLayer, pins,
+//     selection, onSelect, autoFocus}): `neurons` the side shown
+//     (cards.ts), `cards` its layers, null when it has none; `faces` the pixels each card
 //     shows (cards.ts, facesOf); `previewing` whether those show what the
-//     pins will send (the original reply's cards); `layer` is the front
+//     pins will send (the reply's cards, not the steered reply's); `layer` is the front
 //     card's number. With autoFocus, the deck takes the focus once it has
 //     cards.
 //   - Without cards: status "Deck" says why, in the page's words (cards.ts,
-//     absence), and nothing is drawn.
+//     neuronsOf), and nothing is drawn.
 //   - With cards: status "Deck" reads "{n} layers". Each card shows "Layer
 //     {l}" and, when any pin is held in it, "● {k} pinned"; its neurons in
 //     the grid fold.ts gives, its face (a heat map of each neuron's size
@@ -138,7 +138,6 @@ import {
 import type { Selection } from "../../App.tsx";
 import type { Edit } from "../../engine/edits.ts";
 import { sentBy } from "../../session/pins.ts";
-import type { ReplyState, Run } from "../../session/session.ts";
 import { neuronAt, neuronsIn } from "../../shape/fold.ts";
 import { signed, significant } from "../../shape/numbers.ts";
 import {
@@ -148,7 +147,7 @@ import {
   RING_PIN,
   RING_SELECTED,
 } from "../../theme/palette.ts";
-import { type Card, absence } from "./cards.ts";
+import type { Card, Neurons } from "./cards.ts";
 
 // The scene's units: a card's grid is GRID_WIDTH wide, its height the
 // grid's proportion of that, with a header strip above it and a margin of
@@ -210,8 +209,7 @@ interface At {
 }
 
 export function Deck(props: {
-  readonly run: Run | null;
-  readonly reply: ReplyState | null;
+  readonly neurons: Neurons;
   readonly cards: readonly Card[] | null;
   readonly faces: readonly Uint8Array[] | null;
   readonly previewing: boolean;
@@ -222,7 +220,7 @@ export function Deck(props: {
   readonly onSelect: (chosen: Selection) => void;
   readonly autoFocus?: boolean;
 }) {
-  const { run, reply, cards, faces, previewing, layer, onLayer } = props;
+  const { neurons, cards, faces, previewing, layer, onLayer } = props;
   const { pins, selection, onSelect, autoFocus = false } = props;
   const [webgl] = useState(hasWebGL);
   const reduced = useReducedMotion();
@@ -308,7 +306,9 @@ export function Deck(props: {
   }, [autoFocus, hasCards]);
 
   const why = webgl
-    ? absence(run, reply)
+    ? neurons.kind === "none"
+      ? neurons.why
+      : null
     : "The deck needs WebGL, which this browser did not give";
   const card = cards?.[layer];
   const pinOf = (neuron: number) =>
@@ -493,7 +493,7 @@ export function Deck(props: {
   );
 }
 
-// What the tip adds for a pinned neuron: on the original reply's card, the
+// What the tip adds for a pinned neuron: on the reply's card, the
 // value it will send (≈ for a scale when an earlier layer is pinned too,
 // as the run's own value there may differ from this card's).
 function tipPin(

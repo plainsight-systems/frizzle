@@ -1,7 +1,7 @@
 // Axis H (view): the MLP workbench, a layer over the whole window: a bar
-// with the prompt, the pins and Run; under it the layer deck and the
-// inspector beside it, over one reply's neurons, one front layer and one
-// selected neuron (docs/design/concepts/deck.html, the reviewed concept).
+// with the prompt, the branch point, the pins and Run; under it the layer
+// deck and the inspector beside it, over one side's neurons at the branch
+// point, one front layer and one selected neuron (docs/design/concepts/deck.html, the reviewed concept).
 //
 // Contract
 //   - Workbench({session, state, message, canRun, onRun, onClose, which,
@@ -11,12 +11,18 @@
 //     click first (a click there would pick a neuron); otherwise to the
 //     dialog.
 //   - The bar: the prompt it works on (the run's message, or the message
-//     typed when there is no run yet) › "MLP neurons"; the pins held, as
+//     typed when there is no run yet) › "MLP neurons" and where: "at the
+//     reply's start" (point 0) or "after “{word}”", the word the point
+//     falls in up to the point (session/branch.ts, beforePoint), trimmed;
+//     the pins held, as
 //     chips (PinChips.tsx: showing one selects its neurons here); button "Run"
 //     (onRun, which also closes the workbench); button "Close", and Esc,
-//     which close it without running (onClose).
-//   - The deck (Deck.tsx) and the inspector (Inspector.tsx), on the reply
-//     `which`, the front layer `front`, the neurons in `selection`; all
+//     which close it without running (onClose). No Stop here: Stop is
+//     beside the prompt's Run (PromptView.tsx), reached once this closes.
+//   - The deck (Deck.tsx) and the inspector (Inspector.tsx), on the side
+//     `which` (cards.ts, neuronsOf), or the reply's while the run has no
+//     steered reply (none yet, or one just accepted), whose radio is then
+//     disabled, the front layer `front`, the neurons in `selection`; all
 //     three are the frame's (App.tsx), so they last between visits.
 //     Selecting brings the selection's layer to the front (onSelect does
 //     both).
@@ -34,11 +40,12 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import type { Selection } from "../../App.tsx";
-import type { Session, SessionState } from "../../session/session.ts";
+import { beforePoint } from "../../session/branch.ts";
+import type { Run, Session, SessionState } from "../../session/session.ts";
 import { PinChips } from "../prompt/PinChips.tsx";
 import { Deck } from "./Deck.tsx";
 import { Inspector } from "./Inspector.tsx";
-import { type Which, capturesOf, cardsOf, facesOf, replyOf } from "./cards.ts";
+import { type Which, cardsOf, facesOf, neuronsOf } from "./cards.ts";
 
 export function Workbench(props: {
   readonly session: Session;
@@ -55,11 +62,19 @@ export function Workbench(props: {
   readonly onSelect: (chosen: Selection) => void;
 }) {
   const { session, state, message, canRun, onRun, onClose } = props;
-  const { which, onWhich, front, onFront, selection, onSelect } = props;
+  const { onWhich, front, onFront, selection, onSelect } = props;
+  // The steered side exists only with a steered reply.
+  const which: Which =
+    props.which === "steered" && (state.run?.branch ?? null) === null
+      ? "reply"
+      : props.which;
   const dialog = useRef<HTMLDivElement>(null);
-  const reply = replyOf(state.run, which);
-  const captures = capturesOf(reply);
-  const cards = useMemo(() => cardsOf(captures), [captures]);
+  const neurons = neuronsOf(state.run, which);
+  const captures = neurons.kind === "taken" ? neurons.captures : null;
+  const cards = useMemo(
+    () => (captures === null ? null : cardsOf({ kind: "taken", captures })),
+    [captures],
+  );
   const faces = useMemo(
     () => (cards === null ? null : facesOf(cards, state.pins, which)),
     [cards, state.pins, which],
@@ -98,7 +113,7 @@ export function Workbench(props: {
         </button>
         <p className="prompt-summary">
           <span>{prompt === "" ? "No prompt yet" : `“${prompt}”`}</span>
-          <span className="muted"> › MLP neurons</span>
+          <span className="muted"> › MLP neurons {pointText(state.run)}</span>
         </p>
         <PinChips session={session} pins={state.pins} onPick={onSelect} />
         <button
@@ -112,11 +127,10 @@ export function Workbench(props: {
       </header>
       <div className="workbench-body">
         <Deck
-          run={state.run}
-          reply={reply}
+          neurons={neurons}
           cards={cards}
           faces={faces}
-          previewing={which === "original"}
+          previewing={which === "reply"}
           layer={layer}
           onLayer={onFront}
           pins={state.pins}
@@ -137,4 +151,14 @@ export function Workbench(props: {
       </div>
     </div>
   );
+}
+
+// Where the neurons are read: the reply's start, or after the text of the
+// word the point falls in, up to the point (an accepted reply's point may
+// fall inside a word, where its steered reply went on without a space).
+function pointText(run: Run | null): string {
+  if (run === null || run.reply.kind !== "done" || run.point === 0) {
+    return "at the reply's start";
+  }
+  return `after “${beforePoint(run.reply.tokens, run.point).trim()}”`;
 }

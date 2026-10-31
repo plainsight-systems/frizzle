@@ -1,13 +1,14 @@
 // Axis H (view): the inspector, the workbench's right column. Which
-// reply's neurons the deck shows; the strongest neurons in the front
-// layer; the selection: one neuron, with its value in both replies, or
+// side's neurons the deck shows, at the branch point; the strongest
+// neurons in the front layer; the selection: one neuron, with its value in
+// the reply and the steered reply, or
 // many, with how many are pinned; Set, Scale × and Zero for what is
 // selected; and going to a neuron by number.
 //
 // Contract
 //   - Its names are the page's interface, which the browser scenario uses:
-//       radio "Original reply" (chosen at first), radio "Edited reply"
-//         (disabled while the run shown has no pins), in a group "Neurons
+//       radio "Reply" (chosen at first), radio "Steered reply" (disabled
+//         while the run shown has no steered reply), in a group "Neurons
 //         from"
 //       a list "Strongest in layer {l}": eight buttons, the front layer's
 //         largest magnitudes (shape/rank.ts), each "#{n}", a bar of its
@@ -15,10 +16,11 @@
 //         value with its sign and two places; pressing one selects it
 //         alone (pressed while it is in the selection)
 //       with one neuron selected: heading "Neuron #{n} · layer {l}"; status
-//         "Neuron original value" and status "Neuron edited value", each
+//         "Neuron reply value" and status "Neuron steered value", each
 //         the value with its sign and three places, the exact f32 in a
 //         <data value> (String, "-0" for negative zero), or the page's
-//         words for why there is none (cards.ts); status "Neuron pin":
+//         words for why there is none (cards.ts, neuronsOf), both at the
+//         branch point; status "Neuron pin":
 //         "Not pinned" | "Pinned: set to {v}" | "Pinned: scaled by {v}" |
 //         "Pinned: zeroed"; textbox "Pin value"; buttons "Set", "Scale ×",
 //         "Zero", and "Unpin" when pinned
@@ -39,9 +41,9 @@
 //     several, or go to one by number."
 //
 // Design
-//   - The values are read from each reply's own captures, whichever reply
-//     the deck shows, so a pin's effect reads directly: original, then
-//     edited.
+//   - The values are read from each side's neurons at the branch point
+//     (cards.ts), whichever side the deck shows, so a pin's effect reads
+//     directly: the reply, then the steered reply.
 //   - Rounded for reading; exact in <data value> for anyone who needs it.
 
 import { useId, useState } from "react";
@@ -52,7 +54,7 @@ import type { Session, SessionState } from "../../session/session.ts";
 import { signed } from "../../shape/numbers.ts";
 import { strongest } from "../../shape/rank.ts";
 import { parseValue, parseWord } from "../prompt/fields.ts";
-import { type Card, type Which, valueAt } from "./cards.ts";
+import { type Card, type Which, neuronsOf, valueAt } from "./cards.ts";
 
 const LISTED = 8;
 const COUNT = new Intl.NumberFormat("en-US");
@@ -75,16 +77,18 @@ export function Inspector(props: {
     <aside className="column inspector" aria-label="Inspector">
       <fieldset className="segmented">
         <legend>Neurons from</legend>
-        {(["original", "edited"] as const).map((w) => (
+        {(["reply", "steered"] as const).map((w) => (
           <label key={w} className={which === w ? "on" : undefined}>
             <input
               type="radio"
               name="neurons-from"
               checked={which === w}
-              disabled={w === "edited" && (run === null || run.edited === null)}
+              disabled={
+                w === "steered" && (run === null || run.branch === null)
+              }
               onChange={() => onWhich(w)}
             />
-            {w === "original" ? "Original reply" : "Edited reply"}
+            {w === "reply" ? "Reply" : "Steered reply"}
           </label>
         ))}
       </fieldset>
@@ -197,18 +201,18 @@ function NeuronCard(props: {
         <span className="muted">· layer {neuron.layer}</span>
       </h3>
       <dl>
-        <dt>Original</dt>
+        <dt>Reply</dt>
         <dd>
           <Value
-            label="Neuron original value"
-            valued={valueAt(run, run?.original ?? null, neuron)}
+            label="Neuron reply value"
+            valued={valueAt(neuronsOf(run, "reply"), neuron)}
           />
         </dd>
-        <dt className="edited">Edited</dt>
+        <dt className="edited">Steered</dt>
         <dd className="edited">
           <Value
-            label="Neuron edited value"
-            valued={valueAt(run, run?.edited ?? null, neuron)}
+            label="Neuron steered value"
+            valued={valueAt(neuronsOf(run, "steered"), neuron)}
           />
         </dd>
       </dl>

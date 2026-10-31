@@ -31,9 +31,10 @@ namespace frizzle::runtime {
 //     it cannot run (StartError): a turn still running; a lost device; an
 //     empty prompt; a prompt longer than the context offered, naming both
 //     counts so the page can drop its oldest messages and render again
-//     (logical-overview.md); settings check refuses (sampler/sampler.h), or
-//     a max_tokens of 0. Otherwise each emitted token is passed to on_token
-//     and the turn's result to on_turn, once.
+//     (logical-overview.md); or settings check refuses (sampler/sampler.h).
+//     Otherwise each emitted token is passed to on_token and the turn's
+//     result to on_turn, once. A max_tokens of 0 inspects: the prompt is
+//     run and kept, nothing is emitted, and the turn ends Limit (turn.h).
 //   - Invariant, between turns: the tokens held are exactly the cache's
 //     length, those whose keys and values it holds. During a turn they also
 //     hold the prompt's uncached tokens and the accepted draws.
@@ -42,7 +43,8 @@ namespace frizzle::runtime {
 //     rollback past the ring's reserve empties both (cache/kv.h). It never
 //     lengthens them. Refused, false and changing nothing, while a turn
 //     runs; the turn callback runs after the turn has ended, so it may
-//     rewind. The engine rewinds after a run with edits (runtime/engine.h).
+//     rewind. The engine rewinds before a run to the first position whose
+//     edits differ from the cached run's (runtime/engine.h).
 //   - Cancel ends the running turn at its next report; the steps already run
 //     report first, and are discarded (turn.h). A cancel with no turn running
 //     does nothing.
@@ -117,8 +119,8 @@ namespace frizzle::runtime {
 //   - Nothing is allocated after construction: the held tokens are reserved
 //     at the context offered plus one, the step is the runtime's own, the
 //     turn is a value, and a failure's message is reserved (MEM.9).
-//   - What it asks of the other contracts: TurnPolicy's max_tokens, checked
-//     at least 1, bounded first by the context offered, and LoadPolicy's
+//   - What it asks of the other contracts: TurnPolicy's max_tokens, 0 an
+//     inspection, bounded first by the context offered, and LoadPolicy's
 //     stop texts (policy/policy.h, stops.h); in diagnostic builds the
 //     program's launch count, the profiled step's bound; and the cache after
 //     a step queued behind a turn's end keeps each position whose input
@@ -180,6 +182,10 @@ struct TurnResult {
   std::uint32_t emitted;     // the reply's tokens passed to the token callback
   std::optional<tokenizer::TokenId>
       stop;  // the stop token drawn, for TurnEnd::Stop
+  // Text the last emitted token ends with that its callback could not yet
+  // pass: the generator's (generator.h); the runtime, which handles no
+  // text, leaves it empty.
+  std::string_view tail;
 };
 
 // Each emitted token, in order, a step after it was drawn.
@@ -227,6 +233,9 @@ class Runtime {
 
   // The context offered: the most tokens a prompt and its reply hold.
   [[nodiscard]] std::uint32_t capacity() const noexcept;
+
+  // The positions the cache holds; between turns, the tokens held.
+  [[nodiscard]] std::uint32_t cached() const noexcept;
 
   // Between turns, keeps at most the first `tokens` of the cache and the
   // tokens held: the cache's truncate (cache/kv.h), which empties it for a

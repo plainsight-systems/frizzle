@@ -2,11 +2,17 @@
 //
 // Contract locked: in a real browser with WebGPU, the app as it ships
 // fetches and verifies the pinned file, generates a reply, and, with
-// neurons pinned in three layers, gives an edited reply from the same seed
-// that differs from the original shown beside it; and each pinned neuron,
-// read back from the page, holds in the edited run exactly what its pin
+// neurons pinned in three layers, gives a steered reply from the same seed
+// that differs from the reply shown beside it; and each pinned neuron,
+// read back from the page, holds in the steered run exactly what its pin
 // sent: every edit crosses the page, the worker and the module as sent, and
-// every run's captures come back from the engine.
+// every run's captures come back from the engine. Then, steering from a
+// word: the steered reply keeps the reply's text to the word, each pin
+// holds there what it sent, read against the reply's neurons at that word;
+// and accepting it makes it the reply, its neurons at the point the
+// steered reply's, bit for bit. Last, a steered reply that would run to the
+// end of the context is stopped, and the stopped reply accepted: never a
+// dead end.
 //
 // Inputs
 //   - The app as it ships: app/ built by its own `npm run build` (with the
@@ -29,15 +35,15 @@
 //   - The replay scenario's message and seed, "Name three colours of the
 //     rainbow." and 7, and three pins, one of each kind, chosen in step 2's
 //     code by running them natively (tools/frizzle with --pin) against two
-//     criteria: they change the reply, and the edited reply still ends by
+//     criteria: they change the reply, and the steered reply still ends by
 //     itself, "stop", well within the deadline. The captures arrive with a
-//     run's end (runtime/engine.h), so the edited reply must end; the
+//     run's end (runtime/engine.h), so the steered reply must end; the
 //     replay's two set pins make the model repeat itself to the context
 //     (32,768 tokens), and are not used. The scale pin is in the earliest
 //     pinned layer: nothing edited runs before it, so its input in the
-//     edited run is the original run's, bit for bit (the kernels are batch-
-//     invariant, graph/graph.h), and its edited value is exactly
-//     Math.fround(original × k). Its k is not 1, which the edit kernel
+//     steered run is the reply's, bit for bit (the kernels are batch-
+//     invariant, graph/graph.h), and its steered value is exactly
+//     Math.fround(reply × k). Its k is not 1, which the edit kernel
 //     leaves alone (edit/edit_kernel.h). If the model or its settings
 //     change and the pins stop meeting the criteria, others are chosen,
 //     said so in the commit.
@@ -49,10 +55,10 @@
 //      downloaded are the pin's sizeBytes, asked for once. The worker keeps
 //      and loads a file only once its size and SHA-256 match the pin
 //      (worker/delivery/download.ts), so a ready model is a verified one.
-//   3. After Run, the original reply is done, ended "stop" (the model
-//      ended its turn: the page sets no limit of its own), with text. Then
-//      the edited reply, from the same seed, is done, ended "stop", with
-//      text other than the original's.
+//   3. After Run, the reply is done, ended "stop" (the model ended its
+//      turn: the page sets no limit of its own), with text. Then the
+//      steered reply, from the start and the same seed, is done, ended
+//      "stop", with text other than the reply's.
 //   3a. The pins are made as a person makes them without a mouse: Open
 //      neurons, Go to the layer and neuron, then the inspector's Set,
 //      Scale × or Zero (views/deck/Inspector.tsx), and Run from the
@@ -63,15 +69,42 @@
 //      (tests/contracts/pins/); the box's cells, the Shape suite. A box
 //      that maps the wrong cells on screen would still pass all three.
 //   4. Each pin, read back from the page: Open neurons, Go to it, then the
-//      inspector's
-//      "Neuron original value" and "Neuron edited value", the exact f32 in
-//      each one's <data value>:
-//        - in the original, a number: the run's captures came back;
-//        - set to v: the edited value is exactly v, as the page writes it;
-//        - zero: the edited value is exactly 0;
-//        - scale by k: the edited value is exactly Math.fround(original ×
-//          k), the original being the value the page shows for it.
-//   5. Nothing was asked of any host but the two local servers.
+//      inspector's "Neuron reply value" and "Neuron steered value", the
+//      exact f32 in each one's <data value>:
+//        - in the reply, a number: the run's captures came back;
+//        - set to v: the steered value is exactly v, as the page writes it;
+//        - zero: the steered value is exactly 0;
+//        - scale by k: the steered value is exactly Math.fround(reply ×
+//          k), the reply's being the value the page shows for it.
+//   5. Steering from a word: the reply's WORD-th word pressed (its branch
+//      point, after it), then Run from the workbench. The steered reply is
+//      done, ended "stop"; its text begins with the reply's text up to
+//      that word and is not the reply's. Each pin read back as in 4, at
+//      that word: the reply's value is an inspection's (maxTokens 0, the
+//      reply's tokens to the word kept), the steered value the branch's.
+//      The scale pin's layer is the earliest pinned, and the tokens before
+//      the point are the reply's own, so its input at the point is the
+//      reply's there, bit for bit: Math.fround(reply × k) holds only if
+//      the kept identifiers crossed whole, the edits started at the point
+//      (not at step 0, nor later), and both runs captured at the point.
+//   6. Accept: the reply's text becomes the steered reply's, the steered
+//      column reads "Not steered", and each pin's reply value at the point
+//      is exactly the steered value read in 5: the accepted reply's
+//      neurons are the run that made it.
+//   7. Stop: the replay's strong pin added (layer 12, neuron 4031, set
+//      100), which makes the model repeat itself to the context, then Run
+//      from the same point. While it runs the ending counts its tokens;
+//      once it has run RUNAWAY tokens, Stop. The steered
+//      reply is done, ended "cancelled", its text beginning with the
+//      reply's to the point, and Accept is enabled. Accept: the reply's
+//      text becomes the stopped reply's, the steered column reads "Not
+//      steered", and the neurons at the point, read by the inspection the
+//      page runs since a stopped reply has none of its own, hold each pin
+//      as sent: the three of step 5 their values there (the scale pin's
+//      layer is before the strong pin's, so its input is unchanged), the
+//      strong pin 100. A pin that ends the reply by itself before RUNAWAY
+//      tokens fails by name: another is chosen.
+//   8. Nothing was asked of any host but the two local servers.
 //
 //   What the read-back checks, and what it does not. The capture's unit
 //   test locks the copy and the reader on a synthetic plan; the edit
@@ -82,18 +115,35 @@
 //   it and captures the layer after the edit, reads the store back, and the
 //   neurons cross the module, the worker and the page to the value shown.
 //   So these fail here, by name: a pin's kind, value, layer or neuron
-//   garbled on the way in; the engine reading the wrong buffer back, or
+//   garbled on the way in; a kept identifier dropped or reordered, or a
+//   range's start misplaced (step 5's scale pin); the engine reading the wrong buffer back, or
 //   none; a layer's slot misplaced in the module or the page; captures
 //   dropped or not transferred. What still passes:
 //     - a wrong value at a neuron nobody pinned: only pinned neurons are
 //       read back;
 //     - a capture taken at the wrong step: a set or zero pin holds at
 //       every scoring step, so its value would match there too; only the
-//       scale pin, whose original it is tied to, would likely fail;
-//     - the original's values themselves: nothing independent says what
+//       scale pin, whose reply value it is tied to, would likely fail;
+//     - the reply's values themselves: nothing independent says what
 //       they should be, so they are checked as numbers, and the scale
-//       pin's original only through its edited value;
-//     - a NaN's payload: the page writes every NaN as "NaN".
+//       pin's reply value only through its steered value;
+//     - a NaN's payload: the page writes every NaN as "NaN";
+//     - a range's end: after one accept nothing branches again, so no
+//       edit with an end crosses the boundary here; the replay suite locks
+//       the engine's reading of ends, and both ends cross as two words of
+//       one edit, packed alike;
+//     - which words the page offers, and the mark and fading drawn: the
+//       Branch suite locks the words, and nothing locks the drawing;
+//     - where step 7's stop lands: the reply is stopped after at least
+//       RUNAWAY tokens, at whatever token the cancel reaches the engine,
+//       so its length is not checked; nor that a reply stopped before its
+//       first token reads alike (the worker answers that case without
+//       running, worker.ts);
+//     - step 6 recomputes nothing: the accepted reply's neurons at the
+//       point are the steered run's captures, carried over by the page
+//       (session.ts, accept), so step 6 checks that bookkeeping, not that
+//       an inspection of the accepted reply there would give them; the
+//       replay suite's cases 6 and 7 lock the engine's side.
 //   That these pins change this reply and let it end is a fact observed
 //   for this file, message and seed, not a law: if the model, its
 //   settings or the kernels change and they no longer do, this fails by
@@ -104,7 +154,8 @@
 //     and by hand; not in CI, which has no GPU.
 //   - The page is driven by role and accessible name, as a person reads it
 //     (App.tsx, views/prompt/PromptView.tsx and views/deck/Inspector.tsx
-//     list them); it has no test hooks.
+//     list them); it has no test hooks. The word pressed is found among
+//     the buttons in status "Reply", where the page lists each word.
 //   - No sleeps: each wait is on the page's state, within one deadline for
 //     the whole run; a page that stops changing fails at the deadline.
 //   - A missing prerequisite fails by name, and nothing is installed or
@@ -147,8 +198,15 @@ const MESSAGE = "Name three colours of the rainbow.";
 const SEED = "7";
 // One of each kind, the scale pin in the earliest layer (the header's
 // Inputs). Natively, at this seed, they change the reply, which still ends
-// "stop": 24 tokens, where the original is 37.
+// "stop": 24 tokens, where the reply without them is 37.
 const KIND_BUTTON = { set: "Set", scale: "Scale ×", zero: "Zero" } as const;
+// The reply's word steered from in step 5, counting from 1.
+const WORD = 4;
+// Step 7's pin, the replay suite's strong one, and the tokens the steered
+// reply must have run before Stop is pressed: enough that it is running,
+// and well past where these pins' replies end by themselves.
+const RUNAWAY_PIN = { layer: "12", neuron: "4031", value: "100" } as const;
+const RUNAWAY = 60;
 const PINS = [
   { layer: "2", neuron: "1000", kind: "scale", value: "-4" },
   { layer: "16", neuron: "3000", kind: "set", value: "8" },
@@ -304,7 +362,39 @@ async function textOf(page: Page, name: string): Promise<string> {
   return page.$eval(aria("status", name), (el) => el.textContent ?? "");
 }
 
-test("the pinned model is fetched, runs, and an edit changes its reply", async () => {
+// Each pin, read back in the workbench (the header's step 4): the reply's
+// value a number, the steered value what the pin sent. The steered values,
+// as the page writes them, in PINS' order.
+async function readBack(page: Page, where: string): Promise<string[]> {
+  const sent: string[] = [];
+  for (const [index, p] of PINS.entries()) {
+    const n = index + 1;
+    await goTo(page, p.layer, p.neuron);
+    const before = await exactOf(page, "Neuron reply value");
+    const after = await exactOf(page, "Neuron steered value");
+    const value = Number(before);
+    assert.ok(
+      before.trim() !== "" && Number.isFinite(value),
+      `pin ${n}, ${where}: the reply's neurons did not come back (${before})`,
+    );
+    const expected =
+      p.kind === "set"
+        ? Number(p.value)
+        : p.kind === "zero"
+          ? 0
+          : Math.fround(value * Number(p.value));
+    assert.equal(
+      after,
+      Object.is(expected, -0) ? "-0" : String(expected), // as the page writes it
+      `pin ${n} (layer ${p.layer}, neuron ${p.neuron}, ${p.kind}), ${where}: ` +
+        `the steered run used ${after}, not what the pin sent`,
+    );
+    sent.push(after);
+  }
+  return sent;
+}
+
+test("the pinned model is fetched, runs, and pins steer its reply, from a word too", async () => {
   const start = Date.now();
   const chrome = prerequisites();
   const out = await mkdtemp(join(tmpdir(), "frizzle-app-"));
@@ -380,55 +470,176 @@ test("the pinned model is fetched, runs, and an edit changes its reply", async (
     await page.locator(aria("button", "Run")).click();
 
     const stopped = /^Done: stop, [\d,]+ tokens$/;
-    const original = await settledStatus(
+    const reply = await settledStatus(
       page,
-      "Original reply ending",
+      "Reply ending",
       /^(Done|Failed)/,
       start,
     );
-    assert.match(original.text, stopped, original.text);
-    const originalText = await textOf(page, "Original reply");
-    assert.notEqual(originalText.trim(), "", "the original reply is empty");
+    assert.match(reply.text, stopped, reply.text);
+    const replyText = await textOf(page, "Reply");
+    assert.notEqual(replyText.trim(), "", "the reply is empty");
 
-    // 3. The edited reply ends by itself, as other text.
-    const edited = await settledStatus(
+    // 3. The steered reply ends by itself, as other text.
+    const steered = await settledStatus(
       page,
-      "Edited reply ending",
+      "Steered reply ending",
       /^(Done|Failed)/,
       start,
     );
-    assert.match(edited.text, stopped, edited.text);
+    assert.match(steered.text, stopped, steered.text);
     assert.notEqual(
-      await textOf(page, "Edited reply"),
-      originalText,
+      await textOf(page, "Steered reply"),
+      replyText,
       "the pins no longer change this reply at this seed; choose others",
     );
 
-    // 4. Each pin, read back: what its pin sent, in the edited run.
+    // 4. Each pin, read back: what its pin sent, in the steered run.
+    await page.locator(aria("button", "Open neurons")).click();
+    await readBack(page, "from the start");
+    await page.locator(aria("button", "Close")).click();
+
+    // 5. Steering from a word.
+    const replyPane = await page.$(aria("status", "Reply"));
+    assert.ok(replyPane !== null, 'no status named "Reply"');
+    const word = (await replyPane.$$("button"))[WORD - 1];
+    assert.ok(word !== undefined, `the reply has fewer than ${WORD} words`);
+    const kept = await page.$eval(
+      aria("status", "Reply"),
+      (out, button) => {
+        const range = document.createRange();
+        range.setStart(out, 0);
+        range.setEndAfter(button);
+        return range.toString();
+      },
+      word,
+    );
+    await word.click();
+    await page.locator(aria("button", "Open neurons")).click();
+    await page.locator(aria("button", "Run")).click();
+    const fromWord = await settledStatus(
+      page,
+      "Steered reply ending",
+      /^(Done|Failed)/,
+      start,
+    );
+    assert.match(fromWord.text, stopped, fromWord.text);
+    const steeredText = await textOf(page, "Steered reply");
+    assert.ok(
+      steeredText.startsWith(kept),
+      `the steered reply does not keep the reply's text to word ${WORD}: ` +
+        JSON.stringify({ kept, steeredText }),
+    );
+    assert.notEqual(
+      steeredText,
+      replyText,
+      `the pins no longer change this reply from word ${WORD}; choose others`,
+    );
+    await page.locator(aria("button", "Open neurons")).click();
+    const sentAtWord = await readBack(page, `from word ${WORD}`);
+    await page.locator(aria("button", "Close")).click();
+
+    // 6. Accept: the steered reply becomes the reply, its neurons with it.
+    await page.locator(aria("button", "Accept")).click();
+    await settledStatus(page, "Steered reply ending", /^Not steered$/, start);
+    assert.equal(await textOf(page, "Reply"), steeredText);
     await page.locator(aria("button", "Open neurons")).click();
     for (const [index, p] of PINS.entries()) {
-      const n = index + 1;
       await goTo(page, p.layer, p.neuron);
-      const before = await exactOf(page, "Neuron original value");
-      const after = await exactOf(page, "Neuron edited value");
-      const original = Number(before);
-      assert.ok(
-        before.trim() !== "" && Number.isFinite(original),
-        `pin ${n}: the original run's captures did not come back (${before})`,
-      );
-      const sent =
-        p.kind === "set"
-          ? Number(p.value)
-          : p.kind === "zero"
-            ? 0
-            : Math.fround(original * Number(p.value));
       assert.equal(
-        after,
-        Object.is(sent, -0) ? "-0" : String(sent), // as the page writes it
-        `pin ${n} (layer ${p.layer}, neuron ${p.neuron}, ${p.kind}): the ` +
-          `edited run used ${after}, not what the pin sent`,
+        await exactOf(page, "Neuron reply value"),
+        sentAtWord[index],
+        `pin ${index + 1}: the accepted reply's neurons at the point are ` +
+          "not the steered run's",
       );
     }
+
+    // 7. Stop: a steered reply that would run to the context, stopped and
+    // accepted.
+    await page.locator(aria("button", "Close")).click();
+    const keptAtPoint = await page.$eval(aria("status", "Reply"), (out) => {
+      const mark = out.querySelector(".point");
+      if (mark === null) return null;
+      const range = document.createRange();
+      range.setStart(out, 0);
+      range.setEndBefore(mark);
+      return range.toString();
+    });
+    assert.ok(keptAtPoint !== null, "the reply shows no branch point");
+    await page.locator(aria("button", "Open neurons")).click();
+    await goTo(page, RUNAWAY_PIN.layer, RUNAWAY_PIN.neuron);
+    await page.locator(aria("textbox", "Pin value")).fill(RUNAWAY_PIN.value);
+    await page.locator(aria("button", "Set")).click();
+    await page.waitForSelector(
+      aria(
+        "button",
+        `Unpin layer ${RUNAWAY_PIN.layer} neuron ${RUNAWAY_PIN.neuron}`,
+      ),
+      { timeout: remaining(start) },
+    );
+    await page.locator(aria("button", "Run")).click();
+    const running = await settledStatus(
+      page,
+      "Steered reply ending",
+      /^(Running|Done|Failed)/,
+      start,
+    );
+    const past = await page.waitForFunction(
+      (el, least) => {
+        const text = el.textContent ?? "";
+        const count = /^Running: ([\d,]+) tokens$/.exec(text)?.[1];
+        if (count === undefined)
+          return text.startsWith("Running") ? false : text;
+        return Number(count.replaceAll(",", "")) >= least ? text : false;
+      },
+      { timeout: remaining(start), polling: "mutation" },
+      running.element,
+      RUNAWAY,
+    );
+    const runningText = String(await past.jsonValue());
+    assert.match(
+      runningText,
+      /^Running: /,
+      `the strong pin's reply ended by itself before ${RUNAWAY} tokens ` +
+        `(${runningText}); choose another`,
+    );
+    await page.locator(aria("button", "Stop")).click();
+    const halted = await settledStatus(
+      page,
+      "Steered reply ending",
+      /^(Done|Failed)/,
+      start,
+    );
+    assert.match(halted.text, /^Done: cancelled, [\d,]+ tokens$/, halted.text);
+    const haltedText = await textOf(page, "Steered reply");
+    assert.ok(
+      haltedText.startsWith(keptAtPoint),
+      "the stopped reply does not keep the reply's text to the point: " +
+        JSON.stringify({ keptAtPoint, haltedText }),
+    );
+    await page.locator(aria("button", "Accept")).click();
+    await settledStatus(page, "Steered reply ending", /^Not steered$/, start);
+    assert.equal(await textOf(page, "Reply"), haltedText);
+    await page.locator(aria("button", "Open neurons")).click();
+    for (const [index, p] of PINS.entries()) {
+      await goTo(page, p.layer, p.neuron);
+      // The inspection the page runs at the point, once it has answered.
+      await settledStatus(page, "Neuron reply value", /^(?!Waiting$)/, start);
+      assert.equal(
+        await exactOf(page, "Neuron reply value"),
+        sentAtWord[index],
+        `pin ${index + 1}: after accepting the stopped reply, its neurons ` +
+          "at the point do not hold what the pin sent",
+      );
+    }
+    await goTo(page, RUNAWAY_PIN.layer, RUNAWAY_PIN.neuron);
+    assert.equal(
+      await exactOf(page, "Neuron reply value"),
+      RUNAWAY_PIN.value,
+      "after accepting the stopped reply, the strong pin does not hold there",
+    );
+    await page.locator(aria("button", "Close")).click();
+
     assert.deepEqual(elsewhere, [], "the page asked another host");
   } finally {
     await browser.close();

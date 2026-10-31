@@ -72,8 +72,10 @@ enum class Seed : std::uint64_t {};
 struct TurnPolicy {
   SamplingSettings sampling;
   Seed seed{};
-  // The most tokens the reply may draw, at least 1; the context offered
-  // bounds it first, so the largest value asks for no other limit.
+  // The most tokens the reply may draw; the context offered bounds it
+  // first, so the largest value asks for no other limit. 0 inspects: the
+  // input is run to its last position and nothing is drawn
+  // (runtime/turn.h).
   std::uint32_t max_tokens = UINT32_MAX;
 };
 

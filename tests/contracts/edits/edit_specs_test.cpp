@@ -1,8 +1,11 @@
 // Axis Q: the edit specs suite (tests/README.md).
 //
 // Contract locked: an invalid edit set is refused by name, naming the edit
-// edit/edit.h says it names; what an edit does to a neuron, with Scale × 1
-// an exact no-op; and the table's layout, which edit.wgsl reads.
+// edit/edit.h says it names: an empty range, and two ranges of one neuron
+// that share a step, while ranges that only meet are one neuron's history;
+// what an edit does to a neuron, with Scale × 1 an exact no-op; and the
+// table's layout, which edit.wgsl reads, each range placed at the run's
+// origin, saturating at kToTheEnd.
 //
 // Inputs: a model description built here, in Gemma 3 1B's shape (26 layers
 // of 6,912 neurons). The functions read nothing else of it, so no model
@@ -33,6 +36,8 @@ using frizzle::edit::Edit;
 using frizzle::edit::EditError;
 using frizzle::edit::EditKind;
 using frizzle::edit::kMaxEdits;
+using frizzle::edit::kToTheEnd;
+using frizzle::edit::placed;
 using frizzle::edit::table;
 
 constexpr std::uint32_t kLayers = 26;
@@ -48,6 +53,12 @@ frizzle::model::ModelDescription gemma_shape() {
 }
 
 std::uint32_t bits(float f) { return std::bit_cast<std::uint32_t>(f); }
+
+// An edit from step 0 to the end, unless a range is given.
+Edit E(std::uint32_t layer, std::uint32_t neuron, EditKind kind, float value,
+       std::uint32_t from = 0, std::uint32_t until = kToTheEnd) {
+  return {layer, neuron, kind, value, from, until};
+}
 
 // A layer's [first, count] in a table.
 std::uint32_t first(const std::vector<std::uint32_t>& words,
@@ -67,13 +78,14 @@ TEST_CASE("a valid set passes, empty or full") {
   std::vector<Edit> full;
   full.reserve(kMaxEdits);
   for (std::uint32_t i = 0; i < kMaxEdits; ++i) {
-    full.push_back({i % kLayers, i, EditKind::Scale, 2.0F});
+    full.push_back(E(i % kLayers, i, EditKind::Scale, 2.0F));
   }
   CHECK(check(full, model).ok());
-  CHECK(check(std::vector<Edit>{{kLayers - 1, kWidth - 1, EditKind::Zero, 0.0F},
-                                {0, 0, EditKind::Set, -3.5F}},
-              model)
-            .ok());
+  CHECK(
+      check(std::vector<Edit>{E(kLayers - 1, kWidth - 1, EditKind::Zero, 0.0F),
+                              E(0, 0, EditKind::Set, -3.5F, 4, 5)},
+            model)
+          .ok());
 }
 
 TEST_CASE("each fault is refused by name, with the edit's index") {
@@ -85,39 +97,69 @@ TEST_CASE("each fault is refused by name, with the edit's index") {
     CHECK(result.index == index);
     CHECK_FALSE(result.subject.empty());
   };
-  const Edit good{3, 10, EditKind::Set, 1.0F};
+  const Edit good = E(3, 10, EditKind::Set, 1.0F);
   // A byte outside the enum, as a host's malformed data would arrive.
   const auto stray = std::bit_cast<EditKind>(std::uint8_t{7});
-  refused({good, {0, 0, stray, 1.0F}}, EditError::Kind, 1);
-  refused({good, {kLayers, 0, EditKind::Set, 1.0F}}, EditError::Layer, 1);
-  refused({good, {2, kWidth, EditKind::Set, 1.0F}}, EditError::Neuron, 1);
-  refused({{1, 1, EditKind::Scale, std::numeric_limits<float>::quiet_NaN()}},
+  refused({good, E(0, 0, stray, 1.0F)}, EditError::Kind, 1);
+  refused({good, E(kLayers, 0, EditKind::Set, 1.0F)}, EditError::Layer, 1);
+  refused({good, E(2, kWidth, EditKind::Set, 1.0F)}, EditError::Neuron, 1);
+  refused({E(1, 1, EditKind::Scale, std::numeric_limits<float>::quiet_NaN())},
           EditError::NotFinite, 0);
-  refused({{1, 1, EditKind::Set, std::numeric_limits<float>::infinity()}},
+  refused({E(1, 1, EditKind::Set, std::numeric_limits<float>::infinity())},
           EditError::NotFinite, 0);
-  refused({{1, 1, EditKind::Zero, 0.5F}}, EditError::ZeroValue, 0);
+  refused({E(1, 1, EditKind::Zero, 0.5F)}, EditError::ZeroValue, 0);
+  refused({good, E(1, 1, EditKind::Set, 1.0F, 7, 7)}, EditError::Range, 1);
+  refused({E(1, 1, EditKind::Set, 1.0F, 8, 7)}, EditError::Range, 0);
   std::vector<Edit> too_many(kMaxEdits + 1, good);
   refused(too_many, EditError::TooMany, kMaxEdits);
 }
 
-TEST_CASE("a repeat names the first edit that repeats an earlier one") {
-  const auto model = gemma_shape();
-  const auto result = check(std::vector<Edit>{{5, 7, EditKind::Set, 1.0F},
-                                              {9, 2, EditKind::Set, 1.0F},
-                                              {9, 2, EditKind::Scale, 2.0F},
-                                              {5, 7, EditKind::Zero, 0.0F}},
-                            model);
-  CHECK(result.error == EditError::Duplicate);
-  CHECK(result.index == 2);
+TEST_CASE("an edit without its range is refused, never applied from step 0") {
+  // Initialized as an edit was before ranges: from and until are 0.
+  const Edit unranged{3, 10, EditKind::Set, 1.0F, {}, {}};
+  const auto result = check(std::vector<Edit>{unranged}, gemma_shape());
+  CHECK(result.error == EditError::Range);
+  CHECK(result.index == 0);
 }
 
-TEST_CASE("an edit invalid on its own is named before any repeat") {
+TEST_CASE(
+    "ranges of one neuron that share a step are refused, the later named") {
   const auto model = gemma_shape();
-  const auto result = check(std::vector<Edit>{{5, 7, EditKind::Set, 1.0F},
-                                              {5, 7, EditKind::Set, 1.0F},
-                                              {kLayers, 0, EditKind::Set, 1.0F},
-                                              {1, kWidth, EditKind::Set, 1.0F}},
-                            model);
+  const auto result =
+      check(std::vector<Edit>{E(5, 7, EditKind::Set, 1.0F, 0, 10),
+                              E(9, 2, EditKind::Set, 1.0F, 3, kToTheEnd),
+                              E(9, 2, EditKind::Scale, 2.0F, 0, 4),
+                              E(5, 7, EditKind::Zero, 0.0F, 9, kToTheEnd)},
+            model);
+  CHECK(result.error == EditError::Overlap);
+  CHECK(result.index == 2);
+  // A range inside another, given first, still names the later index.
+  const auto inside =
+      check(std::vector<Edit>{E(1, 1, EditKind::Set, 1.0F, 4, 6),
+                              E(1, 1, EditKind::Set, 2.0F, 0, 20)},
+            model);
+  CHECK(inside.error == EditError::Overlap);
+  CHECK(inside.index == 1);
+}
+
+TEST_CASE("ranges of one neuron that only meet are one neuron's history") {
+  const auto model = gemma_shape();
+  CHECK(check(std::vector<Edit>{E(5, 7, EditKind::Set, 1.0F, 0, 6),
+                                E(5, 7, EditKind::Scale, 3.0F, 6, 9),
+                                E(5, 7, EditKind::Zero, 0.0F, 9, kToTheEnd),
+                                E(5, 8, EditKind::Set, 1.0F, 2, 4)},
+              model)
+            .ok());
+}
+
+TEST_CASE("an edit invalid on its own is named before any overlap") {
+  const auto model = gemma_shape();
+  const auto result =
+      check(std::vector<Edit>{E(5, 7, EditKind::Set, 1.0F),
+                              E(5, 7, EditKind::Set, 1.0F),
+                              E(kLayers, 0, EditKind::Set, 1.0F),
+                              E(1, kWidth, EditKind::Set, 1.0F)},
+            model);
   CHECK(result.error == EditError::Layer);
   CHECK(result.index == 2);
 }
@@ -152,35 +194,56 @@ TEST_CASE("Scale × 1 leaves every value's bits as they were") {
   }
 }
 
-TEST_CASE("the table: [first, count] a layer, then edits by layer and neuron") {
+TEST_CASE(
+    "the table: [first, count] a layer, then edits by layer, neuron and start, "
+    "placed") {
   const auto model = gemma_shape();
-  const std::vector<Edit> edits{{12, 4031, EditKind::Set, 8.0F},
-                                {3, 900, EditKind::Scale, -2.0F},
-                                {12, 17, EditKind::Zero, 0.0F},
-                                {25, 6911, EditKind::Scale, 1.0F}};
+  constexpr std::uint32_t kOrigin = 41;  // a rendered text of 42 tokens
+  const std::vector<Edit> edits{E(12, 4031, EditKind::Set, 8.0F, 3, 9),
+                                E(3, 900, EditKind::Scale, -2.0F),
+                                E(12, 17, EditKind::Zero, 0.0F, 5, kToTheEnd),
+                                E(25, 6911, EditKind::Scale, 1.0F, 0, 1),
+                                E(12, 4031, EditKind::Scale, 2.0F, 0, 3)};
   REQUIRE(check(edits, model).ok());
-  const std::vector<std::uint32_t> words = table(edits, model);
-  REQUIRE(words.size() == kHead + 3 * edits.size());
+  const std::vector<std::uint32_t> words = table(edits, model, kOrigin);
+  REQUIRE(words.size() == kHead + 5 * edits.size());
   for (std::uint32_t layer = 0; layer < kLayers; ++layer) {
     const bool edited = layer == 3 || layer == 12 || layer == 25;
-    CHECK(count(words, layer) == (layer == 12 ? 2U : edited ? 1U : 0U));
+    CHECK(count(words, layer) == (layer == 12 ? 3U : edited ? 1U : 0U));
   }
   CHECK(first(words, 3) == kHead);
-  CHECK(first(words, 12) == kHead + 3);
-  CHECK(first(words, 25) == kHead + 9);
+  CHECK(first(words, 12) == kHead + 5);
+  CHECK(first(words, 25) == kHead + 20);
   CHECK(first(words, 0) == 0);
-  // Edits as [neuron, kind, value bits], by layer, then neuron.
+  // [neuron, kind, value bits, first position, end position], by layer,
+  // neuron, then first position; step s at position 41 + s.
   const std::vector<std::uint32_t> expected{
-      900,  1, bits(-2.0F),  // layer 3
-      17,   2, bits(0.0F),   // layer 12
-      4031, 0, bits(8.0F),   // layer 12
-      6911, 1, bits(1.0F),   // layer 25
+      900,  1, bits(-2.0F), 41, kToTheEnd,  // layer 3
+      17,   2, bits(0.0F),  46, kToTheEnd,  // layer 12
+      4031, 1, bits(2.0F),  41, 44,         // layer 12, steps 0 to 3
+      4031, 0, bits(8.0F),  44, 50,         // layer 12, steps 3 to 9
+      6911, 1, bits(1.0F),  41, 42,         // layer 25
   };
   CHECK(std::vector<std::uint32_t>(words.begin() + kHead, words.end()) ==
         expected);
 }
 
+TEST_CASE("a range past every position is placed to the end") {
+  const auto model = gemma_shape();
+  const std::vector<Edit> edits{E(0, 0, EditKind::Set, 1.0F, 2, kToTheEnd - 1)};
+  REQUIRE(check(edits, model).ok());
+  const auto words = table(edits, model, 100);
+  CHECK(words.at(kHead + 3) == 102);
+  CHECK(words.at(kHead + 4) == kToTheEnd);
+  const auto at = placed(edits, 100);
+  REQUIRE(at.size() == 1);
+  CHECK(at[0].from == 102);
+  CHECK(at[0].until == kToTheEnd);
+  CHECK(at[0].layer == 0);
+  CHECK(at[0].value == 1.0F);
+}
+
 TEST_CASE("the table of no edits is every layer's count 0") {
-  const std::vector<std::uint32_t> words = table({}, gemma_shape());
+  const std::vector<std::uint32_t> words = table({}, gemma_shape(), 0);
   CHECK(words == std::vector<std::uint32_t>(kHead, 0));
 }

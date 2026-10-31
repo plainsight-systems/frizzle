@@ -21,6 +21,8 @@ declare module "@frizzle/engine" {
       request: number,
       text: number,
       textLength: number,
+      kept: number,
+      keptCount: number,
       edits: number,
       editCount: number,
       seed: number,

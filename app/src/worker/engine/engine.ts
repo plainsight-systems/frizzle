@@ -14,10 +14,13 @@
 //     and words. The handle is the caller's, and is not closed here. Once
 //     begun, a load runs to its end: the engine has no way to abandon one
 //     half made, and a later load would be refused as busy.
-//   - generate(text, edits, seed, maxTokens, onText): one turn over the
-//     rendered text; onText receives each piece as it completes; resolves
-//     with the module's answer (messages.ts's Generated), its captures
-//     included: "taken" with the slots from the answer and the neurons that
+//   - generate(text, kept, edits, seed, maxTokens, onToken): one turn over
+//     the rendered text, then the kept reply tokens (a branch; none for a
+//     run from the reply's start), with the ranged edits (edits.ts,
+//     RangedEdit); maxTokens 0 inspects. onToken receives each emitted
+//     token, its identifier and the text it completes, possibly ""; resolves
+//     with the module's answer (messages.ts's Generated), the reply's
+//     identifiers, its tail (bindings.cpp) and its captures included: "taken" with the slots from the answer and the neurons that
 //     came in the same call (bindings.cpp), "not-taken", or "unread" with
 //     the module's reason. An answer that says "taken" without neurons, or
 //     with neurons that do not fill its slots, rejects as a broken module,
@@ -29,15 +32,18 @@
 // Algorithm, a call
 //   Each call into the module gets a request number and a pending promise;
 //   frizzleOnAnswer(request, json, neurons?) settles it, with the neurons
-//   when the module sent them; frizzleOnText(request, text) streams into
-//   it. Bytes for a call are copied into the module's memory
+//   when the module sent them; frizzleOnText(request, text, token) streams
+//   into it. Bytes for a call are copied into the module's memory
 //   through a view made just then, and freed when the call returns, the
 //   module having read them (bindings.cpp).
 //
 // Design and cost
-//   - Edits cross as four 32-bit words each, [layer, neuron, kind, value's
-//     bits], kind set 0, scale 1, zero 2; a layer, neuron or value the
-//     engine cannot take is its to refuse (edit::check).
+//   - Edits cross as six 32-bit words each, [layer, neuron, kind, value's
+//     bits, from, until], kind set 0, scale 1, zero 2, until 0xFFFFFFFF for
+//     an open range (null in edits.ts); a layer, neuron, value or range the
+//     engine cannot take is its to refuse (edit::check). Kept identifiers
+//     cross as one 32-bit word each; one that names no token is the
+//     engine's to refuse (Kept).
 //   - A load is 2 + ceil(size / 16 MiB) calls, plus one if the front is
 //     short; nothing crosses between page and worker but progress.
 //   - The neurons arrive as a Float32Array the module sliced out of its
@@ -51,11 +57,13 @@
 
 import createModule, { type FrizzleModule } from "@frizzle/engine";
 
-import type { Edit } from "../../engine/edits.ts";
+import type { Edit, RangedEdit } from "../../engine/edits.ts";
 import type { Captures, Generated } from "../../protocol/messages.ts";
 import type { ChatTemplate } from "../template/template.ts";
 
 const FRONT_BYTES = 16 * 2 ** 20;
+const TO_THE_END = 0xffffffff; // src/core/edit/edit.h, kToTheEnd
+const EDIT_WORDS = 6;
 const START = 0;
 const KIND: Readonly<Record<Edit["kind"], number>> = {
   set: 0,
@@ -81,7 +89,7 @@ declare global {
     answer: Answer,
     neurons?: Float32Array,
   ) => void;
-  var frizzleOnText: (request: number, text: string) => void;
+  var frizzleOnText: (request: number, text: string, token: number) => void;
 }
 
 // An answer, and the neurons the module sent with it, if any.
@@ -113,7 +121,7 @@ export type DeviceOutcome =
 export class Engine {
   readonly #module: FrizzleModule;
   readonly #answers = new Map<number, (answer: Answered) => void>();
-  readonly #texts = new Map<number, (text: string) => void>();
+  readonly #texts = new Map<number, (token: number, text: string) => void>();
   #nextRequest = START + 1;
 
   private constructor(module: FrizzleModule) {
@@ -131,8 +139,8 @@ export class Engine {
       engine.#answers.delete(request);
       settle?.({ answer, neurons });
     };
-    globalThis.frizzleOnText = (request, text) =>
-      engine.#texts.get(request)?.(text);
+    globalThis.frizzleOnText = (request, text, token) =>
+      engine.#texts.get(request)?.(token, text);
     engine.#answers.set(START, ({ answer }) =>
       onDevice(
         answer.ok
@@ -206,35 +214,48 @@ export class Engine {
 
   async generate(
     text: string,
-    edits: readonly Edit[],
+    kept: readonly number[],
+    edits: readonly RangedEdit[],
     seed: number,
     maxTokens: number,
-    onText: (text: string) => void,
+    onToken: (token: number, text: string) => void,
   ): Promise<Generated> {
     const bytes = new TextEncoder().encode(text);
-    const words = new Uint32Array(edits.length * 4);
+    const keptWords = Uint32Array.from(kept);
+    const words = new Uint32Array(edits.length * EDIT_WORDS);
     const value = new DataView(new ArrayBuffer(4));
     edits.forEach((e, i) => {
       value.setFloat32(0, e.value, true);
       words.set(
-        [e.layer, e.neuron, KIND[e.kind], value.getUint32(0, true)],
-        i * 4,
+        [
+          e.layer,
+          e.neuron,
+          KIND[e.kind],
+          value.getUint32(0, true),
+          e.from,
+          e.until ?? TO_THE_END,
+        ],
+        i * EDIT_WORDS,
       );
     });
     const { answer, neurons } = await this.#withBytes(bytes, (textPointer) =>
-      this.#withBytes(new Uint8Array(words.buffer), (editsPointer) =>
-        this.#call(
-          (request) =>
-            this.#module._frizzle_generate(
-              request,
-              textPointer,
-              bytes.length,
-              editsPointer,
-              edits.length,
-              seed,
-              maxTokens,
-            ),
-          onText,
+      this.#withBytes(new Uint8Array(keptWords.buffer), (keptPointer) =>
+        this.#withBytes(new Uint8Array(words.buffer), (editsPointer) =>
+          this.#call(
+            (request) =>
+              this.#module._frizzle_generate(
+                request,
+                textPointer,
+                bytes.length,
+                keptPointer,
+                kept.length,
+                editsPointer,
+                edits.length,
+                seed,
+                maxTokens,
+              ),
+            onToken,
+          ),
         ),
       ),
     );
@@ -244,6 +265,8 @@ export class Engine {
       tokens: Number(done["tokens"]),
       promptTokens: Number(done["promptTokens"]),
       reusedTokens: Number(done["reusedTokens"]),
+      reply: replyOf(done["reply"], Number(done["tokens"])),
+      tail: String(done["tail"] ?? ""),
       captures: capturesOf(done["captures"], neurons),
     };
   }
@@ -257,7 +280,7 @@ export class Engine {
   // through a promise registered first.
   #call(
     start: (request: number) => void,
-    onText?: (text: string) => void,
+    onText?: (token: number, text: string) => void,
   ): Promise<Answered> {
     const request = this.#nextRequest++;
     const answered = new Promise<Answered>((resolve) =>
@@ -349,6 +372,21 @@ function capturesOf(
         `the module's answer has no captures it names (${String(c?.status)})`,
       );
   }
+}
+
+// The answer's "reply": one identifier an emitted token. One missing, or a
+// count that is not the answer's "tokens", is a broken module, refused by
+// name.
+function replyOf(field: unknown, tokens: number): readonly number[] {
+  if (!Array.isArray(field) || field.length !== tokens) {
+    throw new EngineError(
+      "generate",
+      `the module's answer has ${
+        Array.isArray(field) ? `${field.length} reply identifiers` : "no reply"
+      } for ${tokens} tokens`,
+    );
+  }
+  return field.map(Number);
 }
 
 function describe(answer: Answer): string {

@@ -11,7 +11,7 @@
  *       --ink      #eee6d3  text
  *       --muted    #9aa0a8  labels and secondary text
  *       --accent   #e2b866  focus, the chosen option
- *       --edit     #ffcf73  what an edit changed: the edited reply, a pin
+ *       --edit     #ffcf73  what an edit changed: the steered reply, a pin
  *       --cool     #9fc0e8  negative values in text
  *       --serif    "Plex Serif", Georgia, serif
  *       --mono     "Plex Mono", ui-monospace, monospace
@@ -30,7 +30,10 @@
  *     layer over the whole window, its deck taking the width beside a
  *     320px inspector (stacked under 900px).
  *   - The parts the views name by class: the composer and its chips, the
- *     replies, the deck and its zoom, strip, legend and tip, the inspector's
+ *     replies (each word a button set in the text as text, underlined on
+ *     hover, the pressed one ringed; the branch point a bar in --accent;
+ *     the text past it, and a steered reply's kept text, faded; a word
+ *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the inspector's
  *     segmented choice, ranked list, neuron card and Go to.
  *   - Contrast: --ink and --muted on --page and --panel meet WCAG AA for
  *     body text (4.5:1); --muted is not used below 12px.
@@ -357,6 +360,57 @@ fieldset > div {
 .reply-text:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
+}
+/* A word in a done reply: text that can be pressed. */
+.reply-text button.word {
+  font: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+}
+.reply-text button.word:hover:not(:disabled) {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+.reply-text button.word:disabled {
+  cursor: default;
+}
+.reply-text button.word[aria-pressed="true"] {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.reply-text .point {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin: 0 2px;
+  vertical-align: -0.15em;
+  background: var(--accent);
+}
+.reply-text .past {
+  opacity: 0.55;
+}
+/* A word quoted in a heading, as the reply wrote it. */
+.as-written {
+  text-transform: none;
+}
+.branch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+.branch-row button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.branch-row button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* The workbench */

@@ -55,21 +55,36 @@ namespace frizzle::runtime {
 //        WebGPU refuses is Capture, with its message.
 //     write and finish_load are refused at once, NotLoading, outside a load,
 //     and Busy while the previous call's callback is pending.
-//   generate(text, edits, policy, on_text, on_end)
+//   generate(text, kept, edits, policy, on_token, on_end)
 //     - `text` is exactly what the model reads: Gemma's chat template already
 //       applied. The engine renders no template (the worker does; T).
+//     - `kept`: reply token identifiers from an earlier run, which the
+//       model reads after `text` as if it had just drawn them: a branch
+//       that keeps the first k tokens of that reply, so k = 0 is a run from
+//       the reply's start. The run's input is text, then kept; its steps
+//       count from the text's last token (edit/edit.h): step k is the
+//       position whose input is the last kept token, which draws reply
+//       token k, the first this run emits.
 //     - Precondition, the caller's: `text` is the template's rendering,
 //       which begins with <bos> and wraps each message in its turn markers.
 //       The renderer owns that and its tests lock it; the engine checks
 //       nothing of the template. Text wrapped otherwise still runs, and the
 //       reply is what the model makes of it.
-//     - Runs the model over `text` and streams the reply as text, under
-//       `policy`: its sampling settings, seed and token limit; then calls
-//       back once, `on_end`, with the turn's result (runtime.h) and the
-//       run's captures (Captured below).
-//     - Captured: every layer's neurons at the last prompt position, after
-//       this run's edits (capture/capture.h), with the store's layout, one
-//       slot a layer; or why there are none:
+//     - Runs the model over the input and streams the reply, under
+//       `policy`: its sampling settings, seed and token limit: each emitted
+//       token with its identifier and text (generator.h); then calls back
+//       once, `on_end`, with the turn's result (runtime.h), its tail the
+//       text the last token ends with, if any (generator.h), and the run's
+//       captures (Captured below). The sampler draws by seed and position
+//       (sampler/sampler.h), so a branch draws each position as the run it
+//       keeps from did, and only edits make the two differ.
+//     - A max_tokens of 0 inspects (runtime/turn.h): step k is computed,
+//       with the edits in force there, and captured; nothing is drawn; the
+//       turn ends Limit with no tokens. So a host sees the neurons at any
+//       point of a reply without generating from it.
+//     - Captured: every layer's neurons at step k, the input's last
+//       position, after the edits in force there (capture/capture.h), with
+//       the store's layout, one slot a layer; or why there are none:
 //         - Taken: the turn ended Stop, Limit or Context, so its step that
 //           ends the prompt ran, and the store was read back whole; the
 //           words are this run's, valid only during the call.
@@ -82,17 +97,34 @@ namespace frizzle::runtime {
 //           Unread, Cancelled.
 //       The turn's result is reported as it was in every case; a capture
 //       never turns a reply into a failure, nor a failure into a reply.
-//     - `edits` (edit/edit.h) applies to this run only: at the last prompt
-//       position and every generated token, never earlier. No edits, or
-//       Scale × 1 edits, give the run without edits, bit for bit, from the
-//       same seed.
+//     - `edits` (edit/edit.h), each over its range of steps, placed at the
+//       text's last token (origin = the text's tokens less one). A run is a
+//       function of its text, kept tokens, edits and policy: an edit applies
+//       at exactly the positions its range holds, kept or generated, whether
+//       the cache holds them or they are computed again. So:
+//         - No edits, or Scale × 1 edits, give the run without edits, bit
+//           for bit, from the same seed.
+//         - A branch keeping k tokens of a reply, with that reply's own
+//           edits, continues it bit for bit: the continuation is the
+//           reply's tokens from k on, with its ending.
+//         - A reply generated with edits from step b, kept whole as the
+//           next branch's history, is recomputed with those edits at its
+//           positions from b on, as generated, if the cache no longer holds
+//           them.
 //     - Refused at once, named (OperationError): not loaded; a turn running;
-//       an invalid edit set (Edits, with edit::check's result); and what the
-//       generator refuses (generator.h): text the tokenizer cannot encode, an
-//       empty or too long prompt. `edits` is not read after the call.
-//     - Invariant, between runs: the cache holds only entries computed
-//       without edits. So a later prompt that contains an edited run's reply
-//       (a conversation) never reuses that reply's edited entries.
+//       an invalid edit set (Edits, with edit::check's result); a kept
+//       identifier at or past the vocabulary (Kept, naming its index); and
+//       what the generator refuses (generator.h): text the tokenizer cannot
+//       encode, an empty or too long input. `text`, `kept` and `edits` are
+//       not read after the call.
+//     - Invariant, between runs: the cache holds entries computed with the
+//       edits the run that wrote them applied, at their positions, and the
+//       engine holds those edits, placed (edit::placed), with it. They are
+//       dropped together: a run that empties the cache (a step's failure, a
+//       rollback past the ring's reserve, cache/kv.h) or a new load. A run
+//       reuses the cache only up to the first position where its tokens or
+//       its edits in force differ (cache/prefix.h), so a later run never
+//       reads an entry computed under edits it does not apply there.
 //   chat_template(), once begin_load has accepted a file: the chat template
 //     the file carries (tokenizer.chat_template) and its BOS and EOS tokens'
 //     text, read at begin_load, for the host that renders conversations (T,
@@ -100,8 +132,9 @@ namespace frizzle::runtime {
 //     refuses by name. The engine itself never renders it.
 //   cancel(): ends the running turn at its next report; on_end is then
 //     called once, Cancelled (runtime.h). With no turn running, nothing. The
-//     turn's steps already run report first and are discarded (turn.h), and
-//     a run with edits still rewinds the cache.
+//     turn's steps already run report first and are discarded (turn.h); the
+//     cache keeps what they wrote, under the run's edits, which the engine
+//     then holds.
 //   A begin_load refused as Index because `front` ends before the index
 //     does carries bytes_needed: the least front that could hold it, so a
 //     host holding only the file's first bytes reads that many and begins
@@ -119,21 +152,27 @@ namespace frizzle::runtime {
 //
 // Algorithm, generate
 //   1. Check the edit set (edit::check); refuse an invalid one.
-//   2. Write its table (edit::table) into the plan's `edit_table` buffer
-//      (graph/graph.h) with one queue write on the device's queue, which
-//      orders it before the turn's first step. No turn is in flight, so no
-//      step reads the table while it changes.
-//   3. Start a turn on the generator with the text and the caller's policy.
-//      The turn loop reuses whatever prefix of the text the cache already
-//      holds from the turn before, and recomputes the rest (runtime.h).
-//   4. Stream its text. When it ends, however it ends, and the set had
-//      edits: rewind the cache to just before the edits began, the turn's
-//      prompt tokens less one (Generator::rewind, runtime.h).
-//   5. If it ended Stop, Limit or Context, read the capture store back
+//   2. Prepare the turn on the generator: the text encoded, the kept
+//      identifiers appended (generator.h); origin = the text's tokens less
+//      one.
+//   3. Place the edits at origin (edit::placed). Rewind the cache to the
+//      first position where they differ from the held edits
+//      (cache::first_edit_difference), when that is below its length; then
+//      hold the placed edits in their place.
+//   4. Write the table (edit::table, at origin) into the plan's
+//      `edit_table` buffer (graph/graph.h) with one queue write on the
+//      device's queue, which orders it before the turn's first step. No
+//      turn is in flight, so no step reads the table while it changes.
+//   5. Start the prepared turn with the caller's policy. The turn loop
+//      reuses whatever prefix of the input the cache holds, after the
+//      rewind, and recomputes the rest (runtime.h).
+//   6. Stream each emitted token. When the turn ends with the cache
+//      emptied, drop the held edits with it.
+//   7. If it ended Stop, Limit or Context, read the capture store back
 //      (Reader::read), after every step the turn submitted. Then call back
 //      once with how it ended and what was captured. The engine stays
 //      running until then, so no turn starts while the store is read, and
-//      the turn's message is copied to outlive the read.
+//      the turn's message and tail are copied to outlive the read.
 //
 // Design and cost
 //   - The engine is the composition Charlotte's browser bindings made
@@ -150,20 +189,25 @@ namespace frizzle::runtime {
 //   - State shared with in-flight callbacks (F.27), as the runtime's is: each
 //     callback carries a record holding it, so destroying the engine leaves
 //     a live state for the callback to land on, and the last holder frees it.
-//   - Edits: the engine keeps no edit state between runs. Each run writes
-//     its whole table, and the rewind leaves the cache holding no edited
-//     entry, so a run is a function of its text, edits and policy. Whether
-//     a run had edits rides in its call's record.
-//   - The cache: positions before the last prompt position are never
-//     edited, so the original and the edited run of one prompt share them,
-//     in either order; each recomputes only the last prompt position, as
-//     the turn loop already does.
-//   - A conversation after an edited reply prefills that reply again, and
-//     the position before it: the reply's tokens plus one. A rewind deeper
-//     than the cache's rollback reserve (policy.h, 4,096 tokens by default)
-//     empties it instead (cache/kv.h), and the next run prefills from the
-//     first token. Any set with edits rewinds, including Scale × 1, which
-//     changes no bits; telling them apart is not worth a rule.
+//   - Edits: each run writes its whole table, and the engine holds the
+//     placed edits of the run that wrote the cache, the one state it keeps
+//     beside the cache, kept and dropped with it, so a run is still a
+//     function of its text, kept tokens, edits and policy. Until slice 4's
+//     branch it held none, and rewound after every edited run, so the
+//     cache held no edited entry; a branch from an accepted reply needs
+//     exactly those entries, so they are now kept and compared instead.
+//   - The cache: runs of one prompt share every position before the first
+//     whose edits differ: an original and a run edited from step k share
+//     the input up to step k, and the branch recomputes from there, as the
+//     turn loop recomputes the last position. A branch back into a reply
+//     rolls back to its point; deeper than the rollback reserve (policy.h,
+//     4,096 tokens by default), it empties the cache (cache/kv.h) and the
+//     run prefills from the first token, correct and slower. Scale × 1
+//     edits change no bits but are compared as edits; telling them apart
+//     is not worth a rule.
+//   - Kept identifiers cross from the host, a few kilobytes a run: the page
+//     holds the conversation (logical-overview.md), and the engine checks
+//     only that each names a token.
 //   - The table write cannot fail validation: the buffer is a scratch
 //     buffer, made with CopyDst (residency/upload.cpp), planned at the
 //     table's largest size, and the table is whole u32 words.
@@ -177,6 +221,10 @@ namespace frizzle::runtime {
 //   - Captures cross with the result, not in a call of their own: a host
 //     gets them exactly once, with the run they belong to, and never asks
 //     for "the last run's" (logical-overview.md, invariant 5).
+//   - The engine's operations stay load and generate; a branch and an
+//     inspection are generate's, with kept tokens and a limit of 0, rather
+//     than operations of their own: one turn loop, one capture, one way a
+//     run's input is made.
 //   - on_end's type is RunEndCallback, not the generator's EndCallback: the
 //     native tool and the replay scenario take the captures and read nothing
 //     of them; the browser bindings send them to the page (slice 4, step 2).
@@ -243,6 +291,8 @@ enum class OperationError : std::uint8_t {
   NotLoaded,
   Busy,   // a turn is running
   Edits,  // the edit set is invalid; `edits` says why
+  Kept,   // a kept identifier names no token; start.kept_out_of_vocabulary
+          // says which
   Start,  // the generator refused; `start` says why
 };
 
@@ -295,14 +345,13 @@ class Engine {
   // Load, step 3. On ok(), `done` is called once with `userdata`.
   [[nodiscard]] LoadResult finish_load(LoadCallback done, void* userdata);
 
-  // On ok(), `on_text` is called for each piece of the reply and `on_end`
-  // once, both with `userdata`. `text` and `edits` are not read after the
-  // call.
-  [[nodiscard]] OperationStart generate(std::string_view text,
-                                        std::span<const edit::Edit> edits,
-                                        const policy::TurnPolicy& policy,
-                                        TextCallback on_text,
-                                        RunEndCallback on_end, void* userdata);
+  // On ok(), `on_token` is called for each emitted token and `on_end`
+  // once, both with `userdata`. `text`, `kept` and `edits` are not read
+  // after the call.
+  [[nodiscard]] OperationStart generate(
+      std::string_view text, std::span<const tokenizer::TokenId> kept,
+      std::span<const edit::Edit> edits, const policy::TurnPolicy& policy,
+      ReplyTokenCallback on_token, RunEndCallback on_end, void* userdata);
 
   // Ends the running turn at its next report (above); with none, nothing.
   void cancel() noexcept;

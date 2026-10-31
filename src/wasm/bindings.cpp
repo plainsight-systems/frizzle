@@ -32,20 +32,29 @@
 //     buffer may be reused.
 //   frizzle_load_finish(request)
 //     Answers once the program is built: {"ok": true, "context"}.
-//   frizzle_generate(request, text, text_length, edits, edit_count, seed,
-//                    max_tokens)
-//     `text` is the rendered conversation, UTF-8, and `edits` edit_count
-//     records of four 32-bit words, [layer, neuron, kind, value's bits],
-//     kind Set 0, Scale 1, Zero 2 (edit/edit.h), both in the module's
-//     memory and freed by the worker once this returns: the engine reads
-//     them during the call. A kind word past 255 crosses as 255, which the
-//     engine's check refuses as Kind, so no word wraps into a valid kind.
-//     The seed is a double holding an integer below 2^53. Each piece of the
-//     reply crosses as it completes, to globalThis.frizzleOnText(request,
-//     text); then the answer: {"ok": true, "end": "stop" | "limit" |
-//     "context" | "cancelled", "tokens", "promptTokens", "reusedTokens",
-//     "captures"}, where "captures" is the engine's Captured
-//     (runtime/engine.h), as it gave it:
+//   frizzle_generate(request, text, text_length, kept, kept_count, edits,
+//                    edit_count, seed, max_tokens)
+//     `text` is the rendered conversation, UTF-8; `kept` kept_count reply
+//     token identifiers, 32-bit words, the branch's kept tokens
+//     (runtime/engine.h); `edits` edit_count records of six 32-bit words,
+//     [layer, neuron, kind, value's bits, from, until], kind Set 0, Scale 1,
+//     Zero 2, from and until in steps, until 0xFFFFFFFF for to the end
+//     (edit/edit.h). All three are in the module's memory and freed by the
+//     worker once this returns: the engine reads them during the call. A
+//     kind word past 255 crosses as 255, which the engine's check refuses
+//     as Kind, so no word wraps into a valid kind. The seed is a double
+//     holding an integer below 2^53; max_tokens 0 inspects (no reply, the
+//     captures at the input's last position). Each emitted token crosses
+//     as it is emitted, to globalThis.frizzleOnText(request, text, token):
+//     its identifier, and the text it completes, possibly "" (generator.h);
+//     then the answer: {"ok": true, "end": "stop" | "limit" | "context" |
+//     "cancelled", "tokens", "promptTokens", "reusedTokens", "reply",
+//     "tail", "captures"}, where "reply" is the emitted identifiers in
+//     order, as a JSON array, the same the token crossings carried; "tail"
+//     the text the last token ends with that its crossing could not carry,
+//     U+FFFD for a character the turn stopped inside, else "" (generator.h);
+//     and "captures" is
+//     the engine's Captured (runtime/engine.h), as it gave it:
 //       {"status": "taken", "slots": [[first, width], ...]}, one pair a
 //         layer, with the neurons themselves crossing in the same call as
 //         the answer: frizzleOnAnswer(request, answer, neurons), `neurons`
@@ -67,7 +76,8 @@
 // Design and cost
 //   - A phase a crossing (WASM.2): a load is 2 + ceil(size / 16 MiB)
 //     crossings, 46 for Gemma 3's 722 MB; a turn one in, then one out for
-//     each piece of text that completes a character, and one answer.
+//     each emitted token, and one answer. The kept identifiers and the
+//     reply's cross once a run, a few kilobytes, in the run's own calls.
 //   - Bytes cross by address and length into the module's memory, which
 //     the worker writes through a view made afresh for each call: growing
 //     the heap detaches any view kept (WASM.1). The heap's initial size and
@@ -78,7 +88,9 @@
 //   - Text crosses as UTF-8 bytes in the module's memory, read by the
 //     worker at once, before the next call can grow the heap.
 //   - JSON for answers: one small object a call, escaped here; nothing a
-//     token but the text itself.
+//     token but its text and identifier. The reply's identifiers in the
+//     answer, about six bytes a token in JSON: a 4,000-token reply is about
+//     24 KB, once.
 //   - The neurons, 702 KiB for Gemma 3 1B, cross once a run, in the
 //     answer's own call (WASM.2): the engine's span is valid only during
 //     its callback, so they are copied out of the heap there, by a slice of
@@ -142,8 +154,11 @@ EM_JS(void, frizzle_answer_neurons,
                                    HEAPF32.slice(first, first + count));
       });
 EM_JS(void, frizzle_text,
-      (std::uint32_t request, const char* text, std::uint32_t length),
-      { globalThis.frizzleOnText(request, UTF8ToString(text, length)); });
+      (std::uint32_t request, const char* text, std::uint32_t length,
+       std::uint32_t token),
+      {
+        globalThis.frizzleOnText(request, UTF8ToString(text, length), token);
+      });
 
 namespace {
 
@@ -158,6 +173,11 @@ constexpr std::uint32_t kKindCeiling = 255;
 std::unique_ptr<frizzle::gpu::Device> device;
 std::unique_ptr<runtime::Engine> engine;
 std::vector<std::byte> chunk;
+// The running turn's emitted identifiers, for its answer's "reply":
+// emptied once each turn is answered, never when a run is refused, which
+// may be refused because a turn still runs; reserved at load for the
+// context, so a token appends without allocating.
+std::vector<std::uint32_t> reply;
 
 // A JSON string literal of `text`, escaped.
 std::string quoted(std::string_view text) {
@@ -307,13 +327,18 @@ void on_written(const runtime::LoadResult& result, void* userdata) {
 }
 
 void on_finished(const runtime::LoadResult& result, void* userdata) {
+  if (result.ok()) reply.reserve(engine->context());
   answer_load(request_of(userdata), result,
               ",\"context\":" + std::to_string(engine->context()));
 }
 
-void on_text(std::string_view text, void* userdata) {
+void on_token(frizzle::tokenizer::TokenId token, std::string_view text,
+              void* userdata) {
+  const auto id = static_cast<std::uint32_t>(token);
+  // One callback an emitted token (generator.h).
+  reply.push_back(id);
   frizzle_text(request_of(userdata), text.data(),
-               static_cast<std::uint32_t>(text.size()));
+               static_cast<std::uint32_t>(text.size()), id);
 }
 
 std::string_view name(frizzle::residency::Mapped mapped) {
@@ -353,10 +378,21 @@ std::string captures_json(const runtime::Captured& captured) {
   return "{\"status\":\"unread\",\"reason\":\"unknown\"}";
 }
 
+// The answer's "reply": the emitted identifiers, as a JSON array.
+std::string reply_json() {
+  std::string out = "[";
+  for (std::size_t i = 0; i < reply.size(); ++i) {
+    if (i > 0) out += ',';
+    out += std::to_string(reply[i]);
+  }
+  return out + "]";
+}
+
 void on_end(const runtime::TurnResult& result,
             const runtime::Captured& captured, void* userdata) {
   const std::uint32_t request = request_of(userdata);
   if (result.failure != runtime::TurnFailure::None) {
+    reply.clear();
     refuse(request, "generate", name(result.failure), result.message);
     return;
   }
@@ -365,7 +401,9 @@ void on_end(const runtime::TurnResult& result,
       ",\"tokens\":" + std::to_string(result.emitted) +
       ",\"promptTokens\":" + std::to_string(result.prompt) +
       ",\"reusedTokens\":" + std::to_string(result.reused) +
+      ",\"reply\":" + reply_json() + ",\"tail\":" + quoted(result.tail) +
       ",\"captures\":" + captures_json(captured) + "}";
+  reply.clear();
   if (captured.status == runtime::CaptureStatus::Taken) {
     frizzle_answer_neurons(request, json.c_str(), captured.neurons.data(),
                            static_cast<std::uint32_t>(captured.neurons.size()));
@@ -385,6 +423,10 @@ std::string refusal(const runtime::OperationStart& start) {
       return "a turn is running";
     case runtime::OperationError::Edits:
       return start.edits.subject;
+    case runtime::OperationError::Kept:
+      return "kept token " +
+             std::to_string(start.start.kept_out_of_vocabulary.value_or(0)) +
+             " names no token";
     case runtime::OperationError::Start:
       break;
   }
@@ -459,13 +501,21 @@ EMSCRIPTEN_KEEPALIVE void frizzle_load_finish(std::uint32_t request) {
 
 EMSCRIPTEN_KEEPALIVE void frizzle_generate(
     std::uint32_t request, const char* text, std::uint32_t text_length,
+    const std::uint32_t* kept, std::uint32_t kept_count,
     const std::uint32_t* edits, std::uint32_t edit_count, double seed,
     std::uint32_t max_tokens) {
   if (engine == nullptr) {
     refuse(request, "generate", "no-device", "the device was never acquired");
     return;
   }
-  constexpr std::size_t kWords = 4;
+  // TokenId is an enum over u32, so the words are read one by one rather
+  // than reinterpreted.
+  std::vector<frizzle::tokenizer::TokenId> branch;
+  branch.reserve(kept_count);
+  for (const std::uint32_t id : std::span(kept, kept_count)) {
+    branch.push_back(frizzle::tokenizer::TokenId{id});
+  }
+  constexpr std::size_t kWords = 6;
   const std::span<const std::uint32_t> words(edits,
                                              std::size_t{edit_count} * kWords);
   std::vector<edit::Edit> set;
@@ -475,14 +525,15 @@ EMSCRIPTEN_KEEPALIVE void frizzle_generate(
         words[i + 2] > kKindCeiling ? kKindCeiling : words[i + 2];
     set.push_back({words[i], words[i + 1],
                    static_cast<edit::EditKind>(static_cast<std::uint8_t>(kind)),
-                   std::bit_cast<float>(words[i + 3])});
+                   std::bit_cast<float>(words[i + 3]), words[i + 4],
+                   words[i + 5]});
   }
   frizzle::policy::TurnPolicy policy;
   policy.seed = frizzle::policy::Seed{static_cast<std::uint64_t>(seed)};
   policy.max_tokens = max_tokens;
   const runtime::OperationStart started =
-      engine->generate(std::string_view(text, text_length), set, policy,
-                       on_text, on_end, userdata_of(request));
+      engine->generate(std::string_view(text, text_length), branch, set, policy,
+                       on_token, on_end, userdata_of(request));
   if (!started.ok()) refuse(request, "generate", "refused", refusal(started));
 }
 

@@ -125,21 +125,20 @@ which comes over whole.
   the grid, many by dragging a box (2026-10-30), and a card zooms and
   pans; Set, Scale × and Zero apply to the whole selection, the engine
   judging how many pins a run takes. The pins wait on the prompt, as
-  chips, one a layer and edit, for the next run. On the original reply's
-  card a pinned cell shows the value it will send, so a pin answers on
-  the grid at once; the edited reply's card shows what its run used. The
+  chips, one a layer and edit, for the next run. On the reply's card a
+  pinned cell shows the value it will send, so a pin answers on the grid
+  at once; the steered reply's card shows what its run used. The
   workbench gives the deck the focus on opening, so the wheel and keys
   work without a first click on the grid.
 - **The prompt starts it all (2026-10-30):** Load model, with the model's
   size and then its progress, sits on the prompt in Run's place until the
-  model is ready. A Run that changes only the pins keeps the original
-  reply it already has and generates only the edited one. Each
+  model is ready. Each
   card is coloured against its own layer's 99th-percentile magnitude, so a
   few outliers do not darken the rest; the legend gives that scale to two
   significant digits; infinities are full heat, NaN
-  magenta, and none sets the scale. The deck shows one reply's neurons at
-  a time, the original's or the edited's, by choice; the neuron card shows
-  both. The page is the conversation, full width, with the replies side
+  magenta, and none sets the scale. The deck shows one side's neurons at
+  the branch point at a time, the reply's or the steered reply's, by
+  choice; the neuron card shows both. The page is the conversation, full width, with the replies side
   by side; the workbench is a layer over the whole window, opened from the
   prompt or a reply, and Run closes it so the replies show as they
   stream: reading and working on neurons happen in turns, and side by
@@ -197,10 +196,24 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   context (32,768 tokens) is full. A strong edit can make the model repeat
   itself to the end of the context: setting layer 12 neuron 4031 to 100 and
   layer 6 neuron 100 to -200 does, at seed 7, for "Name three colours of the
-  rainbow.", natively and in the browser. Running again supersedes it; the
-  page has no Stop of its own.
-- The page runs the original reply, then the edited one from the same seed,
-  one after the other, since the engine runs one turn at a time.
+  rainbow.", natively and in the browser. Stop beside Run ends it
+  (2026-10-31: without one, a steered reply that ran away left Accept and
+  the words disabled, a dead end): the run settles "done", end
+  "cancelled", with no captures, and can be steered from or accepted; an
+  accepted stopped reply's neurons at the point come from an inspection.
+  Running again still supersedes it.
+- **Steering from a word (2026-10-30, slice 4 step 4):** the reply on the
+  left is words once done; clicking one sets the branch point after it,
+  and the deck shows every layer's neurons there, read by an inspection
+  (no tokens generated) unless the reply's own captures were taken there.
+  Run, with the reply done and the same message and seed, generates from
+  the point with the pins held into the right column, keeping the reply's
+  text before it; a new message or seed starts a new reply, then steers
+  from its start when pins are held. Accept makes the steered reply the
+  reply, its edits its history, the point where it branched; the pins are
+  kept throughout. Requests run one at a time, since the engine runs one
+  turn at a time: a branch follows the reply and waits for an inspection
+  in flight, and no word is chosen while a reply runs.
 
 ## Engine requirements
 
@@ -211,14 +224,20 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   layers to the page, so switching layers needs no request.
 - Edits are a set, applied together in one pass: any number of neurons in
   any layers.
-- Apply edits inside the pass, at the last prompt position and at every
-  generated token. Earlier positions' cache entries are unchanged.
-- Hold edits at every generated token. Generate the original and edited replies
-  from the same seed.
-- With no edits, or Scale × 1, the edited reply is the original reply, bit
-  for bit.
-- Between runs the cache holds only entries computed without edits: a run
-  with edits rewinds it, when it ends, to just before the edits began.
+- Apply edits inside the pass, each over a range of steps, from a branch
+  point in the reply on (2026-10-30, slice 4 step 4). Step k is the position
+  that draws reply token k; a branch keeps the reply's first k tokens,
+  which the page sends, and recomputes step k.
+- Hold edits at every generated token. Generate a reply and every branch
+  from it with the same seed.
+- With no edits, or Scale × 1, a steered reply is the reply without them,
+  bit for bit; a branch with a reply's own edits continues it bit for bit.
+- The cache keeps edited entries, with the edits of the run that wrote
+  them, and a run reuses it only to the first position whose tokens or
+  edits in force differ (2026-10-30, replacing the rewind after every
+  edited run, which would discard an accepted reply's entries).
+- An accepted reply, steered from a word, is the next reply to steer
+  from; the pins are kept throughout (the user, 2026-10-30).
 - Captures are taken in the step that ends the prompt, after that layer's
   edit, and read back once a run, after the turn; a turn that is cancelled
   or fails reports none, since the store may still hold an earlier run's.

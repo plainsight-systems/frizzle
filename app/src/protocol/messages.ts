@@ -15,14 +15,24 @@
 //                  and load it into the engine. Progress: {phase:
 //                  "download" | "load", done, total} in bytes. Done:
 //                  {contextTokens}.
-//       generate   {messages, edits, seed, maxTokens}: render the
-//                  conversation through the model's chat template, run it
-//                  with the edit set, and stream the reply. Done:
-//                  {end, tokens, promptTokens, reusedTokens, captures}:
-//                  captures (Captures below) are every layer's neurons at
-//                  the last prompt position, after this run's edits, as
-//                  the engine read them back (runtime/engine.h); they come
-//                  once, with the answer, never on their own.
+//       generate   {messages, kept, edits, seed, maxTokens}: render the
+//                  conversation through the model's chat template, then
+//                  read `kept`, reply token identifiers from an earlier
+//                  answer (a branch that keeps them; [] for a run from the
+//                  reply's start), run it with the ranged edits
+//                  (engine/edits.ts), and stream the reply: "text" once an
+//                  emitted token, {text, token}, the text possibly "".
+//                  maxTokens 0 inspects: no reply, the captures alone.
+//                  Done: {end, tokens, promptTokens, reusedTokens, reply,
+//                  tail, captures}: reply, the emitted identifiers in
+//                  order; tail, text the last token ends with that its
+//                  "text" could not carry (U+FFFD for a character the run
+//                  stopped inside), else "";
+//                  captures (Captures below), every layer's neurons at the
+//                  input's last position, step kept.length, after the
+//                  edits in force there, as the engine read them back
+//                  (runtime/engine.h); they come once, with the answer,
+//                  never on their own.
 //       cancel     {target}: end the request `target` early: a load while
 //                  it downloads (once it streams into the engine it runs to
 //                  its end), a generation running, or either not yet
@@ -38,7 +48,7 @@
 //   - The page renders nothing: it sends whole messages, and the worker
 //     renders the template (logical-overview.md, the parts).
 
-import type { Edit } from "../engine/edits.ts";
+import type { RangedEdit } from "../engine/edits.ts";
 
 export type Id = number;
 
@@ -58,7 +68,8 @@ export interface GenerateRequest {
   readonly kind: "generate";
   readonly id: Id;
   readonly messages: readonly Message[];
-  readonly edits: readonly Edit[];
+  readonly kept: readonly number[]; // reply token identifiers, 32-bit
+  readonly edits: readonly RangedEdit[];
   readonly seed: number; // an integer below 2^53
   readonly maxTokens: number;
 }
@@ -102,6 +113,8 @@ export interface Generated {
   readonly tokens: number;
   readonly promptTokens: number;
   readonly reusedTokens: number;
+  readonly reply: readonly number[]; // the emitted identifiers, in order
+  readonly tail: string; // the last token's text past its "text", maybe ""
   readonly captures: Captures;
 }
 
@@ -115,7 +128,12 @@ export interface WorkerFailure {
 
 export type Reply =
   | { readonly kind: "progress"; readonly id: Id; readonly progress: Progress }
-  | { readonly kind: "text"; readonly id: Id; readonly text: string }
+  | {
+      readonly kind: "text";
+      readonly id: Id;
+      readonly text: string; // the characters this token completes, maybe ""
+      readonly token: number;
+    }
   | { readonly kind: "done"; readonly id: Id; readonly value: unknown }
   | {
       readonly kind: "failed";

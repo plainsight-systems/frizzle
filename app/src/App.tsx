@@ -9,10 +9,11 @@
 //                Load model itself is on the prompt (views/prompt/), where
 //                the person starts.
 //       page     the conversation (views/prompt/): the prompt, then the
-//                original and edited replies side by side.
+//                reply to steer from and the steered reply side by side.
 //       layer    the workbench (views/deck/), a dialog over the whole
 //                window, opened from the prompt's "Open neurons" or a
-//                reply's "Neurons" button, showing that reply's neurons.
+//                reply's "Neurons" button, showing that side's neurons at
+//                the branch point.
 //                While it is open the page behind it is inert. Close or Esc
 //                closes it; its Run runs and closes it, so the replies show
 //                as they stream.
@@ -25,7 +26,7 @@
 //     {c} tokens of context" | "Failed at {stage}: {message}". Megabytes
 //     are decimal and whole (shape/numbers.ts).
 //   - Held here, so they last while the workbench is closed and reopened:
-//     the message and seed as typed, the reply whose neurons are shown,
+//     the message and seed as typed, the side whose neurons are shown,
 //     the front layer, and the selection: one or more neurons of one layer
 //     (Selection), which is brought to the front when selected. The pins
 //     are the session's.
@@ -72,7 +73,7 @@ export function App({ session }: { readonly session: Session }) {
   const [message, setMessage] = useState("");
   const [seedText, setSeedText] = useState("1");
   const [open, setOpen] = useState(false);
-  const [which, setWhich] = useState<Which>("original");
+  const [which, setWhich] = useState<Which>("reply");
   const [front, setFront] = useState(0);
   const [selection, setSelection] = useState<Selection | null>(null);
   const { device, model } = state;

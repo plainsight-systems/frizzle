@@ -23,6 +23,7 @@
 
 #include "core/arch/architecture.h"
 #include "core/cache/kv.h"
+#include "core/cache/prefix.h"
 #include "core/capability/capability.h"
 #include "core/capture/capture.h"
 #include "core/capture/reader.h"
@@ -77,6 +78,9 @@ struct Engine::State {
   capture::Layout layout{};             // each layer's slot in it
 
   bool running = false;  // a turn is in flight
+  // The placed edits (edit::placed) of the run that wrote the cache; empty
+  // with it (engine.h, the invariant between runs).
+  std::vector<edit::Edit> held;
 };
 
 namespace {
@@ -93,14 +97,14 @@ struct LoadCall {
 
 struct GenerateCall {
   std::shared_ptr<State> state;
-  TextCallback on_text;
+  ReplyTokenCallback on_token;
   RunEndCallback on_end;
   void* userdata;
-  bool edited;  // the run had edits, so its cache entries are rewound
   // The turn's result while the store is read, its message copied to
   // outlive the turn's callback.
   TurnResult result{};
   std::string message;
+  std::string tail;
 };
 
 // --- Names, for refusals and failures ------------------------------------
@@ -249,6 +253,7 @@ void settle(std::unique_ptr<LoadCall> call, LoadError error,
   if (error != LoadError::Ok) {
     s.phase = Phase::Unloaded;
     s.generator.reset();
+    s.held.clear();
     s.reader.reset();
     s.upload.reset();
     s.tokenizer.reset();
@@ -324,6 +329,7 @@ void on_built(std::unique_ptr<kernels::Program> program,
       std::make_unique<Runtime>(std::move(program), std::move(cache), s.stops);
   s.generator =
       std::make_unique<Generator>(std::move(s.tokenizer), std::move(turns));
+  s.held.clear();  // a new, empty cache
   const residency::Upload& upload = *s.upload;
   capture::Reader::make(*s.device, upload.buffer(s.captures.buffer), s.captures,
                         on_reader_made, gpu::hand_off(std::move(call)));
@@ -387,9 +393,10 @@ void on_finished(residency::UploadError error, void* userdata) {
 
 // --- Generate --------------------------------------------------------------
 
-void on_generate_text(std::string_view text, void* userdata) {
+void on_generate_token(tokenizer::TokenId token, std::string_view text,
+                       void* userdata) {
   const auto& call = *static_cast<const GenerateCall*>(userdata);
-  call.on_text(text, call.userdata);
+  call.on_token(token, text, call.userdata);
 }
 
 // Whether the turn's step that ends the prompt ran: a turn that ended Stop,
@@ -417,6 +424,7 @@ void on_captures_read(residency::Mapped outcome, std::span<const float> words,
     captured.neurons = words;
   }
   call->result.message = call->message;
+  call->result.tail = call->tail;
   s.running = false;
   call->on_end(call->result, captured, call->userdata);
 }
@@ -424,14 +432,9 @@ void on_captures_read(residency::Mapped outcome, std::span<const float> words,
 void on_generate_end(const TurnResult& result, void* userdata) {
   auto call = gpu::take_back<GenerateCall>(userdata);
   State& s = *call->state;
-  // Back to just before the edits began: the cache keeps no edited entry
-  // between runs. The turn has ended, so the generator is between turns and
-  // the rewind is not refused; a refusal would be a broken invariant. A
-  // destroyed engine runs nothing again, so its cache is left as it is.
-  if (call->edited && !s.cancelled && s.generator != nullptr &&
-      !s.generator->rewind(result.prompt - 1)) {
-    std::abort();
-  }
+  // A turn whose step failed empties the cache (runtime.h): the held edits
+  // go with it.
+  if (s.generator == nullptr || s.generator->cached() == 0) s.held.clear();
   // A loaded engine has its reader (on_reader_made); a turn runs only on a
   // loaded one, and no load begins while it runs.
   if (s.reader == nullptr) std::abort();
@@ -446,6 +449,7 @@ void on_generate_end(const TurnResult& result, void* userdata) {
   // the read's copy after every step the turn submitted.
   call->result = result;
   call->message = std::string(result.message);
+  call->tail = std::string(result.tail);
   capture::Reader& reader = *s.reader;
   reader.read(on_captures_read, gpu::hand_off(std::move(call)));
 }
@@ -626,10 +630,11 @@ LoadResult Engine::finish_load(LoadCallback done, void* userdata) {
 }
 
 OperationStart Engine::generate(std::string_view text,
+                                std::span<const tokenizer::TokenId> kept,
                                 std::span<const edit::Edit> edits,
                                 const policy::TurnPolicy& policy,
-                                TextCallback on_text, RunEndCallback on_end,
-                                void* userdata) {
+                                ReplyTokenCallback on_token,
+                                RunEndCallback on_end, void* userdata) {
   State& s = *state_;
   if (s.phase != Phase::Loaded) return {OperationError::NotLoaded, {}, {}};
   if (s.running) return {OperationError::Busy, {}, {}};
@@ -637,9 +642,37 @@ OperationStart Engine::generate(std::string_view text,
       !checked.ok()) {
     return {OperationError::Edits, std::move(checked), {}};
   }
+  Prepared made;
+  if (GenerateResult prepared = s.generator->prepare(text, kept, made);
+      !prepared.ok()) {
+    const OperationError error = prepared.kept_out_of_vocabulary
+                                     ? OperationError::Kept
+                                     : OperationError::Start;
+    return {error, {}, std::move(prepared)};
+  }
+  // The steps count from the text's last token, so text that makes none
+  // has no step 0.
+  if (made.text_tokens == 0) {
+    return {OperationError::Start,
+            {},
+            {{}, {StartError::EmptyPrompt, "the text makes no tokens"}, {}}};
+  }
+  const std::uint32_t origin = made.text_tokens - 1;
+  // The cache is reused only where this run's edits in force equal those
+  // that wrote it: back to the first position they differ. Rewind never
+  // lengthens the cache, and no turn runs, so it is not refused.
+  std::vector<edit::Edit> placed = edit::placed(edits, origin);
+  const std::uint32_t differ = cache::first_edit_difference(s.held, placed);
+  if (differ != edit::kToTheEnd && !s.generator->rewind(differ)) std::abort();
+  // Every entry the cache now holds is before `differ`, where the two sets
+  // agree, so the placed edits describe it already, whether or not the
+  // turn starts.
+  s.held = std::move(placed);
+  if (s.generator->cached() == 0) s.held.clear();
   // The whole table, every run: no turn is in flight, and the queue orders
   // the write before the turn's first step.
-  const std::vector<std::uint32_t> table = edit::table(edits, s.description);
+  const std::vector<std::uint32_t> table =
+      edit::table(edits, s.description, origin);
   wgpuQueueWriteBuffer(s.device->queue(), s.upload->buffer(s.edit_table.buffer),
                        s.edit_table.offset, table.data(),
                        table.size() * sizeof(std::uint32_t));
@@ -647,9 +680,9 @@ OperationStart Engine::generate(std::string_view text,
   // returns.
   s.running = true;
   void* call = gpu::hand_off(std::make_unique<GenerateCall>(
-      GenerateCall{state_, on_text, on_end, userdata, !edits.empty(), {}, {}}));
+      GenerateCall{state_, on_token, on_end, userdata, {}, {}}));
   const GenerateResult started =
-      s.generator->start(text, policy, on_generate_text, on_generate_end, call);
+      s.generator->start(policy, on_generate_token, on_generate_end, call);
   if (!started.ok()) {
     (void)gpu::take_back<GenerateCall>(call);
     s.running = false;

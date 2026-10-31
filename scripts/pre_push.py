@@ -2,8 +2,7 @@
 
 Enabled once per clone with `git config core.hooksPath .githooks`; git then
 runs .githooks/pre-push, which runs this, before every push, and a failure
-stops the push. `git push --no-verify` skips it. The repository has no remote
-yet, so the hook fires once one is added.
+stops the push. `git push --no-verify` skips it.
 
 What it does, in order; each step fails by name and stops the push:
   1. Refuses unless what is pushed is what is checked out: every commit git

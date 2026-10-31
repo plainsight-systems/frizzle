@@ -20,7 +20,8 @@ struct Constants {
   std::uint32_t width;
 };
 
-// One workgroup: a layer's edits are few, and with none it reads two words.
+// One workgroup a row: a layer's edits are few, and with none each reads
+// two words.
 constexpr std::uint32_t kWorkgroup = 64;
 
 kernels::Binding whole(const residency::BufferRange& range) {
@@ -42,7 +43,7 @@ kernels::Launch edit_launch(std::uint32_t layer,
                          {whole(table), whole(activation)},
                          kWorkgroup,
                          kWorkgroup,
-                         kernels::Rows::LastToken,
+                         kernels::Rows::EveryToken,
                          {}};
 }
 

@@ -26,9 +26,11 @@
 //   - --pin pins a neuron for the edited run, and may be given again for
 //     more, in any layers: LAYER:NEURON=VALUE sets it to VALUE,
 //     LAYER:NEURON*FACTOR scales it by FACTOR, LAYER:NEURON=zero zeroes it
-//     (edit/edit.h). The tool reads only this syntax, refusing anything else
-//     as a bad argument; whether a pin is valid for the model (its layer,
-//     neuron and value) is the engine's to say, and it refuses one by name.
+//     (edit/edit.h), over every step of the reply: from step 0, the
+//     prompt's last token, to the end. The tool reads only this syntax,
+//     refusing anything else as a bad argument; whether a pin is valid for the
+//     model (its layer, neuron and value) is the engine's to say, and it
+//     refuses one by name.
 //   - Prints, in order: the device; the load and turn settings it ran with;
 //     the reply, streamed as the model writes it; how the reply ended, its
 //     token count and the prompt's. With pins, then: the pins; the edited
@@ -48,9 +50,10 @@
 //      file at an offset on demand, so nothing holds the whole file in
 //      memory; write the file in 16 MiB chunks, each accepted before the
 //      next; finish_load. Pump events throughout.
-//   4. generate(wrapped text, no edits, policy), printing text as it
-//      streams; print how it ended.
-//   5. With pins, generate(wrapped text, the pins, policy) the same way.
+//   4. generate(wrapped text, no kept tokens, no edits, policy), printing
+//      text as it streams; print how it ended.
+//   5. With pins, generate(wrapped text, none kept, the pins, policy) the
+//      same way.
 //
 // Design and cost
 //   - The file-backed byte source lives here, not in the core: the browser
@@ -207,7 +210,8 @@ std::optional<edit::Edit> parse_pin(std::string_view text,
   if (colon == std::string_view::npos) return refuse();
   const std::size_t op = text.find_first_of("=*", colon + 1);
   if (op == std::string_view::npos) return refuse();
-  edit::Edit pin{};
+  // Every step of the reply (Contract, above).
+  edit::Edit pin{0, 0, edit::EditKind::Set, 0.0F, 0, edit::kToTheEnd};
   if (!parse_number(text.substr(0, colon), pin.layer) ||
       !parse_number(text.substr(colon + 1, op - colon - 1), pin.neuron)) {
     return refuse();
@@ -445,6 +449,10 @@ std::string refusal(const runtime::OperationStart& start) {
       return "a turn is running";
     case runtime::OperationError::Edits:
       return start.edits.subject;
+    case runtime::OperationError::Kept:  // the tool keeps no tokens
+      return "kept token " +
+             std::to_string(start.start.kept_out_of_vocabulary.value_or(0)) +
+             " names no token";
     case runtime::OperationError::Start:
       break;
   }
@@ -545,8 +553,9 @@ int reply(runtime::Engine& engine, WGPUInstance instance,
   put(stdout, std::format("{}:\n", label));
   Reply reply;
   const runtime::OperationStart generating = engine.generate(
-      text, edits, turn,
-      [](std::string_view piece, void* /*userdata*/) {
+      text, {}, edits, turn,
+      [](frizzle::tokenizer::TokenId /*token*/, std::string_view piece,
+         void* /*userdata*/) {
         put(stdout, piece);
         std::fflush(stdout);
       },
@@ -556,6 +565,7 @@ int reply(runtime::Engine& engine, WGPUInstance instance,
         auto& r = *static_cast<Reply*>(userdata);
         r.result = result;
         r.message = result.message;  // valid only during the call
+        put(stdout, result.tail);    // a character the turn stopped inside
         r.done = true;
       },
       &reply);

@@ -163,6 +163,8 @@ residency::WorkingSet decoder_working_set(
       (kCandidates * first_tiles + kSelectionTile - 1) / kSelectionTile;
   const std::uint32_t partial_rows =
       residency::partial_rows_for(model.trained_context);
+  const std::uint64_t edit_table =
+      (2ULL * model.layers.size()) + (edit::kEditWords * edit::kMaxEdits);
   return {{
               {"hidden", kPrefillBlock, model.embedding_width},
               {"normed", kPrefillBlock, model.embedding_width},
@@ -193,10 +195,9 @@ residency::WorkingSet decoder_working_set(
               // of the products needs (kernels/matmul/matmul.h).
               {"range_sums", 1, range_sums},
               // The run's edits, u32 words: a [first, count] pair a layer
-              // and three words an edit, at most edit::kMaxEdits
+              // and edit::kEditWords an edit, at most edit::kMaxEdits
               // (edit/edit.h); the engine writes it before each run.
-              {"edit_table", 1,
-               (2ULL * model.layers.size()) + (3ULL * edit::kMaxEdits)},
+              {"edit_table", 1, edit_table},
               // Every layer's neurons at the last prompt position, a slot a
               // layer, u32 words (capture/capture.h).
               {"captures", 1, capture::layout(model).words},

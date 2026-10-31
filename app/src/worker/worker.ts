@@ -11,8 +11,9 @@
 //     {contextTokens}. A file without a chat template is refused by name.
 //   - generate: refused, "failed" at stage "generate", before load; render
 //     the messages (worker/template/template.ts), refusing a TemplateError
-//     by name at stage "template"; Engine.generate with the edits, the seed
-//     and maxTokens, streaming "text"; done with its answer, captures and
+//     by name at stage "template"; Engine.generate with the kept tokens,
+//     the edits, the seed and maxTokens, streaming "text" with each token's
+//     identifier; done with its answer, captures and
 //     all, the neurons' buffer transferred to the page, not copied
 //     (messages.ts). A generation cancelled before it started is done with
 //     end "cancelled" and captures "not-taken": it ran nothing.
@@ -102,6 +103,8 @@ async function answer(request: Exclude<Request, CancelRequest>): Promise<void> {
               tokens: 0,
               promptTokens: 0,
               reusedTokens: 0,
+              reply: [],
+              tail: "",
               captures: { kind: "not-taken" },
             },
           },
@@ -177,8 +180,14 @@ async function generate(request: GenerateRequest): Promise<Generated> {
   try {
     return await (
       await engine
-    ).generate(text, request.edits, request.seed, request.maxTokens, (piece) =>
-      post({ kind: "text", id: request.id, text: piece }),
+    ).generate(
+      text,
+      request.kept,
+      request.edits,
+      request.seed,
+      request.maxTokens,
+      (token, piece) =>
+        post({ kind: "text", id: request.id, text: piece, token }),
     );
   } finally {
     generating = null;

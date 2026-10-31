@@ -1,14 +1,17 @@
 // Axis V: the kernels suite (tests/README.md), the edit kernel.
 //
 // Contract locked (edit/edit_kernel.h): one layer's edit launch, alone on
-// the GPU, makes the listed neurons of the activation's last row
-// edit::apply's result, bit for bit, in a step that scores a token — a
-// prefill step that ends the prompt, or a one-token decode step — and
-// changes nothing in a step that does not. It applies its own layer's
-// edits and no other's; more than one workgroup's worth (64) all apply;
-// Scale × 1 keeps a subnormal's bits; every other value keeps its bits.
+// the GPU, makes each listed neuron edit::apply's result, bit for bit, in
+// exactly the rows whose positions its range holds, row r being position
+// step.position + r, in any step, prefill or decode, scoring or not; a
+// range that begins or ends inside a block edits the rows on its side
+// only; two ranges of one neuron each edit their own rows; a decode step
+// past a range's end changes nothing. The range is placed at the table's
+// origin (edit::table). It applies its own layer's edits and no other's;
+// more than one workgroup's worth (64) all apply; Scale × 1 keeps a
+// subnormal's bits; every other value keeps its bits.
 //
-// Inputs, all made here: an activation of 3 rows of 200 floats, a table
+// Inputs, all made here: an activation of 5 rows of 200 floats, a table
 // (edit::table) for a 3-layer description of that width, and a program of
 // one launch, layer 1's, over a plan of just those two working buffers. No
 // model file.
@@ -53,12 +56,22 @@ namespace {
 namespace frz = frizzle;
 using frz::edit::Edit;
 using frz::edit::EditKind;
+using frz::edit::kToTheEnd;
 
 constexpr std::uint32_t kLayers = 3;
 constexpr std::uint32_t kWidth = 200;
-constexpr std::uint32_t kRows = 3;
+constexpr std::uint32_t kRows = 5;
+// Steps count from the origin: step s is position kOrigin + s.
+constexpr std::uint32_t kOrigin = 40;
 constexpr std::uint32_t kLayer = 1;  // the launch under test
 constexpr std::size_t kChunk = std::size_t{1} << 20U;
+
+// A step's rows: `tokens` of them from `position`, named so the two are
+// never swapped.
+struct StepRows {
+  std::uint32_t position;
+  std::uint32_t tokens;
+};
 
 frz::model::ModelDescription description() {
   frz::model::ModelDescription model{};
@@ -74,7 +87,7 @@ std::uint32_t bits(float f) { return std::bit_cast<std::uint32_t>(f); }
 frz::residency::ResidencyPlan two_buffers() {
   const std::uint64_t activation = std::uint64_t{kRows} * kWidth * 4;
   const std::uint64_t table = ((std::uint64_t{2} * kLayers) +
-                               (std::uint64_t{3} * frz::edit::kMaxEdits)) *
+                               (std::uint64_t{5} * frz::edit::kMaxEdits)) *
                               4;
   frz::residency::ResidencyPlan plan;
   plan.buffers = {{frz::residency::Pool::Scratch, activation},
@@ -157,22 +170,23 @@ class Harness {
     program_ = std::move(built.program);
   }
 
-  // Runs one step of `tokens` rows, asking for logits or not, over
-  // `activation` and the table of `edits`; returns the activation after.
-  std::vector<float> run(std::uint32_t tokens, bool logits,
+  // Runs one step of `rows`, asking for logits or
+  // not, over `activation` and the table of `edits` placed at kOrigin;
+  // returns the activation after.
+  std::vector<float> run(StepRows rows, bool logits,
                          std::span<const float> activation,
                          std::span<const Edit> edits) {
     REQUIRE(frz::edit::check(edits, description_).ok());
     const std::vector<std::uint32_t> table =
-        frz::edit::table(edits, description_);
+        frz::edit::table(edits, description_, kOrigin);
     const std::vector<frz::kernels::RunInput> inputs{
         {{activation_.buffer, activation_.offset, activation.size_bytes()},
          std::as_bytes(activation)},
         {{table_.buffer, table_.offset, table.size() * sizeof(std::uint32_t)},
          std::as_bytes(std::span(table))}};
     frz::kernels::Step step{};
-    step.position = 0;
-    step.tokens = tokens;
+    step.position = rows.position;
+    step.tokens = rows.tokens;
     step.logits = logits ? 1 : 0;
     struct Ran {
       frz::kernels::ProgramError error{};
@@ -224,41 +238,50 @@ std::vector<float> activation() {
   return a;
 }
 
-// Layer 1's edits: more than 64, every kind, Scale × 1 on the subnormal and
-// on the negative zero; and edits in layers 0 and 2 the launch must ignore.
-std::vector<Edit> edits() {
+// Layer 1's edits over steps [from, until): more than 64, every kind,
+// Scale × 1 on the subnormal and on the negative zero; and edits in layers
+// 0 and 2 the launch must ignore, over every step.
+std::vector<Edit> edits(std::uint32_t from = 0,
+                        std::uint32_t until = kToTheEnd) {
   std::vector<Edit> e;
   constexpr std::uint32_t kMany = 150;
   for (std::uint32_t n = 10; n < 10 + kMany; ++n) {
     switch (n % 3) {
       case 0:
-        e.push_back({kLayer, n, EditKind::Set, static_cast<float>(n) * 0.5F});
+        e.push_back({kLayer, n, EditKind::Set, static_cast<float>(n) * 0.5F,
+                     from, until});
         break;
       case 1:
-        e.push_back({kLayer, n, EditKind::Scale, -1.75F});
+        e.push_back({kLayer, n, EditKind::Scale, -1.75F, from, until});
         break;
       default:
-        e.push_back({kLayer, n, EditKind::Zero, 0.0F});
+        e.push_back({kLayer, n, EditKind::Zero, 0.0F, from, until});
         break;
     }
   }
-  e.push_back({kLayer, kSubnormalNeuron, EditKind::Scale, 1.0F});
-  e.push_back({kLayer, kNegativeZeroNeuron, EditKind::Scale, 1.0F});
-  e.push_back({0, 3, EditKind::Set, 999.0F});
-  e.push_back({2, 4, EditKind::Set, -999.0F});
-  e.push_back({0, 20, EditKind::Zero, 0.0F});
+  e.push_back({kLayer, kSubnormalNeuron, EditKind::Scale, 1.0F, from, until});
+  e.push_back(
+      {kLayer, kNegativeZeroNeuron, EditKind::Scale, 1.0F, from, until});
+  e.push_back({0, 3, EditKind::Set, 999.0F, 0, kToTheEnd});
+  e.push_back({2, 4, EditKind::Set, -999.0F, 0, kToTheEnd});
+  e.push_back({0, 20, EditKind::Zero, 0.0F, 0, kToTheEnd});
   return e;
 }
 
 // What the launch must leave: `before`, with layer 1's edits applied by
-// edit::apply to row `row` alone.
+// edit::apply to each of the step's `rows` whose position the edit's
+// range, placed at kOrigin, holds.
 std::vector<float> expected(std::span<const float> before,
-                            std::span<const Edit> edits, std::uint32_t row) {
+                            std::span<const Edit> edits, StepRows rows) {
   std::vector<float> out(before.begin(), before.end());
-  for (const Edit& e : edits) {
+  for (const Edit& e : frz::edit::placed(edits, kOrigin)) {
     if (e.layer != kLayer) continue;
-    float& v = out.at((std::size_t{row} * kWidth) + e.neuron);
-    v = frz::edit::apply(e.kind, e.value, v);
+    for (std::uint32_t row = 0; row < rows.tokens; ++row) {
+      const std::uint32_t at = rows.position + row;
+      if (at < e.from || at >= e.until) continue;
+      float& v = out.at((std::size_t{row} * kWidth) + e.neuron);
+      v = frz::edit::apply(e.kind, e.value, v);
+    }
   }
   return out;
 }
@@ -281,28 +304,69 @@ void same_bits(std::span<const float> got, std::span<const float> want) {
 
 }  // namespace
 
-TEST_CASE("a prefill step that ends the prompt edits its last row") {
+TEST_CASE("an edit from the step that ends the prompt edits that row only") {
   Harness h;
   const std::vector<float> before = activation();
   const std::vector<Edit> e = edits();
-  same_bits(h.run(kRows, true, before, e), expected(before, e, kRows - 1));
+  // Positions 36 to 40: step 0, position 40, is the block's last row.
+  const auto got = h.run({.position = kOrigin - kRows + 1, .tokens = kRows},
+                         true, before, e);
+  same_bits(got, expected(before, e,
+                          {.position = kOrigin - kRows + 1, .tokens = kRows}));
+  same_bits(std::span(got).first(std::size_t{kRows - 1} * kWidth),
+            std::span(before).first(std::size_t{kRows - 1} * kWidth));
 }
 
-TEST_CASE("a one-token decode step edits its one row") {
+TEST_CASE("a range that begins inside a block edits the rows from it on") {
   Harness h;
   const std::vector<float> before = activation();
-  const std::vector<Edit> e = edits();
-  same_bits(h.run(1, true, before, e), expected(before, e, 0));
+  const std::vector<Edit> e = edits(2);  // from position 42
+  // Positions 40 to 44, a block that does not score: rows 2 to 4 edited.
+  same_bits(h.run({.position = kOrigin, .tokens = kRows}, false, before, e),
+            expected(before, e, {.position = kOrigin, .tokens = kRows}));
 }
 
-TEST_CASE("a prefill step that does not end the prompt changes nothing") {
+TEST_CASE("a range that ends inside a block edits the rows before it") {
   Harness h;
   const std::vector<float> before = activation();
-  same_bits(h.run(kRows, false, before, edits()), before);
+  const std::vector<Edit> e = edits(0, 3);  // positions 40 to 42
+  same_bits(h.run({.position = kOrigin, .tokens = kRows}, true, before, e),
+            expected(before, e, {.position = kOrigin, .tokens = kRows}));
+}
+
+TEST_CASE("two ranges of one neuron each edit their own rows") {
+  Harness h;
+  const std::vector<float> before = activation();
+  const std::vector<Edit> e{{kLayer, 50, EditKind::Set, 1.0F, 0, 2},
+                            {kLayer, 50, EditKind::Set, 2.0F, 2, 4},
+                            {kLayer, 50, EditKind::Scale, -3.0F, 4, kToTheEnd}};
+  const auto got =
+      h.run({.position = kOrigin, .tokens = kRows}, true, before, e);
+  same_bits(got, expected(before, e, {.position = kOrigin, .tokens = kRows}));
+  CHECK(got.at(50) == 1.0F);
+  CHECK(got.at((std::size_t{2} * kWidth) + 50) == 2.0F);
+}
+
+TEST_CASE("a decode step inside a range edits its row; past the end, nothing") {
+  Harness h;
+  const std::vector<float> before = activation();
+  const std::vector<Edit> e = edits(0, 6);  // positions 40 to 45
+  same_bits(h.run({.position = kOrigin + 5, .tokens = 1}, true, before, e),
+            expected(before, e, {.position = kOrigin + 5, .tokens = 1}));
+  same_bits(h.run({.position = kOrigin + 6, .tokens = 1}, true, before, e),
+            before);
+}
+
+TEST_CASE("a block before every range changes nothing") {
+  Harness h;
+  const std::vector<float> before = activation();
+  same_bits(h.run({.position = 0, .tokens = kRows}, false, before, edits()),
+            before);
 }
 
 TEST_CASE("no edits change nothing") {
   Harness h;
   const std::vector<float> before = activation();
-  same_bits(h.run(kRows, true, before, {}), before);
+  same_bits(h.run({.position = kOrigin, .tokens = kRows}, true, before, {}),
+            before);
 }

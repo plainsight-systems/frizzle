@@ -1,0 +1,14 @@
+// The app's projects, for editors only: an editor gives a file the nearest
+// tsconfig.json, and finds here the project that holds it, so the worker's
+// files are read with the worker's types and the page's with the DOM's. It
+// checks nothing itself ("files": []); `npm run typecheck` checks each
+// project by name.
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.page.json" },
+    { "path": "./tsconfig.worker.json" },
+    { "path": "./tsconfig.node.json" },
+    { "path": "../tests/integration/browser/tsconfig.json" }
+  ]
+}

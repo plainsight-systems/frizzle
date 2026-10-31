@@ -254,9 +254,6 @@ StartResult Runtime::start(std::span<const tokenizer::TokenId> prompt,
       !checked.ok) {
     return {StartError::Settings, checked.subject};
   }
-  if (policy.max_tokens == 0) {
-    return {StartError::Settings, "max_tokens is 0; a reply draws at least 1"};
-  }
 
   // The diff, less the last token when it is the whole prompt: the first
   // draw needs that token's logits, which the cache does not hold.
@@ -285,6 +282,10 @@ StartResult Runtime::start(std::span<const tokenizer::TokenId> prompt,
 
 std::uint32_t Runtime::capacity() const noexcept {
   return state_->cache.capacity();
+}
+
+std::uint32_t Runtime::cached() const noexcept {
+  return state_->cache.length();
 }
 
 bool Runtime::rewind(std::uint32_t tokens) noexcept {

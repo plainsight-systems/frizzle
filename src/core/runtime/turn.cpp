@@ -44,6 +44,11 @@ Draw Turn::report(const std::optional<sampler::SampledRecord>& record,
   if (!record) return Draw::None;
   const std::uint32_t i = drawn_++;
   if (ended_) return Draw::Discard;
+  if (max_tokens_ == 0) {  // an inspection: draw 0 is discarded, whatever it is
+    ended_ = true;
+    end_ = TurnEnd::Limit;
+    return Draw::Discard;
+  }
   if (record->failed != 0) {
     ended_ = true;
     failure_ = TurnFailure::NonFinite;

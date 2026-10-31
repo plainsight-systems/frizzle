@@ -56,7 +56,7 @@ the file it is read from.
 | Operation | Does | Returns |
 | --- | --- | --- |
 | `load(file)` | Read the GGUF, put the weights on the GPU | Ready, or a named refusal |
-| `generate(text, edits, seed)` | Run the model over the rendered prompt, the edits applied at the last position and held at every generated token | The reply, streamed; then its end and every layer's neurons at the last prompt position |
+| `generate(text, kept, edits, seed)` | Run the model over the rendered prompt and the reply tokens a branch keeps, each edit at the steps its range holds; a limit of 0 inspects, drawing nothing | The reply, streamed a token at a time with its identifier; then its end, its identifiers, and every layer's neurons at the input's last position, step k |
 
 Frizzle shows what the model produces and computes nothing beside it. The
 cache keeps the prompt's prefix between runs, so running the same prompt
@@ -188,13 +188,13 @@ captures change and never per frame:
 ```mermaid
 flowchart TD
   R["the run shown<br/>(session.ts snapshot)"]
-  Q{"Neurons from:<br/>original or edited reply"}
-  A{"that reply's<br/>captures"}
+  Q{"Neurons from:<br/>reply or steered reply,<br/>at the branch point"}
+  A{"that side's captures there:<br/>the reply's own, an inspection's,<br/>or the steered run's"}
   N["no cards; status Deck says why:<br/>Waiting, Not captured,<br/>Not read back, None"]
   F["each slot l, in layer order:<br/>fold(slot.width), 96 to a row<br/>(shape/fold.ts)"]
   P["paint the slot's words:<br/>scale = 99th-percentile |v|,<br/>heat by size, either sign<br/>(shape/paint.ts, theme/palette.ts)"]
   T["one texture a card,<br/>one texel a neuron<br/>(views/deck/Deck.tsx)"]
-  D["the deck: front card = layer l,<br/>its scale in the legend;<br/>strip, keys, wheel step layers;<br/>click or drag to select, zoom, pan;<br/>on the original's cards, a pin's cell<br/>shows what it will send"]
+  D["the deck: front card = layer l,<br/>its scale in the legend;<br/>strip, keys, wheel step layers;<br/>click or drag to select, zoom, pan;<br/>on the reply's cards, a pin's cell<br/>shows what it will send"]
   R --> Q --> A
   A -->|"taken"| F --> P --> T --> D
   A -->|"waiting, not-taken,<br/>unread, failed"| N
@@ -213,31 +213,51 @@ sequenceDiagram
   participant App
   participant Worker as Worker and engine
   You->>App: type a prompt
-  App->>Worker: generate(text, no edits, seed)
-  Worker-->>App: the original reply, streamed, then its captures
-  You->>App: pin neurons
-  App->>Worker: generate(text, whole edit set, same seed)
-  Worker-->>App: the edited reply, beside the original, then its captures
+  App->>Worker: generate(text, nothing kept, no edits, seed)
+  Worker-->>App: the reply, streamed, each token with its identifier, then its captures
+  You->>App: click a word: the branch point k
+  App->>Worker: generate(text, the reply's first k tokens, its history, maxTokens 0)
+  Worker-->>App: the captures at step k (an inspection)
+  You->>App: pin neurons, Run
+  App->>Worker: generate(text, the first k tokens, history cut at k + pins from k, same seed)
+  Worker-->>App: the steered reply, beside the reply, then its captures at k
+  You->>App: Accept: the steered reply becomes the reply, its edits its history
 ```
 
-The original reply is generated once per prompt, before any edit, and kept.
+The reply is generated once per prompt and seed, before any edit; after
+that every run keeps its tokens to the branch point, and an accepted
+steered reply takes its place. Stop, beside Run, cancels whichever run is
+going: it ends "cancelled" with the tokens so far and no captures, and can
+still be steered from or accepted; accepting it inspects at the point for
+its neurons.
 
 ## What must stay true
 
-1. The prefix, 0 … n−2, is computed once per prompt and never written again.
-2. Position n−1 depends only on the prefix and the edit set, and is
-   recomputed on every run.
-3. With no edits, or Scale × 1, the reply is bit for bit the original.
-4. The app sends the whole edit set with every run. Neither holds a change
-   list for the other.
-5. A capture is a copy taken inside the pass at its point. An edited stage is
-   captured after its edit. The capture store always holds the last run's
-   values, for every layer, and is sent whole.
-6. The original and edited replies use the same seed. The sampler is keyed by
-   seed and position, and edits are applied at every decode step, so the edits
-   are the only difference.
+Restated for slice 4, step 4 (steering from a word): 1, 2 and 5 change, 3 and
+6 now carry the branch, 8 is new.
+
+1. A position's cache entry is a function of the tokens up to it and the
+   edits in force at it. A run reuses the cache only up to the first
+   position where either differs from the run that wrote it, and computes
+   the rest; the prompt is never computed again while they agree.
+2. The branch position, step k, the input's last, depends only on what
+   comes before it and the edits in force there, and is recomputed on every
+   run. For a run from the reply's start, k = 0, it is position n−1.
+3. With no edits, or Scale × 1, the reply is bit for bit the original; a
+   branch with a reply's own edits continues that reply bit for bit.
+4. The app sends the whole edit set with every run, and the reply tokens a
+   branch keeps. Neither holds a change list for the other.
+5. A capture is a copy taken inside the pass at its point, step k. An edited
+   stage is captured after its edit. The capture store always holds the
+   last run's values, for every layer, and is sent whole.
+6. Every run of one reply uses its seed. The sampler is keyed by seed and
+   position, and edits apply at exactly the positions their ranges hold, so
+   the edits are the only difference between a reply and a branch from it.
 7. Every request carries an id, and the page shows only the answer to its
    latest one.
+8. An accepted reply is its tokens and the edits it was generated with,
+   each over its range; the page holds both, and recomputing it from them
+   gives it again.
 
 ## Not settled here
 

@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <iterator>
+#include <map>
 #include <string>
 #include <tuple>
 
@@ -15,31 +17,39 @@ namespace frizzle::edit {
 namespace {
 
 constexpr std::size_t kTableHeadWords = 2;  // [first, count] a layer
-constexpr std::size_t kEditWords = 3;       // [neuron, kind, value bits]
 
-struct Keyed {
-  std::uint32_t layer;
-  std::uint32_t neuron;
-  std::size_t index;
-};
-
-bool by_neuron(const Keyed& a, const Keyed& b) {
-  return std::tie(a.layer, a.neuron, a.index) <
-         std::tie(b.layer, b.neuron, b.index);
+// Edit indices by (layer, neuron, from): the table's order.
+std::vector<std::size_t> by_start(std::span<const Edit> edits) {
+  std::vector<std::size_t> order(edits.size());
+  for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
+    const Edit& x = edits[a];
+    const Edit& y = edits[b];
+    return std::tie(x.layer, x.neuron, x.from, a) <
+           std::tie(y.layer, y.neuron, y.from, b);
+  });
+  return order;
 }
 
-std::vector<Keyed> sorted(std::span<const Edit> edits) {
-  std::vector<Keyed> keyed;
-  keyed.reserve(edits.size());
-  for (std::size_t i = 0; i < edits.size(); ++i) {
-    keyed.push_back({edits[i].layer, edits[i].neuron, i});
-  }
-  std::ranges::sort(keyed, by_neuron);
-  return keyed;
+// Step s at position origin + s, saturating at kToTheEnd.
+std::uint32_t place(std::uint32_t step, std::uint32_t origin) noexcept {
+  if (step == kToTheEnd || step > kToTheEnd - origin) return kToTheEnd;
+  return step + origin;
 }
 
 EditCheck refuse(EditError error, std::size_t index, const std::string& why) {
   return {error, index, "edit " + std::to_string(index) + ": " + why};
+}
+
+std::string named(const Edit& e) {
+  return "layer " + std::to_string(e.layer) + " neuron " +
+         std::to_string(e.neuron);
+}
+
+std::string range(const Edit& e) {
+  return "[" + std::to_string(e.from) + ", " +
+         (e.until == kToTheEnd ? std::string("end") : std::to_string(e.until)) +
+         ")";
 }
 
 // The fault in one edit on its own, or Ok.
@@ -71,6 +81,10 @@ EditCheck check_one(const Edit& e, std::size_t index,
         EditError::ZeroValue, index,
         "a Zero edit's value is " + std::to_string(e.value) + ", not 0");
   }
+  if (e.from >= e.until) {
+    return refuse(EditError::Range, index,
+                  named(e) + "'s steps " + range(e) + " hold no step");
+  }
   return {};
 }
 
@@ -98,36 +112,49 @@ EditCheck check(std::span<const Edit> edits,
   for (std::size_t i = 0; i < edits.size(); ++i) {
     if (EditCheck one = check_one(edits[i], i, model); !one.ok()) return one;
   }
-  // After sorting, a repeat follows the edit it repeats; within one neuron
-  // the indices ascend, so each repeat is not its neuron's first edit.
-  const std::vector<Keyed> keyed = sorted(edits);
-  std::size_t repeat = edits.size();
-  for (std::size_t i = 1; i < keyed.size(); ++i) {
-    const Keyed& a = keyed[i - 1];
-    const Keyed& b = keyed[i];
-    if (a.layer == b.layer && a.neuron == b.neuron) {
-      repeat = std::min(repeat, b.index);
+  // The ranges held so far, which never overlap one another: an edit
+  // overlaps one of them exactly when it overlaps the range just before its
+  // key or just after it.
+  using Key = std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>;
+  std::map<Key, std::size_t> held;
+  for (std::size_t i = 0; i < edits.size(); ++i) {
+    const Edit& e = edits[i];
+    const Key key{e.layer, e.neuron, e.from};
+    const auto after = held.lower_bound(key);
+    std::size_t other = edits.size();
+    if (after != held.end()) {
+      const Edit& o = edits[after->second];
+      if (o.layer == e.layer && o.neuron == e.neuron && o.from < e.until) {
+        other = after->second;
+      }
     }
-  }
-  if (repeat < edits.size()) {
-    const Edit& e = edits[repeat];
-    return refuse(EditError::Duplicate, repeat,
-                  "layer " + std::to_string(e.layer) + " neuron " +
-                      std::to_string(e.neuron) + " is edited twice");
+    if (other == edits.size() && after != held.begin()) {
+      const Edit& o = edits[std::prev(after)->second];
+      if (o.layer == e.layer && o.neuron == e.neuron && e.from < o.until) {
+        other = std::prev(after)->second;
+      }
+    }
+    if (other < edits.size()) {
+      return refuse(EditError::Overlap, i,
+                    named(e) + "'s steps " + range(e) + " overlap edit " +
+                        std::to_string(other) + "'s " + range(edits[other]));
+    }
+    held.emplace(key, i);
   }
   return {};
 }
 
 std::vector<std::uint32_t> table(std::span<const Edit> edits,
-                                 const model::ModelDescription& model) {
+                                 const model::ModelDescription& model,
+                                 std::uint32_t origin) {
   const std::size_t layers = model.layers.size();
   std::vector<std::uint32_t> words(kTableHeadWords * layers +
                                    kEditWords * edits.size());
   std::size_t at = kTableHeadWords * layers;
-  for (const Keyed& k : sorted(edits)) {
-    const Edit& e = edits[k.index];
+  for (const std::size_t i : by_start(edits)) {
+    const Edit& e = edits[i];
     const std::size_t head = kTableHeadWords * e.layer;
-    // At most 52 + 3 × kMaxEdits words, so every offset fits a u32.
+    // At most 52 + 5 × kMaxEdits words, so every offset fits a u32.
     if (words.at(head + 1) == 0) {
       words.at(head) = static_cast<std::uint32_t>(at);
     }
@@ -135,9 +162,20 @@ std::vector<std::uint32_t> table(std::span<const Edit> edits,
     words.at(at) = e.neuron;
     words.at(at + 1) = static_cast<std::uint32_t>(e.kind);
     words.at(at + 2) = std::bit_cast<std::uint32_t>(e.value);
+    words.at(at + 3) = place(e.from, origin);
+    words.at(at + 4) = place(e.until, origin);
     at += kEditWords;
   }
   return words;
+}
+
+std::vector<Edit> placed(std::span<const Edit> edits, std::uint32_t origin) {
+  std::vector<Edit> out(edits.begin(), edits.end());
+  for (Edit& e : out) {
+    e.from = place(e.from, origin);
+    e.until = place(e.until, origin);
+  }
+  return out;
 }
 
 }  // namespace frizzle::edit

@@ -137,6 +137,31 @@ reviewed, then its code, then review.
    The browser scenario makes its pins through Go to and the neuron card,
    and reads them back from the card's exact values (a contract change of
    how it drives the page, not of what it checks).
+4. **Steering from a word** (edit, cache, runtime, bindings, `protocol/`,
+   session, views). The reply on the left is read as words; clicking
+   one sets the branch point after it, and the deck shows the neurons
+   there, at the word's last token, where the model has read the word and
+   chooses what follows. Run generates forward from that point with the
+   pins held into the right column; Accept moves it to the left as the
+   new reply to steer from; the pins are kept throughout. An architectural
+   change (MEMORY, Engine requirements; logical-overview.md's invariants):
+   edits gain a range of steps, the edit kernel edits every row its range
+   holds, the cache is reused only to the first position whose tokens or
+   edits in force differ, the engine keeps the edits of the run that wrote
+   the cache, the page sends the kept reply tokens, a limit of 0 inspects,
+   and each emitted token crosses with its identifier. Three parts, each
+   reviewed: (a) headers and tests; (b) the engine and boundary
+   code, to the edit specs, cache, turn, kernels and replay suites;
+   (c) the page: words, the branch point, the deck at it, Run
+   forward, Accept, with the Branch suite and the browser scenario.
+   The left column is "Reply" and the right "Steered reply", in
+   the page and the scenario, since after an accept the left is no longer
+   the original. A fix after review: Stop beside Run
+   (client cancel, session.stop) and the running token count, since a
+   steered reply that ran to the context was a dead end; the browser
+   scenario's step 7 stops one and accepts it. Rollback: (b)
+   adds to generate and keeps its old runs as k = 0 with edits from step
+   0; reverting (c) leaves (b) unused.
 
 ## 5. Pass map
 

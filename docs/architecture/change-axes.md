@@ -100,7 +100,7 @@ H is a family, as E is: one member per reason the app changes.
 | H(frame) | Which views exist and where they sit | The app's root and layout |
 | H(view), one per view: prompt and replies, pass map, deck, later the residual view | That view's design | That view's components and scene |
 | H(theme) | The look | Night-glass tokens, fonts |
-| H(session) | What a session holds | The edit set, the copies of captures, the original reply |
+| H(session) | What a session holds | The edit set, the copies of captures, the reply to steer from and its history, the branch point, the steered reply |
 | H(shape) | How values are presented | Folding vectors into grids, ranking; plain functions, tested without React |
 
 A family's contract header, such as the model description, the kernel

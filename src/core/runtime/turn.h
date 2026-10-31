@@ -22,6 +22,12 @@ namespace frizzle::runtime {
 //   - Prefill: positions cached .. prompt − 1, in blocks of at most
 //     kPrefillBlock tokens, in order; only the last asks for logits, and its
 //     draw is draw 0.
+//   - max_tokens 0, an inspection: the prefill alone. Its last block still
+//     asks for logits, so every launch of a scoring step runs there — the
+//     edits and the capture (edit/edit_kernel.h, capture/capture.h) — and
+//     its draw 0 is discarded, the turn ending Limit when it reports. No
+//     decode step is planned. The cache keeps every position the prefill
+//     wrote: the prompt, whole.
 //   - Decode: step j, for j = 0, 1, …, feeds draw j — `fed`, one token, at
 //     position prompt + j — and asks for logits; its draw is draw j + 1. It
 //     is planned only when prompt + j < capacity, so no step is queued at or
@@ -36,7 +42,9 @@ namespace frizzle::runtime {
 //         the draw not accepted;
 //       - a stop token: the turn ends Stop, the draw accepted, not emitted;
 //       - otherwise accepted and emitted; the turn then ends Limit when it
-//         was the max_tokens-th, or Context when no step can feed it.
+//         was the max_tokens-th, or Context when no step can feed it. With
+//         max_tokens 0, draw 0 is discarded, whatever it is, and the turn
+//         ends Limit.
 //     A draw reported after the turn has ended — by a step already queued —
 //     is discarded: neither accepted nor emitted.
 //   - Cancel ends the turn Cancelled: nothing more is planned, and every
@@ -64,7 +72,8 @@ namespace frizzle::runtime {
 //   - NonFinite at draw j: the step that fed it wrote token 0 in its place,
 //     and it is truncated.
 //   - Limit or Context: no step ran past the accepted sequence; every
-//     accepted draw has its entry but the last.
+//     accepted draw has its entry but the last. An inspection keeps the
+//     prompt whole.
 //   - A step failure: nothing is kept. A failed step may have written part
 //     of its entries, and the next turn prefills from the first token.
 // A rollback is never more than one position, within every ring's prefill
@@ -139,8 +148,8 @@ struct TurnSize {
 
 class Turn {
  public:
-  // Preconditions: cached < prompt <= capacity <= kernels::kMaxPositions,
-  // max_tokens >= 1.
+  // Preconditions: cached < prompt <= capacity <= kernels::kMaxPositions.
+  // max_tokens 0 inspects (above).
   explicit Turn(const TurnSize& size) noexcept;
 
   // The next step to run, counted run; none when kOutstanding steps are
