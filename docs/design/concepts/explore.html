@@ -1,0 +1,644 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frizzle explore concept</title>
+<!--
+  Interactive concept, 2026-10-31: four views, each answering its own
+  questions, over one shared state (the reply, the branch point, the pins,
+  the tries, the selected neuron). The prompt with Run sits above them all.
+    Poke     What's lit up here, and what if I change it? The deck, the
+             inspector as a drawer, the reply and a try underneath.
+    Follow   What does this neuron do across the reply? The replies tinted
+             by one neuron, and a strip per followed neuron across the words.
+    Compare  Did my poke matter? Every try against the reply, each labelled
+             with its pins and branch word.
+    Map      Which layer should I look at? Every layer at the point, the MLP
+             neurons as a strip; attention and the residual not captured.
+  Tabs switch views, and each view links to the next where attention already
+  is. Every value and every reply is made up by the functions below; nothing
+  here runs a model, and the steered text is canned word swaps.
+-->
+<style>
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:"Plex Mono";src:url(../../../app/src/theme/fonts/IBMPlexMono-Regular.woff2) format('woff2')}
+:root{--page:#0d1422;--night:#090f1a;--panel:#121b2c;--rule:#253247;--ink:#eee6d3;--muted:#9aa0a8;--accent:#e2b866;--edit:#ffcf73;--cool:#9fc0e8;--pin:#7fd6ff;
+  --serif:"Plex Serif",Georgia,serif;--mono:"Plex Mono",ui-monospace,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--page);color:var(--ink);font:14px var(--serif);display:grid;grid-template-rows:auto auto auto minmax(0,1fr);overflow:hidden}
+button,select{font:inherit;color:inherit}
+header{display:flex;align-items:baseline;gap:14px;padding:10px 16px;border-bottom:1px solid var(--rule);background:var(--night);font:12px var(--mono);color:var(--muted)}
+header b{font:500 17px var(--serif);color:var(--ink)}
+header .concept{margin-left:auto;color:var(--accent)}
+.h{font:11px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0;font-weight:400}
+.act{font:13px var(--mono);background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:5px 12px;cursor:pointer}
+.act.go{border-color:var(--accent);color:var(--accent)}
+.act:hover{border-color:var(--accent)}
+.act:disabled{opacity:.4;cursor:default;border-color:var(--rule)}
+.link{background:none;border:0;padding:0;font:12px var(--mono);color:var(--accent);cursor:pointer;text-align:left}
+.link:hover{text-decoration:underline}
+.empty{color:var(--muted);font-style:italic}
+.pill{font:10px var(--mono);border:1px solid var(--muted);border-radius:8px;padding:0 6px;color:var(--ink);white-space:nowrap}
+.pill.same{border-color:var(--rule);color:var(--muted)}
+/* The composer */
+.composer{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.composer .msg{flex:1 1 320px;min-width:0;background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:7px 10px;font:15px var(--serif);color:var(--ink)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;font:12px var(--mono);border:1px solid var(--edit);color:var(--edit);border-radius:12px;padding:2px 4px 2px 10px;background:none;cursor:pointer}
+.chip i{font-style:normal;color:var(--muted);padding:0 4px;border-radius:8px}
+.chip i:hover{color:var(--ink);background:#22304a}
+.chip.sel{background:#2a2412}
+/* The tabs */
+.tabs{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--rule);overflow-x:auto}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:9px 14px 7px;cursor:pointer;text-align:left;white-space:nowrap}
+.tabs button b{display:block;font:500 15px var(--serif)}
+.tabs button span{font:11px var(--mono);color:var(--muted)}
+.tabs button[aria-selected=true]{border-bottom-color:var(--accent)}
+.tabs button[aria-selected=true] b{color:var(--accent)}
+.view{min-height:0;display:none}
+.view.on{display:grid}
+/* Text */
+.text{font:15px/1.75 var(--serif)}
+.text.big{font-size:19px;line-height:1.85}
+.text .w{background:none;border:0;padding:0 1px;font:inherit;cursor:pointer;border-radius:2px}
+.text .w:hover{text-decoration:underline;text-decoration-color:var(--muted)}
+.text .w[aria-pressed=true]{box-shadow:0 0 0 1px var(--accent)}
+.text .fade{opacity:.45}
+.text .own{color:var(--edit)}
+.text .mark{display:inline-block;width:2px;height:1.05em;background:var(--accent);vertical-align:-3px;margin:0 2px}
+.text .start{font:11px var(--mono);border:1px solid var(--rule);background:none;border-radius:3px;padding:1px 6px;margin-right:6px;color:var(--muted);cursor:pointer;vertical-align:2px}
+.text .start[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
+.colh{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+.colh .sp{flex:1}
+.end{font:11px var(--mono);color:var(--muted)}
+select.trysel{background:var(--panel);border:1px solid var(--rule);border-radius:4px;font:12px var(--mono);padding:2px 6px;max-width:100%}
+/* Poke */
+#poke{grid-template-rows:auto auto minmax(0,1fr) auto minmax(140px,30%)}
+.stagebar{display:flex;align-items:center;gap:12px;padding:8px 16px;flex-wrap:wrap}
+.where{font:12px var(--mono);color:var(--muted)}
+.where q{color:var(--ink);quotes:"“" "”"}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.seg button{background:none;border:0;padding:3px 10px;font:12px var(--mono);color:var(--muted);cursor:pointer}
+.seg button[aria-pressed=true]{background:#1d2a42;color:var(--accent)}
+.seg button:disabled{opacity:.4;cursor:default}
+.stagebar .sp{flex:1}
+.front{display:flex;align-items:baseline;gap:10px;padding:0 16px 8px;font:12px var(--mono);color:var(--muted);white-space:nowrap;overflow-x:auto}
+.front b{color:var(--ink);font-weight:400}
+.front button{background:none;border:0;border-bottom:1px solid var(--rule);padding:1px 0;font:12px var(--mono);color:var(--ink);cursor:pointer}
+.front button:hover,.front button.sel{border-bottom-color:var(--accent);color:var(--accent)}
+.front button.pinned{color:var(--pin)}
+#deck{min-height:0;position:relative;outline:none;overflow:hidden;background:var(--night);border-top:1px solid var(--rule)}
+#deck canvas{position:absolute;inset:0;width:100%;height:100%}
+#deck:focus-visible{box-shadow:inset 0 0 0 1px var(--accent)}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--rule);border-radius:4px;padding:2px 7px;font:12px var(--mono);display:none;white-space:nowrap;z-index:2}
+.legend{position:absolute;left:16px;bottom:10px;display:flex;align-items:center;gap:8px;font:11px var(--mono);color:var(--muted)}
+.ramp{width:120px;height:8px;border-radius:2px;display:inline-block}
+.hint{position:absolute;right:16px;bottom:10px;font:11px var(--mono);color:var(--muted)}
+.layers{display:flex;align-items:flex-end;gap:3px;padding:8px 16px;border-top:1px solid var(--rule)}
+.layers .lab{font:11px var(--mono);color:var(--muted);margin-right:8px;white-space:nowrap}
+.layers button{flex:1;min-width:0;height:24px;background:var(--panel);border:1px solid var(--rule);border-radius:3px;font:10px var(--mono);color:var(--muted);cursor:pointer;position:relative;padding:0}
+.layers button.on{background:#1d2a42;color:var(--ink);border-color:var(--accent)}
+.layers button.pin::after{content:"";position:absolute;top:-6px;left:50%;width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--pin)}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:min(320px,92%);background:var(--panel);border-left:1px solid var(--accent);box-shadow:-16px 0 28px rgba(0,0,0,.45);padding:14px 16px;overflow:auto;transform:translateX(105%);transition:transform .22s ease;z-index:3}
+.drawer.open{transform:none}
+@media (prefers-reduced-motion:reduce){.drawer{transition:none}}
+.drawer .top{display:flex;justify-content:space-between;align-items:baseline}
+.drawer .title{font:500 18px var(--serif)}
+.drawer .close{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer}
+.drawer .sub{font:12px var(--mono);color:var(--muted);margin:2px 0 12px}
+.vals{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font:13px var(--mono);margin-bottom:14px}
+.vals span:nth-child(odd){color:var(--muted)}
+.vals .ed{color:var(--edit)}
+.pinrow{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.pinrow input{width:72px;font:12px var(--mono);background:#0f1726;border:1px solid var(--rule);color:var(--ink);border-radius:4px;padding:5px 7px}
+.pinrow button{font:12px var(--mono);background:#16213a;border:1px solid var(--rule);color:var(--ink);border-radius:4px;padding:5px 9px;cursor:pointer}
+.pinrow button:hover{border-color:var(--accent)}
+.pinned{font:12px var(--mono);color:var(--pin)}
+.drawer .links{display:flex;flex-direction:column;gap:8px;margin-top:18px;padding-top:12px;border-top:1px solid var(--rule)}
+.strip{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--rule);min-height:0}
+.col{padding:10px 16px;overflow:auto;min-width:0}
+.col+.col{border-left:1px solid var(--rule)}
+/* Follow */
+#follow{grid-template-rows:auto auto minmax(0,1fr);overflow:auto;align-content:start}
+.followbar{display:flex;align-items:center;gap:10px;padding:10px 16px;flex-wrap:wrap;border-bottom:1px solid var(--rule)}
+.fchip{display:inline-flex;align-items:center;gap:6px;font:12px var(--mono);border:1px solid var(--rule);border-radius:12px;padding:2px 8px 2px 10px;background:none;cursor:pointer;color:var(--ink)}
+.fchip.on{border-color:var(--accent);color:var(--accent)}
+.fchip i{font-style:normal;color:var(--muted);padding:0 2px}
+.followtext{display:grid;grid-template-columns:1fr 1fr;min-height:0}
+.followtext .col{padding:16px 20px}
+.tint{display:flex;align-items:center;gap:8px;font:11px var(--mono);color:var(--muted)}
+.tint .ramp{width:90px;height:6px}
+.rows{border-top:1px solid var(--rule);padding:12px 16px 16px}
+.nrow{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center;padding:6px 0;border-bottom:1px solid #1a2436;cursor:pointer}
+.nrow.on .nl{color:var(--accent)}
+.nl{font:12px var(--mono)}
+.nl small{display:block;color:var(--muted);font-size:10px}
+.cells{display:grid;grid-template-columns:44px minmax(0,1fr);gap:2px 6px;align-items:center;font:10px var(--mono);color:var(--muted)}
+.cells .run{display:flex;gap:1px;height:14px;min-width:0}
+.cells .run button{flex:1 1 0;min-width:0;border:0;padding:0;cursor:pointer;border-radius:1px}
+.cells .run button.pt{outline:1.5px solid var(--accent);z-index:1}
+/* Compare */
+#compare{overflow:auto;align-content:start;padding:16px}
+.reply-card{border:1px solid var(--rule);border-radius:6px;padding:12px 14px;background:var(--panel);margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:12px}
+.tcard{border:1px solid var(--rule);border-radius:6px;padding:10px 12px;background:var(--panel)}
+.tcard.on{border-color:var(--accent)}
+.tcard .meta{display:flex;gap:8px;align-items:baseline;font:11px var(--mono);color:var(--muted);flex-wrap:wrap;margin-bottom:4px}
+.tcard .meta b{font:500 15px var(--serif);color:var(--ink)}
+.tcard .meta .sp{flex:1}
+.tcard .p{font:11px var(--mono);color:var(--edit);margin-bottom:6px}
+.tcard .text{font-size:14px;max-height:9.5em;overflow:auto}
+.tcard .acts{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap}
+/* Map */
+#map{grid-template-rows:auto minmax(0,1fr)}
+.maphead{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.maprows{overflow:auto;padding:8px 16px 16px}
+.lrow,.mapcols{display:grid;grid-template-columns:150px 110px minmax(0,1fr) 110px;gap:10px;align-items:center}
+.lrow{padding:4px 6px;border-radius:4px;cursor:pointer}
+.lrow:hover{background:#16213a}
+.lrow.on{box-shadow:inset 0 0 0 1px var(--accent)}
+.lrow .ln{font:12px var(--mono)}
+.lrow .ln small{color:var(--muted)}
+.lrow .ln small.g{color:var(--accent)}
+.stage-box{font:10px var(--mono);color:var(--muted);border:1px dashed var(--rule);border-radius:3px;padding:3px 6px;text-align:center}
+.lrow canvas{width:100%;height:16px;display:block;image-rendering:pixelated;border-radius:2px}
+.mapcols{padding:6px 6px 2px;font:10px var(--mono);color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+@media (max-width:900px){body{overflow:auto;height:auto}.strip,.followtext{grid-template-columns:1fr}.col+.col{border-left:0;border-top:1px solid var(--rule)}#poke{grid-template-rows:auto auto 60vh auto auto}.lrow,.mapcols{grid-template-columns:90px minmax(0,1fr)}.lrow .stage-box,.mapcols span:nth-child(2),.mapcols span:nth-child(4){display:none}.nrow{grid-template-columns:1fr}}
+</style>
+
+<header><b>Frizzle</b><span>Ready: GPU · Gemma 3 1B</span><span class="concept">Concept · made-up values · nothing here runs a model</span></header>
+
+<div class="composer">
+  <input class="msg" aria-label="Message" value="Name three colours of the rainbow.">
+  <div class="chips" id="chips"></div>
+  <button class="act" id="stop" hidden>Stop</button>
+  <button class="act go" id="run">Run</button>
+</div>
+
+<nav class="tabs" role="tablist" aria-label="Views">
+  <button role="tab" data-view="poke"><b>Poke</b><span>what's lit up here</span></button>
+  <button role="tab" data-view="follow"><b>Follow</b><span>a neuron across the reply</span></button>
+  <button role="tab" data-view="compare"><b>Compare</b><span>did my poke matter</span></button>
+  <button role="tab" data-view="map"><b>Map</b><span>which layer to look at</span></button>
+</nav>
+
+<!-- Poke: at a word -->
+<section class="view" id="poke" role="tabpanel" aria-label="Poke">
+  <div class="stagebar">
+    <span class="where" id="pokeWhere"></span>
+    <span class="seg" role="group" aria-label="Whose neurons"><button id="sideReply">Reply</button><button id="sideTry">Try</button></span>
+    <span class="sp"></span>
+    <button class="act" id="openInspector">Inspector</button>
+  </div>
+  <div class="front" id="front"></div>
+  <div id="deck" tabindex="0" aria-label="Layer deck: the wheel or ↑ ↓ step layers; click a neuron"><div id="tip"></div>
+    <div class="legend"><span>0</span><span class="ramp" id="deckRamp"></span><span id="deckScale"></span><span>each card its own scale</span></div>
+    <div class="hint">wheel or ↑ ↓ step layers · click a neuron</div>
+    <aside class="drawer" id="drawer" aria-label="Inspector"></aside>
+  </div>
+  <div class="layers" id="layers"><span class="lab">Layer</span></div>
+  <div class="strip">
+    <div class="col">
+      <div class="colh"><h2 class="h">Reply</h2><span class="sp"></span><span class="end" id="replyEnd"></span></div>
+      <div class="text" id="replyText"></div>
+    </div>
+    <div class="col">
+      <div class="colh"><select class="trysel" id="pokeTry" aria-label="Try shown"></select><span class="sp"></span><span class="end" id="tryEnd"></span><button class="link" id="toCompare">Compare all tries →</button><button class="act" id="accept" disabled>Accept</button></div>
+      <div class="text" id="tryText"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Follow: across the reply -->
+<section class="view" id="follow" role="tabpanel" aria-label="Follow">
+  <div class="followbar"><span class="h">Following</span><span id="followChips"></span><span class="end">Add one from Poke: click a neuron, then Follow. Pinned neurons are followed too.</span></div>
+  <div class="followtext">
+    <div class="col"><div class="colh"><h2 class="h">Reply</h2><span class="sp"></span><span class="tint" id="followTint"></span></div><div class="text big" id="followReply"></div></div>
+    <div class="col"><div class="colh"><select class="trysel" id="followTry" aria-label="Try shown"></select></div><div class="text big" id="followTryText"></div></div>
+  </div>
+  <div class="rows" id="followRows"></div>
+</section>
+
+<!-- Compare: the tries -->
+<section class="view" id="compare" role="tabpanel" aria-label="Compare">
+  <div>
+    <div class="reply-card"><div class="colh"><h2 class="h">The reply</h2><span class="sp"></span><span class="end" id="cmpReplyEnd"></span></div><div class="text" id="cmpReply"></div></div>
+    <div class="colh"><h2 class="h">Tries, newest first</h2></div>
+    <div class="grid" id="cmpGrid"></div>
+  </div>
+</section>
+
+<!-- Map: where in the model -->
+<section class="view" id="map" role="tabpanel" aria-label="Map">
+  <div class="maphead"><span class="where" id="mapWhere"></span><span class="end">Click a layer to poke it. Each mark is the strongest of its group of 12 neurons.</span></div>
+  <div class="maprows"><div class="mapcols"><span>Layer</span><span>Attention</span><span>MLP neurons, 6,912</span><span>Residual</span></div><div id="mapRows"></div></div>
+</section>
+
+<script>
+(() => {
+// ---- Made-up model -------------------------------------------------------
+const LAYERS = 26, COLS = 96, ROWS = 72, N = COLS * ROWS;
+const RAMP = [[24,35,58],[92,38,48],[196,72,34],[255,160,60],[255,236,186]];
+const GAMMA = 2;
+const isGlobal = (l) => l % 6 === 5;
+function h32(a, b, c) {
+  let x = (a * 0x9e3779b1) ^ (b * 0x85ebca77) ^ (c * 0xc2b2ae3d);
+  x ^= x >>> 16; x = Math.imul(x, 0x7feb352d); x ^= x >>> 15; x = Math.imul(x, 0x846ca68b); x ^= x >>> 16;
+  return (x >>> 0) / 4294967296;
+}
+function strHash(s) { let x = 2166136261; for (const ch of s) x = Math.imul(x ^ ch.charCodeAt(0), 16777619); return x >>> 0; }
+const bare = (w) => w.toLowerCase().replace(/[^a-z]/g, '');
+const COLOURS = new Set(['red','orange','yellow','green','blue','indigo','violet','crimson','amber','gold','scarlet','emerald','sapphire','plum']);
+// A few neurons with made-up habits, so following one shows something.
+const HABITS = [
+  { l: 12, n: 4031, fires: (w) => COLOURS.has(bare(w)), size: 3.8 },
+  { l: 6, n: 100, fires: (w) => /[.,]$/.test(w), size: 1.6 },
+  { l: 20, n: 288, fires: (w) => ['rainbow','band','sky','arc'].includes(bare(w)), size: -3.1 },
+  { l: 17, n: 5120, fires: (w) => ['the','of','and','from'].includes(bare(w)), size: 1.9 },
+];
+const habitOf = new Map(HABITS.map((h) => [h.l * N + h.n, h]));
+function baseValue(l, n, word, s) {
+  const scale = 0.5 + l * 0.09, wh = strHash(word);
+  const u = h32(l * N + n, s + 1, wh), v = h32(l * N + n, wh, 7), w = h32(n, l, s * 31 + wh);
+  let x = (u + v + w - 1.5) * 0.12 * scale;
+  const kind = h32(l, n, 99);
+  if (kind < 0.03 && h32(l * N + n, wh, 3) < 0.5) x += (0.8 + 4 * h32(n, l, 5)) * scale * (kind < 0.01 ? -1 : 1);
+  const habit = habitOf.get(l * N + n);
+  if (habit && habit.fires(word)) x += habit.size * scale * 1.4;
+  return x;
+}
+// Step s has read the prompt and words 1..s (the prompt alone at 0) and
+// chooses word s + 1. A text's value: its edits where they hold.
+function valueAt(text, l, n, s) {
+  const word = s === 0 ? '<prompt>' : text.words[s - 1];
+  const v = baseValue(l, n, word, s);
+  let e = null;
+  for (const ed of text.edits) if (ed.l === l && ed.n === n && s >= ed.from && s < ed.to) e = ed;
+  if (!e) return v;
+  return e.mode === 'set' ? e.value : e.mode === 'scale' ? v * e.value : 0;
+}
+
+// ---- Made-up replies -----------------------------------------------------
+const REPLY = 'Three colours of the rainbow are red, orange and yellow. The full band runs red, orange, yellow, green, blue, indigo and violet, from the outside in.'.split(' ');
+const SWAPS = [
+  { red: 'crimson', orange: 'amber', yellow: 'gold' },
+  { colours: 'shades', rainbow: 'sky', band: 'arc' },
+  { red: 'scarlet', green: 'emerald', blue: 'sapphire', violet: 'plum' },
+];
+function swap(word, map) {
+  const b = bare(word); if (!map[b]) return word;
+  let r = map[b]; if (word[0] !== word[0].toLowerCase()) r = r[0].toUpperCase() + r.slice(1);
+  return word.replace(new RegExp(b, 'i'), r);
+}
+function continuation(parent, from, pins) {
+  const rest = parent.words.slice(from);
+  if (pins.some((p) => p.mode === 'set' && Math.abs(p.value) >= 50)) return { words: Array(140).fill('gold,'), end: 'context full' };
+  if (pins.length === 0) return { words: rest, end: 'end of turn' };
+  const sig = strHash(pins.map((p) => `${p.l}:${p.n}:${p.mode}:${p.value}`).join('|'));
+  if (pins.every((p) => p.mode === 'zero') && sig % 2 === 0) return { words: rest, end: 'end of turn' };
+  return { words: rest.map((w) => swap(w, SWAPS[sig % SWAPS.length])), end: 'end of turn' };
+}
+
+// ---- Shared state --------------------------------------------------------
+const texts = [{ id: 0, kind: 'reply', label: 'First reply', words: REPLY, from: 0, pins: [], edits: [], end: 'end of turn', parent: null, streaming: false }];
+let view = 'poke', base = 0, shown = null, point = 6, side = 'reply', front = 12, selected = { l: 12, n: 4031 }, drawerOpen = false, tryCount = 0, streamTimer = null;
+const pins = new Map();                                         // "l:n" -> {l, n, mode, value}
+const followed = new Map([['12:4031', { l: 12, n: 4031 }]]);   // "l:n" -> {l, n}
+let active = '12:4031';                                         // the neuron Follow tints by
+const key = (l, n) => `${l}:${n}`;
+const textOf = (id) => texts.find((t) => t.id === id);
+const fmt = (v) => { const a = Math.abs(v); return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2); };
+const pinLabel = (p) => `L${p.l} #${p.n} ${p.mode === 'set' ? '= ' + p.value : p.mode === 'scale' ? '× ' + p.value : 'off'}`;
+const wordAt = (text, s) => s === 0 ? null : text.words[s - 1].replace(/[.,]$/, '');
+const whereWords = (s) => { const w = wordAt(textOf(base), s); return w === null ? 'at the start' : `after <q>${w}</q>`; };
+const tryText = () => shown !== null ? textOf(shown) : null;
+const tries = () => texts.filter((t) => t.id !== base);
+const same = (t) => { const p = textOf(t.parent); return !t.streaming && t.words.length === p.words.length && t.words.every((w, i) => w === p.words[i]); };
+const followList = () => { const m = new Map(followed); for (const p of pins.values()) m.set(key(p.l, p.n), { l: p.l, n: p.n }); return [...m.values()]; };
+const $ = (id) => document.getElementById(id);
+
+// ---- Heat ----------------------------------------------------------------
+function heat(v, scale) {
+  if (!scale) return RAMP[0];
+  const t = Math.min(1, Math.abs(v) / scale) ** GAMMA;
+  const f = t * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(f)), k = f - i;
+  return RAMP[i].map((c, j) => Math.round(c + (RAMP[i + 1][j] - c) * k));
+}
+const css = (c) => `rgb(${c.join(',')})`;
+const rampCss = `linear-gradient(90deg,${RAMP.map(css).join(',')})`;
+function percentile99(values) {
+  const m = Array.from(values, Math.abs).sort((a, b) => a - b);
+  return m.length ? m[Math.floor(0.99 * (m.length - 1))] : 0;
+}
+const cardCache = new Map();
+function card(text, l, s) {
+  const k = `${text.id}|${l}|${s}|${text.edits.length}`;
+  let c = cardCache.get(k); if (c) return c;
+  const values = new Float32Array(N);
+  for (let n = 0; n < N; n++) values[n] = valueAt(text, l, n, s);
+  const scale = percentile99(values);
+  const img = new ImageData(COLS, ROWS);
+  for (let n = 0; n < N; n++) { const [r, g, b] = heat(values[n], scale); const o = n * 4; img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255; }
+  const canvas = document.createElement('canvas'); canvas.width = COLS; canvas.height = ROWS;
+  canvas.getContext('2d').putImageData(img, 0, 0);
+  c = { values, scale, canvas }; cardCache.set(k, c);
+  if (cardCache.size > 300) cardCache.delete(cardCache.keys().next().value);
+  return c;
+}
+const deckText = () => side === 'try' && tryText() ? tryText() : textOf(base);
+const strongest = (values, count) => Array.from(values.keys()).sort((a, b) => Math.abs(values[b]) - Math.abs(values[a]) || a - b).slice(0, count);
+
+// ---- Shared pieces: the reply's words, a try's text, the try picker ------
+function replyWords(el, opts = {}) {
+  const r = textOf(base), busy = texts.some((x) => x.streaming);
+  el.innerHTML = `<button class="start" aria-pressed="${point === 0}" ${busy ? 'disabled' : ''}>From the start</button>` + r.words.map((w, i) => {
+    const s = i + 1, fade = point > 0 && s > point ? ' fade' : '';
+    const style = opts.tint ? ` style="box-shadow:inset 0 -5px 0 ${opts.tint(r, s)}"` : '';
+    return `<button class="w${fade}" data-s="${s}" aria-pressed="${point === s}"${style} ${busy ? 'disabled' : ''}>${w}</button>${point === s ? '<span class="mark"></span>' : ''}`;
+  }).join(' ');
+  el.querySelector('.start').onclick = () => setPoint(0);
+  el.querySelectorAll('.w').forEach((b) => { b.onclick = () => setPoint(+b.dataset.s); });
+}
+function tryWords(el, t, opts = {}) {
+  if (!t) { el.innerHTML = `<p class="empty">No try shown: pick a word in the reply, pin a neuron, Run.</p>`; return; }
+  el.innerHTML = t.words.map((w, i) => {
+    const style = opts.tint ? ` style="box-shadow:inset 0 -5px 0 ${opts.tint(t, i + 1)}"` : '';
+    return `<span class="${i >= t.from ? 'own' : 'fade'}"${style}>${w}</span>`;
+  }).join(' ');
+}
+function tryPicker(el) {
+  const list = tries().reverse();
+  el.innerHTML = list.length ? list.map((t) => `<option value="${t.id}" ${t.id === shown ? 'selected' : ''}>${t.label}${t.pins.length ? ' · ' + t.pins.map(pinLabel).join(', ') : ''}</option>`).join('') : '<option>No tries yet</option>';
+  el.disabled = !list.length;
+  if (list.length && shown === null) el.value = '';
+  el.onchange = () => { shown = +el.value; renderAll(); };
+}
+const endText = (t) => t.streaming ? `Running: ${t.words.length - t.from} words` : `Done: ${t.end}, ${t.words.length - t.from} words`;
+
+// ---- Poke: the deck ------------------------------------------------------
+const deckEl = $('deck'), tip = $('tip'), cv = document.createElement('canvas'); deckEl.prepend(cv);
+const g = cv.getContext('2d');
+let pos = front, frontRect = null;
+function drawDeck() {
+  if (view !== 'poke') return;
+  const dpr = Math.min(devicePixelRatio, 2), W = deckEl.clientWidth, H = deckEl.clientHeight;
+  if (!W || !H) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const shift = drawerOpen ? -Math.min(160, W * 0.17) : 0;
+  const cw = Math.min(W * 0.6, (H - 70) / (ROWS / COLS) * 0.82), ch = cw * ROWS / COLS;
+  const cx = W / 2 + shift, by = H - 36 - ch, text = deckText();
+  const order = [];
+  for (let l = 0; l < LAYERS; l++) { const rel = l - pos; if (rel > -1 && rel < 6) order.push([l, rel]); }
+  order.sort((a, b) => b[1] - a[1]);
+  frontRect = null;
+  for (const [l, rel] of order) {
+    let s, y, a;
+    if (rel >= 0) { s = 1 - rel * 0.07; y = by - rel * ch * 0.16; a = Math.max(0, 1 - rel * 0.18); }
+    else { s = 1; y = by + (-rel) * ch * 0.5; a = 1 + rel; }
+    const w = cw * s, hh = ch * s, x = cx - w / 2;
+    g.globalAlpha = a;
+    g.fillStyle = '#121b2c'; g.fillRect(x - 8, y - 26, w + 16, hh + 34);
+    g.strokeStyle = '#2b3a55'; g.lineWidth = 1; g.strokeRect(x - 8.5, y - 26.5, w + 17, hh + 35);
+    g.fillStyle = Math.round(pos) === l ? '#eee6d3' : '#9aa0a8'; g.font = '12px "Plex Mono", monospace'; g.textBaseline = 'middle';
+    g.fillText(`Layer ${l}`, x, y - 13);
+    const np = [...pins.values()].filter((p) => p.l === l).length;
+    if (np) { g.fillStyle = '#7fd6ff'; g.textAlign = 'right'; g.fillText(`● ${np} pinned`, x + w, y - 13); g.textAlign = 'left'; }
+    const c = card(text, l, point);
+    g.imageSmoothingEnabled = false; g.drawImage(c.canvas, x, y, w, hh);
+    const cell = w / COLS;
+    for (const p of pins.values()) if (p.l === l) ring(x + (p.n % COLS) * cell, y + Math.floor(p.n / COLS) * cell, cell, '#7fd6ff');
+    if (selected && selected.l === l) ring(x + (selected.n % COLS) * cell, y + Math.floor(selected.n / COLS) * cell, cell, '#f4f1ea');
+    if (Math.abs(rel) < 0.01) frontRect = { x, y, w, h: hh };
+  }
+  g.globalAlpha = 1;
+  $('deckScale').textContent = fmt(card(text, front, point).scale);
+}
+function ring(x, y, cell, color) { const r = Math.max(3, cell * 1.6); g.strokeStyle = color; g.lineWidth = 1.5; g.strokeRect(x + cell / 2 - r, y + cell / 2 - r, r * 2, r * 2); }
+let anim = null;
+function animate() {
+  if (anim) return;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const step = () => { const d = front - pos; pos = reduced || Math.abs(d) < 0.01 ? front : pos + d * 0.25; drawDeck(); anim = pos === front ? null : requestAnimationFrame(step); };
+  anim = requestAnimationFrame(step);
+}
+function setFront(l) { front = Math.max(0, Math.min(LAYERS - 1, l)); if (view === 'poke') { renderFront(); renderLayerRow(); animate(); } else pos = front; }
+function cellAt(ev) {
+  if (!frontRect) return null;
+  const r = deckEl.getBoundingClientRect(), x = ev.clientX - r.left - frontRect.x, y = ev.clientY - r.top - frontRect.y;
+  if (x < 0 || y < 0 || x >= frontRect.w || y >= frontRect.h) return null;
+  const n = Math.floor(y / (frontRect.w / COLS)) * COLS + Math.floor(x / (frontRect.w / COLS));
+  return n < N ? n : null;
+}
+const inDrawer = (e) => e.target instanceof Element && e.target.closest('.drawer') !== null;
+let wheelAt = 0;
+deckEl.addEventListener('wheel', (e) => { if (inDrawer(e)) return; e.preventDefault(); const now = performance.now(); if (now - wheelAt < 90) return; wheelAt = now; setFront(front + (e.deltaY > 0 ? 1 : -1)); }, { passive: false });
+deckEl.addEventListener('keydown', (e) => { if (inDrawer(e)) return; if (e.key === 'ArrowDown') { setFront(front + 1); e.preventDefault(); } if (e.key === 'ArrowUp') { setFront(front - 1); e.preventDefault(); } });
+deckEl.addEventListener('mousemove', (e) => {
+  const n = inDrawer(e) ? null : cellAt(e);
+  if (n === null) { tip.style.display = 'none'; return; }
+  const r = deckEl.getBoundingClientRect();
+  tip.textContent = `#${n} · ${fmt(card(deckText(), front, point).values[n])}`; tip.style.display = 'block';
+  tip.style.left = `${e.clientX - r.left + 12}px`; tip.style.top = `${e.clientY - r.top + 12}px`;
+});
+deckEl.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+deckEl.addEventListener('click', (e) => { if (inDrawer(e)) return; const n = cellAt(e); if (n === null) { closeDrawer(); return; } select(front, n); });
+
+// ---- Poke: the strongest line, the layer row, the drawer -----------------
+function renderFront() {
+  const c = card(deckText(), front, point), top = strongest(c.values, 6), el = $('front');
+  el.innerHTML = `<span>Strongest in <b>layer ${front}</b>, the front card:</span>` + top.map((n) =>
+    `<button class="${selected && selected.l === front && selected.n === n ? 'sel' : ''} ${pins.has(key(front, n)) ? 'pinned' : ''}" data-n="${n}">#${n} ${fmt(c.values[n])}</button>`).join('');
+  el.querySelectorAll('button').forEach((b) => { b.onclick = () => select(front, +b.dataset.n); });
+}
+function renderLayerRow() {
+  const el = $('layers'); el.querySelectorAll('button').forEach((b) => b.remove());
+  for (let l = 0; l < LAYERS; l++) {
+    const b = document.createElement('button'); b.textContent = l;
+    b.className = (l === front ? 'on ' : '') + ([...pins.values()].some((p) => p.l === l) ? 'pin' : '');
+    b.setAttribute('aria-label', `Layer ${l}`); b.onclick = () => setFront(l); el.appendChild(b);
+  }
+}
+const drawer = $('drawer');
+// The drawer sits inside the deck; its clicks never reach the deck, even when
+// a re-render has detached the button pressed.
+drawer.addEventListener('click', (e) => e.stopPropagation());
+function select(l, n) { selected = { l, n }; drawerOpen = true; if (front !== l) setFront(l); renderAll(); }
+function closeDrawer() { drawerOpen = false; renderAll(); }
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drawerOpen && view === 'poke') closeDrawer(); });
+$('openInspector').onclick = () => { drawerOpen = !drawerOpen; renderAll(); };
+function renderDrawer() {
+  drawer.classList.toggle('open', drawerOpen);
+  if (!selected) { drawer.innerHTML = `<div class="top"><span class="title">Inspector</span><button class="close" aria-label="Close">×</button></div><p class="sub">Click a neuron on the front card, or one of its strongest.</p>`; drawer.querySelector('.close').onclick = closeDrawer; return; }
+  const { l, n } = selected, r = textOf(base), t = tryText(), p = pins.get(key(l, n));
+  const tVal = t && point <= t.words.length ? fmt(valueAt(t, l, n, point)) : '—';
+  const tEd = t && t.edits.some((e) => e.l === l && e.n === n && point >= e.from && point < e.to);
+  drawer.innerHTML = `
+    <div class="top"><span class="title">Neuron #${n}</span><button class="close" aria-label="Close">×</button></div>
+    <p class="sub">Layer ${l} · ${whereWords(point).replace(/<\/?q>/g, '"')}</p>
+    <div class="vals"><span>Reply</span><span>${fmt(valueAt(r, l, n, point))}</span>${t ? `<span>${t.label}</span><span class="${tEd ? 'ed' : ''}">${tVal}</span>` : ''}</div>
+    <h3 class="h">Pin for the next run</h3>
+    <div class="pinrow"><input id="pinValue" aria-label="Value" value="${p && p.mode !== 'zero' ? p.value : 8}"><button data-m="set">Set</button><button data-m="scale">Scale ×</button><button data-m="zero">Zero</button></div>
+    ${p ? `<div class="pinned">Pinned: ${pinLabel(p)} · <button class="link" id="unpin">Unpin</button></div>` : ''}
+    <div class="links">
+      <button class="link" id="toFollow">${followed.has(key(l, n)) || p ? 'Followed: see it across the reply →' : 'Follow it across the reply →'}</button>
+      <button class="link" id="toMap">See every layer in the map →</button>
+    </div>`;
+  drawer.querySelector('.close').onclick = closeDrawer;
+  drawer.querySelectorAll('[data-m]').forEach((b) => { b.onclick = () => {
+    const raw = Number(drawer.querySelector('#pinValue').value);
+    if (b.dataset.m !== 'zero' && !Number.isFinite(raw)) return;
+    pins.set(key(l, n), { l, n, mode: b.dataset.m, value: b.dataset.m === 'zero' ? 0 : raw }); renderAll();
+  }; });
+  const un = drawer.querySelector('#unpin'); if (un) un.onclick = () => { pins.delete(key(l, n)); renderAll(); };
+  drawer.querySelector('#toFollow').onclick = () => { followed.set(key(l, n), { l, n }); active = key(l, n); go('follow'); };
+  drawer.querySelector('#toMap').onclick = () => go('map');
+}
+function renderPoke() {
+  const t = tryText();
+  $('pokeWhere').innerHTML = `MLP neurons ${whereWords(point)} · in`;
+  $('sideReply').setAttribute('aria-pressed', side === 'reply'); $('sideTry').setAttribute('aria-pressed', side === 'try');
+  $('sideTry').textContent = t ? t.label : 'Try'; $('sideTry').disabled = !t;
+  renderFront(); renderLayerRow(); renderDrawer();
+  replyWords($('replyText'));
+  $('replyEnd').textContent = `Done: ${textOf(base).end}, ${textOf(base).words.length} words`;
+  tryPicker($('pokeTry')); tryWords($('tryText'), t);
+  $('tryEnd').textContent = t ? endText(t) : '';
+  $('accept').disabled = !t || t.streaming;
+  drawDeck();
+}
+$('sideReply').onclick = () => { side = 'reply'; renderAll(); };
+$('sideTry').onclick = () => { if (tryText()) { side = 'try'; renderAll(); } };
+$('toCompare').onclick = () => go('compare');
+$('accept').onclick = () => accept(shown);
+$('deckRamp').style.background = rampCss;
+new ResizeObserver(() => drawDeck()).observe(deckEl);
+
+// ---- Follow: one neuron across the reply ---------------------------------
+function rowScale(l, n, list) { return Math.max(...list.flatMap((x) => Array.from({ length: x.words.length + 1 }, (_, s) => Math.abs(valueAt(x, l, n, s)))), 1e-6); }
+function renderFollow() {
+  const r = textOf(base), t = tryText(), list = followList(), both = [r, t].filter(Boolean);
+  if (!list.some((f) => key(f.l, f.n) === active)) active = list.length ? key(list[0].l, list[0].n) : null;
+  $('followChips').innerHTML = list.map((f) => {
+    const k = key(f.l, f.n), pinned = pins.has(k);
+    return `<span class="fchip ${k === active ? 'on' : ''}" data-k="${k}" role="button" tabindex="0">L${f.l} #${f.n}${pinned ? ' · pinned' : ''}${followed.has(k) && !pinned ? ' <i aria-label="Stop following">×</i>' : ''}</span>`;
+  }).join(' ') || '<span class="empty">Nothing followed.</span>';
+  $('followChips').querySelectorAll('.fchip').forEach((c) => { c.onclick = (e) => { if (e.target.tagName === 'I') followed.delete(c.dataset.k); else active = c.dataset.k; renderAll(); }; });
+  let tint = null;
+  if (active) {
+    const [l, n] = active.split(':').map(Number), scale = rowScale(l, n, both);
+    tint = (text, s) => css(heat(valueAt(text, l, n, s), scale));
+    $('followTint').innerHTML = `Tinted by L${l} #${n}: 0 <span class="ramp" style="background:${rampCss}"></span> ${fmt(scale)}`;
+  } else $('followTint').innerHTML = '';
+  replyWords($('followReply'), { tint });
+  tryPicker($('followTry')); tryWords($('followTryText'), t, { tint });
+  // One row per followed neuron: a cell a word, the reply over the try.
+  $('followRows').innerHTML = list.length ? `<div class="colh"><h2 class="h">Each neuron, word by word</h2><span class="sp"></span><span class="end">a cell a word, the start first · click one to move the point · each row its own scale</span></div>` + list.map((f) => {
+    const k = key(f.l, f.n), scale = rowScale(f.l, f.n, both);
+    const cells = (text) => Array.from({ length: text.words.length + 1 }, (_, s) => { const v = valueAt(text, f.l, f.n, s); return `<button data-s="${s}" class="${s === point ? 'pt' : ''}" title="${s === 0 ? 'the start' : text.words[s - 1]} · ${fmt(v)}" style="background:${css(heat(v, scale))}"></button>`; }).join('');
+    return `<div class="nrow ${k === active ? 'on' : ''}" data-k="${k}"><div class="nl">L${f.l} #${f.n}<small>${pins.has(k) ? 'pinned: ' + pinLabel(pins.get(k)).split(' ').slice(2).join(' ') : 'not pinned'} · peak ${fmt(scale)}</small></div>
+      <div class="cells"><span>Reply</span><span class="run">${cells(r)}</span>${t ? `<span>${t.label}</span><span class="run">${cells(t)}</span>` : ''}</div></div>`;
+  }).join('') : '';
+  $('followRows').querySelectorAll('.nrow').forEach((row) => { row.onclick = (e) => {
+    const b = e.target.closest('button[data-s]');
+    if (b) { const s = +b.dataset.s; if (s <= r.words.length) point = s; }
+    active = row.dataset.k; renderAll();
+  }; });
+}
+
+// ---- Compare: every try against the reply --------------------------------
+function renderCompare() {
+  const r = textOf(base);
+  $('cmpReply').innerHTML = r.words.map((w, i) => `<span class="${point > 0 && i + 1 > point ? 'fade' : ''}">${w}</span>`).join(' ');
+  $('cmpReplyEnd').textContent = `${r.label} · ${r.words.length} words`;
+  const list = tries().reverse();
+  $('cmpGrid').innerHTML = list.length ? list.map((t) => {
+    const p = t.parent === null ? null : textOf(t.parent);
+    const where = p === null ? 'the first reply' : t.from === 0 ? 'from the start' : `after “${wordAt(p, t.from)}”`;
+    const status = t.streaming ? 'running' : p && same(t) ? '<span class="pill same">same as its reply</span>' : t.end;
+    const onOld = p && t.parent !== base ? ` · from ${p.label}` : '';
+    return `<div class="tcard ${t.id === shown ? 'on' : ''}">
+      <div class="meta"><b>${t.label}</b><span>${where}${onOld}</span><span class="sp"></span><span>${status}</span></div>
+      ${p === null ? '' : `<div class="p">${t.pins.length ? t.pins.map(pinLabel).join(' · ') : '<span style="color:var(--muted)">no pins</span>'}</div>`}
+      <div class="text">${t.words.map((w, i) => `<span class="${p === null ? '' : i >= t.from ? 'own' : 'fade'}">${w}</span>`).join(' ')}</div>
+      <div class="acts"><button class="link" data-poke="${t.id}">Show in Poke →</button><button class="link" data-follow="${t.id}">Follow beside the reply →</button>${t.streaming ? '' : `<button class="link" data-accept="${t.id}">Accept</button>`}</div></div>`;
+  }).join('') : `<p class="empty">No tries yet. In Poke, pick a word, pin a neuron and Run; each Run lands here.</p>`;
+  $('cmpGrid').querySelectorAll('[data-poke]').forEach((b) => { b.onclick = () => { shown = +b.dataset.poke; go('poke'); }; });
+  $('cmpGrid').querySelectorAll('[data-follow]').forEach((b) => { b.onclick = () => { shown = +b.dataset.follow; go('follow'); }; });
+  $('cmpGrid').querySelectorAll('[data-accept]').forEach((b) => { b.onclick = () => accept(+b.dataset.accept); });
+}
+
+// ---- Map: every layer at the point ---------------------------------------
+const STRIP = 576, GROUP = N / STRIP;
+function renderMap() {
+  const text = deckText();
+  $('mapWhere').innerHTML = `Every layer ${whereWords(point)} · in ${text === textOf(base) ? 'the reply' : text.label}`;
+  const el = $('mapRows'); el.innerHTML = '';
+  for (let l = 0; l < LAYERS; l++) {
+    const row = document.createElement('div'); row.className = 'lrow' + (l === front ? ' on' : '');
+    const np = [...pins.values()].filter((p) => p.l === l).length;
+    row.innerHTML = `<span class="ln">Layer ${l} <small class="${isGlobal(l) ? 'g' : ''}">${isGlobal(l) ? 'global' : 'local'}</small>${np ? ` <small style="color:var(--pin)">● ${np} pinned</small>` : ''}</span>
+      <span class="stage-box">not captured</span><canvas width="${STRIP}" height="1" aria-label="Layer ${l}'s MLP neurons"></canvas><span class="stage-box">not captured</span>`;
+    const c = card(text, l, point), cx = row.querySelector('canvas').getContext('2d'), img = cx.createImageData(STRIP, 1);
+    for (let x = 0; x < STRIP; x++) {
+      let m = 0; for (let n = x * GROUP; n < (x + 1) * GROUP; n++) if (Math.abs(c.values[n]) > Math.abs(m)) m = c.values[n];
+      const [r, gg, b] = heat(m, c.scale); const o = x * 4; img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = 255;
+    }
+    cx.putImageData(img, 0, 0);
+    row.onclick = () => { setFront(l); go('poke'); };
+    el.appendChild(row);
+  }
+}
+
+// ---- Run, Stop, Accept ---------------------------------------------------
+$('run').onclick = run;
+document.querySelector('.msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run(); });
+function run() {
+  if (streamTimer) stop();
+  const parent = textOf(base), from = point, held = [...pins.values()].map((p) => ({ ...p }));
+  const next = continuation(parent, from, held);
+  const edits = parent.edits.filter((e) => e.from < from).map((e) => ({ ...e, to: Math.min(e.to, from) })).concat(held.map((p) => ({ ...p, from, to: Infinity })));
+  const t = { id: texts.length, kind: 'try', label: `Try ${++tryCount}`, words: parent.words.slice(0, from), from, pins: held, edits, end: next.end, parent: base, streaming: true };
+  texts.push(t); shown = t.id;
+  let i = 0; $('stop').hidden = false;
+  streamTimer = setInterval(() => {
+    if (i >= next.words.length) { t.streaming = false; clearInterval(streamTimer); streamTimer = null; $('stop').hidden = true; renderAll(); return; }
+    t.words = t.words.concat(next.words[i++]);
+    if (i % 3 === 0) renderAll();
+  }, 45);
+  renderAll();
+}
+function stop() {
+  const t = texts.find((x) => x.streaming); if (!t) return;
+  clearInterval(streamTimer); streamTimer = null; t.streaming = false; t.end = 'stopped';
+  $('stop').hidden = true; renderAll();
+}
+$('stop').onclick = stop;
+function accept(id) {
+  const t = textOf(id); if (!t || t.streaming || id === base) return;
+  base = id; shown = null; side = 'reply'; point = Math.min(point, t.words.length); renderAll();
+}
+
+// ---- Chips, tabs, render -------------------------------------------------
+function renderChips() {
+  const el = $('chips');
+  el.innerHTML = [...pins.values()].map((p) => `<span class="chip ${selected && selected.l === p.l && selected.n === p.n ? 'sel' : ''}" data-k="${key(p.l, p.n)}" role="button" tabindex="0">${pinLabel(p)}<i aria-label="Remove">×</i></span>`).join('');
+  el.querySelectorAll('.chip').forEach((c) => { c.onclick = (e) => {
+    const p = pins.get(c.dataset.k);
+    if (e.target.tagName === 'I') { pins.delete(c.dataset.k); renderAll(); return; }
+    if (view === 'follow') { active = c.dataset.k; renderAll(); } else { if (view !== 'poke') view = 'poke'; select(p.l, p.n); }
+  }; });
+}
+function setPoint(s) { point = s; renderAll(); }
+function go(v) { view = v; if (v === 'poke') pos = front; renderAll(); }
+document.querySelectorAll('.tabs button').forEach((b) => { b.onclick = () => go(b.dataset.view); });
+function renderAll() {
+  if (!tryText() && side === 'try') side = 'reply';
+  const t = tryText(); if (t && point > t.words.length && side === 'try') point = t.words.length;
+  document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-selected', b.dataset.view === view));
+  document.querySelectorAll('.view').forEach((s) => s.classList.toggle('on', s.id === view));
+  renderChips();
+  if (view === 'poke') renderPoke(); else if (view === 'follow') renderFollow(); else if (view === 'compare') renderCompare(); else renderMap();
+}
+pins.set(key(12, 4031), { l: 12, n: 4031, mode: 'set', value: 8 });
+renderAll();
+})();
+</script>

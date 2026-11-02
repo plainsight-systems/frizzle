@@ -15,6 +15,21 @@ kept as they were made. Their values are made up.
   cool blue.
 - `themes.html`: the three theme directions; the site uses A and the app B.
 - `transition.html`: the agreed hand-over from the site to the app.
+- `layouts.html` (2026-10-31, not yet chosen): three wireframe directions
+  for where the workbench and past tries live, so a reply can be watched
+  while working on neurons and earlier tries are kept. It loads the app's
+  own Plex fonts (`app/src/theme/fonts/`).
+- `explore.html` (2026-10-31, interactive, under review): four views over
+  one shared state (the reply, the branch point, the pins, the tries), the
+  prompt with Run above them all, tabs between them and links where
+  attention already is. Poke: the deck at a word, the front card's
+  strongest neurons as a line over it, the inspector as a drawer. Follow:
+  the replies tinted by one neuron, and a row per followed neuron, word by
+  word. Compare: every try against the reply, with its pins and branch
+  word. Map: every layer at the point, its MLP neurons as a strip;
+  attention and the residual marked not captured. The values come from a
+  hash and the steered replies are canned word swaps; nothing runs a
+  model.
 
 They are static pages: serve the parent `tech-demos` folder over HTTP (for
 example `python3 -m http.server`) and open

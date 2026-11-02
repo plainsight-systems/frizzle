@@ -1,0 +1,241 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frizzle layouts</title>
+<!--
+  Three layout directions for the app page, sketched 2026-10-31 to answer two
+  problems found using steering: the workbench covers the replies, so a
+  person cannot see a reply change while working on neurons; and each Run
+  replaces the steered reply, so earlier tries are lost. Wireframes only:
+  the text and the deck are made up, and nothing here is wired to anything.
+-->
+<style>
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:"Plex Mono";src:url(../../../app/src/theme/fonts/IBMPlexMono-Regular.woff2) format('woff2')}
+:root{--page:#0d1422;--night:#090f1a;--panel:#121b2c;--rule:#253247;--ink:#eee6d3;--muted:#9aa0a8;--accent:#e2b866;--edit:#ffcf73;--cool:#9fc0e8;
+  --serif:"Plex Serif",Georgia,serif;--mono:"Plex Mono",ui-monospace,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--serif)}
+main{max-width:1180px;margin:auto;padding:32px 16px 64px}
+h1{font-weight:500;font-size:34px;letter-spacing:-.03em;margin:0 0 8px}
+h2{font-weight:500;font-size:24px;letter-spacing:-.02em;margin:0 0 6px}
+p{line-height:1.6;margin:0 0 12px;max-width:72ch}
+.lede{color:var(--muted)}
+section{margin:48px 0 0}
+.tag{font:12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+/* The wireframe window */
+.win{border:1px solid var(--rule);border-radius:6px;overflow:hidden;background:var(--page);aspect-ratio:16/10;display:grid;grid-template-rows:34px 1fr;font-size:12px;margin:14px 0}
+.bar{display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--rule);font:11px var(--mono);color:var(--muted)}
+.bar b{font:14px var(--serif);color:var(--ink);font-weight:400}
+.z{border:1px solid var(--rule);background:var(--panel);border-radius:4px;padding:8px;min-width:0;min-height:0;overflow:hidden;position:relative}
+.zl{font:10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.btn{display:inline-block;font:11px var(--mono);border:1px solid var(--rule);border-radius:3px;padding:2px 7px;color:var(--ink)}
+.btn.go{border-color:var(--accent);color:var(--accent)}
+.chip{display:inline-block;font:10px var(--mono);border:1px solid var(--edit);color:var(--edit);border-radius:10px;padding:1px 7px;margin:0 4px 4px 0}
+.txt{font:12px/1.5 var(--serif)}
+.faded{opacity:.45}
+.mark{display:inline-block;width:2px;height:1em;background:var(--accent);vertical-align:-2px;margin:0 1px}
+.ed{color:var(--edit)}
+/* The deck, drawn as cards sliding away */
+.deck{position:absolute;inset:24px 8px 8px;background:var(--night);border-radius:3px}
+.card{position:absolute;left:50%;width:46%;aspect-ratio:96/72;border:1px solid #3a4a66;border-radius:2px;
+  background:radial-gradient(circle at 30% 40%,rgba(242,181,79,.55) 0 2px,transparent 3px),radial-gradient(circle at 62% 58%,rgba(242,181,79,.4) 0 2px,transparent 3px),radial-gradient(circle at 48% 30%,rgba(159,192,232,.45) 0 2px,transparent 3px),#0f1830}
+.card.pin{box-shadow:inset 0 0 0 1px var(--edit)}
+/* A try in a list */
+.try{border:1px solid var(--rule);border-radius:3px;padding:5px 6px;margin-bottom:5px;background:var(--page)}
+.try.on{border-color:var(--accent)}
+.try .w{font:10px var(--mono);color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:8px;height:100%}
+.tabs{display:flex;gap:4px;margin-bottom:6px}
+.tabs span{font:10px var(--mono);border:1px solid var(--rule);border-radius:3px 3px 0 0;padding:1px 6px;color:var(--muted)}
+.tabs span.on{color:var(--accent);border-color:var(--accent)}
+.notes{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.notes h3{font:12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;font-weight:400}
+.notes ul{margin:0;padding-left:18px;line-height:1.6}
+.strong{display:flex;gap:10px;align-items:baseline;font:10px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;margin-bottom:4px}
+.strong span{color:var(--ink);border-bottom:1px solid var(--rule)}
+.drawer{position:absolute;top:50px;right:8px;bottom:8px;width:28%;background:var(--panel);border:1px solid var(--accent);border-radius:4px;padding:8px;box-shadow:-12px 0 24px rgba(0,0,0,.45)}
+.sel{position:absolute;left:28%;top:38%;width:7px;height:7px;border:1.5px solid var(--accent);border-radius:1px}
+.pair{display:grid;grid-template-columns:1fr;gap:20px}
+figure{margin:0}figcaption{font:12px var(--mono);color:var(--muted);margin:-6px 0 4px}
+.pair+.notes{margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:14px;margin-top:12px}
+th,td{border-bottom:1px solid var(--rule);text-align:left;padding:8px 10px 8px 0;vertical-align:top}
+th{font:12px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:400}
+@media (max-width:760px){.notes{grid-template-columns:1fr}.win{aspect-ratio:auto;min-height:520px}}
+</style>
+<main>
+<h1>Where the neurons and the tries live</h1>
+<p class="lede">Three directions for the page, to fix two problems: the workbench covers the replies, so you can't watch a reply change while you work on neurons; and each Run replaces the steered reply, so earlier tries are lost. Wireframes only; the text and values are made up.</p>
+
+<!-- A -->
+<section>
+<div class="tag">Direction A</div>
+<h2>Workbench first, replies docked</h2>
+<p>The workbench becomes the page, laid out like Dolittle: tries in a rail on the left, the deck in the middle, the inspector on the right. The two replies sit in a strip under the deck and stay in view, so a Run streams there while the deck stays put.</p>
+<div class="win">
+  <div class="bar"><b>Frizzle</b> Ready: Apple M3 · Gemma 3 1B<span style="flex:1"></span></div>
+  <div style="display:grid;grid-template-columns:20% 1fr 24%;grid-template-rows:auto 1fr 30%;gap:8px;padding:8px;min-height:0">
+    <div class="z" style="grid-column:1/4;display:flex;align-items:center;gap:8px;padding:6px 8px">
+      <span class="txt" style="flex:1">Name three colours of the rainbow.</span>
+      <span class="chip">L12 · 4031 = 100</span><span class="btn go">Run</span>
+    </div>
+    <div class="z" style="grid-column:1;grid-row:2/4">
+      <div class="zl">Tries</div>
+      <div class="try"><div class="w">Reply</div><span class="txt">Red, orange and yellow…</span></div>
+      <div class="try on"><div class="w">Try 3 · after “orange” · 1 pin</div><span class="txt ed">gold, gold, gold…</span></div>
+      <div class="try"><div class="w">Try 2 · from the start · 2 pins</div><span class="txt ed">Crimson, amber…</span></div>
+      <div class="try"><div class="w">Try 1 · after “Red,” · 1 pin</div><span class="txt ed">blue and green…</span></div>
+    </div>
+    <div class="z" style="grid-column:2;grid-row:2"><div class="zl">MLP neurons · after “orange” · layer 12</div>
+      <div class="deck"><div class="card" style="top:6%;transform:translateX(-50%) scale(.82);opacity:.5"></div><div class="card" style="top:14%;transform:translateX(-50%) scale(.9);opacity:.75"></div><div class="card pin" style="top:24%;transform:translateX(-50%)"></div></div>
+    </div>
+    <div class="z" style="grid-column:3;grid-row:2/4"><div class="zl">Inspector</div><div class="txt">Strongest in layer 12<br>Neuron 4031: reply 2.1, try 3 100<br><span class="btn">Set</span> <span class="btn">Scale ×</span> <span class="btn">Zero</span></div></div>
+    <div class="z" style="grid-column:2;grid-row:3"><div class="cols">
+      <div><div class="zl">Reply</div><span class="txt">Red, orange<span class="mark"></span><span class="faded"> and yellow are three colours of the rainbow.</span></span></div>
+      <div><div class="zl">Try 3 <span class="btn" style="float:right">Accept</span></div><span class="txt"><span class="faded">Red, orange</span><span class="ed"> gold, gold, gold, gold…</span></span></div>
+    </div></div>
+  </div>
+</div>
+<div class="notes">
+  <div><h3>Gains</h3><ul><li>Everything at once: pins, neurons, replies, tries.</li><li>Closest to Dolittle's rail | main | inspector.</li><li>A try in the rail can show its own neurons and move the point to its word (problem 5).</li></ul></div>
+  <div><h3>Costs</h3><ul><li>Replies get a short strip; a long reply means scrolling it.</li><li>The deck gets less height than the approved concept.</li><li>Busiest first screen for someone who just wants to ask a question.</li></ul></div>
+</div>
+</section>
+
+<!-- A, with the inspector as a drawer -->
+<section>
+<div class="tag">Direction A · drawer</div>
+<h2>Workbench first, the inspector slides over</h2>
+<p>Direction A without the fixed inspector column. With nothing selected, the deck and the reply strip take the whole width beside the tries. The front layer's strongest neurons stay as a line across the top of the deck; clicking one, or a neuron on the grid, slides the inspector in from the right, over the deck's right edge, with Set, Scale × and Zero. The Inspector button opens it on whatever is selected; Esc, × or clicking empty grid slides it away. The deck shifts left while it's open, so the front card is never covered.</p>
+<div class="pair">
+<figure>
+<div class="win">
+  <div class="bar"><b>Frizzle</b> Ready: Apple M3 · Gemma 3 1B</div>
+  <div style="display:grid;grid-template-columns:20% 1fr;grid-template-rows:auto 1fr 30%;gap:8px;padding:8px;min-height:0">
+    <div class="z" style="grid-column:1/3;display:flex;align-items:center;gap:8px;padding:6px 8px">
+      <span class="txt" style="flex:1">Name three colours of the rainbow.</span>
+      <span class="chip">L12 · 4031 = 100</span><span class="btn go">Run</span>
+    </div>
+    <div class="z" style="grid-column:1;grid-row:2/4">
+      <div class="zl">Tries</div>
+      <div class="try"><div class="w">Reply</div><span class="txt">Red, orange and yellow…</span></div>
+      <div class="try on"><div class="w">Try 3 · after “orange”</div><span class="txt ed">gold, gold, gold…</span></div>
+      <div class="try"><div class="w">Try 2 · from the start</div><span class="txt ed">Crimson, amber…</span></div>
+    </div>
+    <div class="z" style="grid-column:2;grid-row:2"><div class="zl">MLP neurons · after “orange” · layer 12 <span class="btn" style="float:right">Inspector</span></div>
+      <div class="strong">Strongest in layer 12 <span>#4031 2.1</span><span>#288 −1.8</span><span>#5120 1.6</span><span>#77 1.4</span><span>#6012 −1.3</span></div>
+      <div class="deck" style="top:44px"><div class="card" style="top:6%;width:34%;transform:translateX(-50%) scale(.82);opacity:.5"></div><div class="card" style="top:14%;width:34%;transform:translateX(-50%) scale(.9);opacity:.75"></div><div class="card pin" style="top:24%;width:34%;transform:translateX(-50%)"></div></div>
+    </div>
+    <div class="z" style="grid-column:2;grid-row:3"><div class="cols">
+      <div><div class="zl">Reply</div><span class="txt">Red, orange<span class="mark"></span><span class="faded"> and yellow are three colours of the rainbow. Each one sits beside the next.</span></span></div>
+      <div><div class="zl">Try 3 <span class="btn" style="float:right">Accept</span></div><span class="txt"><span class="faded">Red, orange</span><span class="ed"> gold, gold, gold, gold, gold…</span></span></div>
+    </div></div>
+  </div>
+</div>
+<figcaption>Nothing selected: the deck and the replies get the width.</figcaption>
+</figure>
+<figure>
+<div class="win">
+  <div class="bar"><b>Frizzle</b> Ready: Apple M3 · Gemma 3 1B</div>
+  <div style="display:grid;grid-template-columns:20% 1fr;grid-template-rows:auto 1fr 30%;gap:8px;padding:8px;min-height:0;position:relative">
+    <div class="z" style="grid-column:1/3;display:flex;align-items:center;gap:8px;padding:6px 8px">
+      <span class="txt" style="flex:1">Name three colours of the rainbow.</span>
+      <span class="chip">L12 · 4031 = 100</span><span class="btn go">Run</span>
+    </div>
+    <div class="z" style="grid-column:1;grid-row:2/4">
+      <div class="zl">Tries</div>
+      <div class="try"><div class="w">Reply</div><span class="txt">Red, orange and yellow…</span></div>
+      <div class="try on"><div class="w">Try 3 · after “orange”</div><span class="txt ed">gold, gold, gold…</span></div>
+      <div class="try"><div class="w">Try 2 · from the start</div><span class="txt ed">Crimson, amber…</span></div>
+    </div>
+    <div class="z" style="grid-column:2;grid-row:2"><div class="zl">MLP neurons · after “orange” · layer 12</div>
+      <div class="strong">Strongest in layer 12 <span>#4031 2.1</span><span>#288 −1.8</span><span>#5120 1.6</span><span>#77 1.4</span><span>#6012 −1.3</span></div>
+      <div class="deck" style="top:44px"><div class="card" style="top:6%;left:34%;width:34%;transform:translateX(-50%) scale(.82);opacity:.5"></div><div class="card" style="top:14%;left:34%;width:34%;transform:translateX(-50%) scale(.9);opacity:.75"></div><div class="card pin" style="top:24%;left:34%;width:34%;transform:translateX(-50%)"><span class="sel"></span></div></div>
+    </div>
+    <div class="z" style="grid-column:2;grid-row:3"><div class="cols">
+      <div><div class="zl">Reply</div><span class="txt">Red, orange<span class="mark"></span><span class="faded"> and yellow are three colours of the rainbow.</span></span></div>
+      <div><div class="zl">Try 3</div><span class="txt"><span class="faded">Red, orange</span><span class="ed"> gold, gold, gold…</span></span></div>
+    </div></div>
+    <div class="drawer"><div class="zl">Neuron 4031 · layer 12 <span style="float:right">×</span></div>
+      <div class="txt">Reply 2.1<br>Try 3 <span class="ed">100</span></div>
+      <div style="margin:8px 0"><span class="btn">Set</span> <span class="btn">Scale ×</span> <span class="btn">Zero</span></div>
+    </div>
+  </div>
+</div>
+<figcaption>A neuron clicked: the inspector slides over the right edge; the deck moves left.</figcaption>
+</figure>
+</div>
+<div class="notes">
+  <div><h3>Gains</h3><ul><li>The deck gets the concept's full width most of the time.</li><li>The reply strip is wider, so more of each reply shows.</li><li>The inspector appears where your attention already is: on the neuron you just clicked.</li></ul></div>
+  <div><h3>Costs</h3><ul><li>The strongest line holds five or so neurons across the deck's width, fewer than the eight the inspector lists today.</li><li>The drawer covers the right of the reply strip while open, unless it stops at the deck.</li><li>Opening and closing is motion; under reduced motion it would appear and disappear without sliding.</li></ul></div>
+</div>
+</section>
+
+<!-- B -->
+<section>
+<div class="tag">Direction B</div>
+<h2>Reading first, workbench beside</h2>
+<p>The page stays the conversation, and the workbench opens as a split on the right half instead of covering everything. Tries are tabs over the steered reply: Try 1, Try 2, Try 3, so you can flip between them against the reply.</p>
+<div class="win">
+  <div class="bar"><b>Frizzle</b> Ready: Apple M3 · Gemma 3 1B</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px;min-height:0">
+    <div style="display:grid;grid-template-rows:auto 1fr;gap:8px;min-height:0">
+      <div class="z" style="display:flex;align-items:center;gap:8px;padding:6px 8px"><span class="txt" style="flex:1">Name three colours of the rainbow.</span><span class="chip">L12 · 4031 = 100</span><span class="btn go">Run</span></div>
+      <div class="z"><div class="cols">
+        <div><div class="zl">Reply</div><span class="txt">Red, orange<span class="mark"></span><span class="faded"> and yellow are three colours of the rainbow. Each one sits beside the next in the band of light.</span></span></div>
+        <div><div class="tabs"><span>Try 1</span><span>Try 2</span><span class="on">Try 3</span></div><span class="txt"><span class="faded">Red, orange</span><span class="ed"> gold, gold, gold, gold, gold…</span></span><div style="position:absolute;bottom:8px;right:8px"><span class="btn">Accept</span></div></div>
+      </div></div>
+    </div>
+    <div style="display:grid;grid-template-rows:1fr 34%;gap:8px;min-height:0">
+      <div class="z"><div class="zl">MLP neurons · after “orange” · layer 12 <span class="btn" style="float:right">Close</span></div>
+        <div class="deck"><div class="card" style="top:6%;transform:translateX(-50%) scale(.82);opacity:.5"></div><div class="card" style="top:14%;transform:translateX(-50%) scale(.9);opacity:.75"></div><div class="card pin" style="top:24%;transform:translateX(-50%)"></div></div>
+      </div>
+      <div class="z"><div class="zl">Inspector</div><div class="txt">Neuron 4031: reply 2.1, try 3 100 &nbsp;<span class="btn">Set</span> <span class="btn">Scale ×</span> <span class="btn">Zero</span></div></div>
+    </div>
+  </div>
+</div>
+<div class="notes">
+  <div><h3>Gains</h3><ul><li>The question and replies stay the main thing; the workbench is there when you want it.</li><li>Smallest change from today's page.</li><li>Tabs keep tries without a new panel.</li></ul></div>
+  <div><h3>Costs</h3><ul><li>Each half is narrow: two reply columns plus a deck in one window.</li><li>Tabs show one try at a time; comparing two tries means flipping.</li><li>The inspector shrinks under the deck.</li></ul></div>
+</div>
+</section>
+
+<!-- C -->
+<section>
+<div class="tag">Direction C</div>
+<h2>Tries first, workbench as a drawer</h2>
+<p>The page becomes a stack of tries. The reply sits at the top; each Run adds a try under it, newest first, with its pins and branch word, so every attempt stays readable at once. The workbench is a drawer from the bottom over half the window, so the newest try streams above it.</p>
+<div class="win">
+  <div class="bar"><b>Frizzle</b> Ready: Apple M3 · Gemma 3 1B</div>
+  <div style="display:grid;grid-template-rows:auto 1fr 46%;gap:8px;padding:8px;min-height:0">
+    <div class="z" style="display:flex;align-items:center;gap:8px;padding:6px 8px"><span class="txt" style="flex:1">Name three colours of the rainbow.</span><span class="chip">L12 · 4031 = 100</span><span class="btn go">Run</span></div>
+    <div class="z" style="overflow:hidden">
+      <div class="try"><div class="w">Reply</div><span class="txt">Red, orange<span class="mark"></span><span class="faded"> and yellow are three colours of the rainbow.</span></span></div>
+      <div class="try on"><div class="w">Try 3 · after “orange” · L12 4031 = 100 <span class="btn" style="float:right">Accept</span></div><span class="txt"><span class="faded">Red, orange</span><span class="ed"> gold, gold, gold, gold…</span></span></div>
+      <div class="try"><div class="w">Try 2 · from the start · L6 100 = −200, L12 4031 = 100</div><span class="txt ed">Crimson, amber and saffron are…</span></div>
+    </div>
+    <div class="z" style="display:grid;grid-template-columns:1fr 30%;gap:8px">
+      <div style="position:relative"><div class="zl">MLP neurons · after “orange” · layer 12</div>
+        <div class="deck" style="inset:20px 0 0"><div class="card" style="top:4%;width:30%;transform:translateX(-50%) scale(.82);opacity:.5"></div><div class="card" style="top:12%;width:30%;transform:translateX(-50%) scale(.9);opacity:.75"></div><div class="card pin" style="top:22%;width:30%;transform:translateX(-50%)"></div></div></div>
+      <div><div class="zl">Inspector</div><div class="txt">Neuron 4031: reply 2.1, try 3 100<br><span class="btn">Set</span> <span class="btn">Scale ×</span> <span class="btn">Zero</span></div></div>
+    </div>
+  </div>
+</div>
+<div class="notes">
+  <div><h3>Gains</h3><ul><li>Every try readable at once, each labelled with what changed.</li><li>Reads like a lab notebook: question, then attempts.</li><li>The drawer can close to give tries the whole page.</li></ul></div>
+  <div><h3>Costs</h3><ul><li>Tries stack top to bottom, so the reply and a try are no longer side by side line for line.</li><li>The deck gets half the height, wide but short.</li><li>A long list of tries needs its own scrolling and clearing.</li></ul></div>
+</div>
+</section>
+
+<section>
+<h2>Side by side</h2>
+<table>
+<tr><th></th><th>A · Workbench first</th><th>A · drawer</th><th>B · Reading first</th><th>C · Tries first</th></tr>
+<tr><td>Watch a reply change while pinning</td><td>Yes, in the strip</td><td>Yes, in a wider strip</td><td>Yes, in the left half</td><td>Yes, above the drawer</td></tr>
+<tr><td>Compare tries</td><td>Pick in the rail, one shown</td><td>Pick in the rail, one shown</td><td>Flip tabs, one shown</td><td>All readable at once</td></tr>
+<tr><td>Reply vs try, line for line</td><td>Yes</td><td>Yes</td><td>Yes</td><td>No, stacked</td></tr>
+<tr><td>Room for the deck</td><td>Middle, reduced height</td><td>Full width, reduced height</td><td>Right half</td><td>Bottom half, short</td></tr>
+<tr><td>Change from today</td><td>Largest</td><td>Largest</td><td>Smallest</td><td>Medium</td></tr>
+</table>
+<p style="margin-top:16px" class="lede">Open questions for any direction: does Accept keep the old reply as a try, or start fresh? Do tries survive a new question? How many before older ones go?</p>
+</section>
+</main>
