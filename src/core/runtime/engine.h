@@ -80,17 +80,21 @@ namespace frizzle::runtime {
 //       keeps from did, and only edits make the two differ.
 //     - A max_tokens of 0 inspects (runtime/turn.h): step k is computed,
 //       with the edits in force there, and captured; nothing is drawn; the
-//       turn ends Limit with no tokens. So a host sees the neurons at any
+//       turn ends Limit with no tokens. So a host sees the captures at any
 //       point of a reply without generating from it.
-//     - Captured: every layer's neurons at step k, the input's last
-//       position, after the edits in force there (capture/capture.h), with
-//       the store's layout, one slot a layer; or why there are none:
+//     - Captured: every layer's captures at step k, the input's last
+//       position, with the edits in force there (capture/capture.h): its
+//       neurons after the edits, the residual coming into it, what its
+//       attention and feed-forward blocks added, and its attention weights
+//       and their statistics. With them, the store's layout and the
+//       position, which the weights count their keys back from. Or why
+//       there are none:
 //         - Taken: the turn ended Stop, Limit or Context, so its step that
 //           ends the prompt ran, and the store was read back whole; the
 //           words are this run's, valid only during the call.
 //         - NotTaken: the turn was Cancelled or failed. The step that ends
 //           the prompt may not have run, so the store may still hold an
-//           earlier run's neurons; it is not read, and nothing is reported.
+//           earlier run's captures; it is not read, and nothing is reported.
 //         - Unread: the turn ended as Taken says, but the read back failed;
 //           `mapped` says how (residency/mapping.h). The turn's own result
 //           stands. An engine destroyed while the store is read reports
@@ -216,7 +220,7 @@ namespace frizzle::runtime {
 //     queue write (GPU.1): nothing a token. The edit kernel and the capture
 //     launch run in every scoring step (edit/edit_kernel.h,
 //     capture/capture.h). A run that ends Stop, Limit or Context adds one
-//     read back of the store, 702 KiB for Gemma 3 1B, before its end is
+//     read back of the store, 3.2 MiB for Gemma 3 1B, before its end is
 //     reported (capture/reader.h).
 //   - Captures cross with the result, not in a call of their own: a host
 //     gets them exactly once, with the run they belong to, and never asks
@@ -226,8 +230,10 @@ namespace frizzle::runtime {
 //     than operations of their own: one turn loop, one capture, one way a
 //     run's input is made.
 //   - on_end's type is RunEndCallback, not the generator's EndCallback: the
-//     native tool and the replay scenario take the captures and read nothing
-//     of them; the browser bindings send them to the page (slice 4, step 2).
+//     native tool takes the captures and reads nothing of them; the replay
+//     scenario compares two runs' stores; the browser bindings send the
+//     neurons to the page (slice 4, step 2), and the rest crosses in the
+//     step after this one (QUEUE, slice 4, step 6).
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -313,10 +319,13 @@ enum class CaptureStatus : std::uint8_t {
 struct Captured {
   CaptureStatus status = CaptureStatus::NotTaken;
   residency::Mapped mapped = residency::Mapped::Ok;  // for Unread
-  // For Taken: every layer's slot, in layer order, and the store's words,
-  // valid only during the callback.
-  std::span<const capture::Slot> slots;
-  std::span<const float> neurons;
+  // For Taken: the store's layout (the engine's, alive while it is), the
+  // store's words, valid only during the callback, and the input's last
+  // position, which each layer's weights count back from: key i of a head
+  // is at position − min(position + 1, keys) + 1 + i (capture/weights.h).
+  const capture::Layout* layout = nullptr;
+  std::span<const float> words;
+  std::uint32_t position = 0;
 };
 
 using RunEndCallback = void (*)(const TurnResult& result,

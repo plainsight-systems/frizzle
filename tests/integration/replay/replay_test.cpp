@@ -33,8 +33,11 @@
 //      accepted reply's edits recomputed inside prefill rows; a fresh
 //      engine gives the same.
 //   7. An inspection (max_tokens 0) at k emits nothing, ends Limit, and
-//      captures every layer's neurons equal, bit for bit, to the captures
-//      of the branch from k with the same edits.
+//      captures the whole store, every word, equal bit for bit to the
+//      captures of the branch from k with the same edits, at the same
+//      position: every layer's neurons, residual, additions, attention
+//      weights and statistics (slice 4, step 5: the whole store, where it
+//      compared the neurons alone).
 //   8. A kept identifier past the vocabulary is refused at once, Kept,
 //      naming its index; nothing runs.
 //
@@ -56,6 +59,7 @@
 #include <doctest/doctest.h>
 #include <webgpu/webgpu.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -104,8 +108,9 @@ Edit E(std::uint32_t layer, std::uint32_t neuron, EditKind kind, float value,
 // A reply and how it ended: everything the engine reports of it.
 struct Reply {
   std::string text;
-  std::vector<TokenId> tokens;  // as emitted, one callback each
-  std::vector<float> neurons;   // the captures, copied, when taken
+  std::vector<TokenId> tokens;       // as emitted, one callback each
+  std::vector<std::uint32_t> store;  // the captures' bits, when taken
+  std::uint32_t position = 0;        // the captures' position
   frz::runtime::CaptureStatus captured{};
   frz::runtime::TurnFailure failure{};
   frz::runtime::TurnEnd end{};
@@ -212,7 +217,11 @@ class Loaded {
            const frz::runtime::Captured& captured, void* userdata) {
           auto& r = *static_cast<Reply*>(userdata);
           r.captured = captured.status;
-          r.neurons.assign(captured.neurons.begin(), captured.neurons.end());
+          r.store.clear();
+          for (const float w : captured.words) {
+            r.store.push_back(std::bit_cast<std::uint32_t>(w));
+          }
+          r.position = captured.position;
           r.text += result.tail;
           r.failure = result.failure;
           r.end = result.end;
@@ -344,8 +353,8 @@ TEST_CASE("replay and edits") {
   const Reply branched =
       engine->generate(prompt, at_k, first(original.tokens, kInspect));
   REQUIRE(branched.captured == frz::runtime::CaptureStatus::Taken);
-  CHECK(inspected.neurons == branched.neurons);  // operator== on floats:
-                                                 // no NaN is captured here
+  CHECK(inspected.position == branched.position);
+  CHECK(inspected.store == branched.store);
 
   // 8. A kept identifier that names no token is refused, by index.
   const std::vector<TokenId> bad{original.tokens.at(0), TokenId{0xFFFFFFF0U}};

@@ -1,17 +1,18 @@
 // Axis O: changes with a new captured value, or what is sent.
 //
-// The capture kernel (capture/capture.h): a layer's neurons at the last
-// prompt position, copied into the layer's slot of the store, after the
-// layer's edits and before its down projection.
+// The copy kernel (capture/capture.h): one row of a source buffer at the
+// last prompt position, copied into a slot of the store. The graph uses it
+// for a layer's neurons, after the layer's edits and before its down
+// projection.
 //
 // Contract
 //   - In the step that ends the prompt (step.fed 0; the program runs this
-//     launch only in steps that ask for logits), copies the activation's
-//     last row, `width` words, to store[first ..], word for word.
+//     launch only in steps that ask for logits), copies the
+//     source's last row, `width` words, to store[first ..], word for word.
 //   - In a fed step, a decode step, writes nothing.
 //   - Writes nothing outside the slot.
-//   - Preconditions: first + width is within the store; the activation's
-//     rows are `width` words.
+//   - Preconditions: first + width is within the store; the source's rows
+//     are `width` words.
 //
 // Algorithm, one workgroup of workgroup_size (256)
 //   1. If step.fed is 1, return.

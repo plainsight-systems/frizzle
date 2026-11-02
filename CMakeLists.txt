@@ -77,6 +77,7 @@ add_library(frizzle_core STATIC
     src/core/cache/prefix.cpp
     src/core/capability/capability.cpp
     src/core/capture/capture.cpp
+    src/core/capture/weights.cpp
     src/core/edit/edit.cpp
     src/core/edit/edit_kernel.cpp
     src/core/gguf/arrays.cpp
@@ -139,6 +140,7 @@ frizzle_embed_shaders(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/sampler/draw.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/edit/edit.wgsl"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/core/capture/capture.wgsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/core/capture/weights.wgsl"
 )
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
 #include "core/kernels/interface.h"
 #include "core/residency/plan.h"
 #include "core/residency/weight_view.h"
@@ -96,12 +99,47 @@ namespace frizzle::kernels {
 //     a re-norm, binds its gain in their places — with a unit gain, the
 //     output buffer in the gain's: all read-only, so none aliases a buffer
 //     the kernel writes.
+//   - Capture (capture/capture.h; slice 4, step 5). A launch may write two
+//     vectors into the capture store, in the step that ends the prompt
+//     (step.logits 1 and step.fed 0) and for the step's last row only:
+//       - with `capture_residual`, X as the layer's later steps read it:
+//         after the add, the scale and the re-norm where the launch makes
+//         them, before it normalizes; where the launch does not add, X as
+//         it was read, so layer 0's attention norm captures the embedding.
+//         Into the residual slot.
+//       - with `capture_added` (requires `add`), y exactly as it was added
+//         into X: after the post-norm and post_scale where the launch makes
+//         them. Into the added slot. So, where the launch neither scales nor
+//         re-norms, X before plus the captured y, one f32 add an element
+//         (correctly rounded in WGSL), is X written, bit for bit. WGSL does
+//         not say a compiler may not fuse the post-norm's last multiply
+//         into the add, which would break it: the identity is what the
+//         target gives, which the GPU test checks, as attention's equal
+//         bits are, not a promise.
+//     Writing changes nothing the launch computes: X and normed are the same
+//     bits whether the step captures or not. No other step and no other row
+//     writes to the store. Which launch writes which layer's slots is the
+//     graph's (graph/graph.h).
+//     The step's `logits`, which no kernel read before, tells the step that
+//     ends the prompt from a prefill step that does not: neither is fed,
+//     and a norm runs over every row of every step (kernels/step.wgsl).
+//     The two are override constants, so a launch that captures neither
+//     pays nothing but a binding; each slot's first word is a constant.
+//     Cost: a test of the step a row; in the step that ends the prompt, one
+//     row's width written once or twice, 4.5 KiB each at Gemma 3's 1,152.
+//     Why here and not a copy launch: y after the post-norm exists only in
+//     this kernel's registers, never in a buffer, and X after minus X
+//     before is not y in f32; X is in the same registers, so writing it
+//     costs no dispatch, where a copy would cost one a layer a token.
 //   - Constants (binding 1), as WGSL lays them out:
-//       struct Norm { epsilon: f32, post_scale: f32 }
+//       struct Norm { epsilon: f32, post_scale: f32, residual_slot: u32,
+//                     added_slot: u32 }
 //     Bindings: 2 the gain, 3 the post-norm's gain, 4 the block's output y,
 //     read-only; 5 the hidden buffer X; 6 the normed buffer; 7 the scale,
-//     one f32, read-only; 8 the re-norm's gain, read-only. Seven storage
-//     bindings, within WebGPU's default of 8 a stage.
+//     one f32, read-only; 8 the re-norm's gain, read-only; 9 the capture
+//     store, read-write. Eight storage bindings: WebGPU's default limit a
+//     stage, reached exactly; a ninth would need the limit raised, which
+//     the harness asks for no adapter to do (gpu/device_requirements.h).
 //   - Gains are F32 and one piece: a norm's weight is one row of the hidden
 //     width, far under a binding (format.h's F32).
 //   - It reads the plan's `output` working buffer: a block's last matmul
@@ -159,6 +197,9 @@ namespace frizzle::kernels {
 // reference: every variant, at the widths of the listed models; rows of
 // large and of tiny magnitude; a step of many rows and of one, each row's
 // result identical in both; and the final norm touching only the last row.
+// The capture alone has a test of its own, in the kernels suite
+// (tests/README.md): the vectors it writes and where, and that X and normed
+// are unchanged by it; the norm's arithmetic stays the oracle's to check.
 
 // The encoder's variants, likewise, at EmbeddingGemma 2's width of 512: a
 // scaled add, X then normalized; an add alone, normed untouched; and 2 rows a
@@ -178,24 +219,40 @@ namespace frizzle::kernels {
 //            loop iterations beyond the row's.
 //     GPU.5  Use workgroup memory where reuse or reordering pays — the
 //            reduction's partial sums, 1 KiB.
-//     GPU.6  Batch tiny GPU work — the add and the gain fused in.
+//     GPU.6  Batch tiny GPU work — the add and the gain fused in, and the
+//            capture's writes ride in the same launch.
+//     GPU.2  Shape data for coalesced lane access — the capture's stores
+//            are not: an invocation writes its vec4's four words, a slot
+//            being word-aligned only, so adjacent lanes are 16 bytes
+//            apart. One row once a run, 4.5 KiB; not worth a shuffle.
 //   C++ Core Guidelines
 //     C.12   Don't make data members const or references in a copyable
 //            type — the gains are pointers.
 //     GPU.8  Make barriers describe real hazards — none after the last
 //            reduction, where nothing writes the partial sums again.
+//     I.7    State postconditions — the capture's: X before plus the
+//            captured y is X written; X and normed unchanged by it.
+
+// The capture store and the slots one norm writes (the header's Capture):
+// each slot's first word, or none. A slot is the norm's width long.
+struct NormCapture {
+  residency::BufferRange store;           // bound always: binding 9
+  std::optional<std::uint32_t> residual;  // X, after the add
+  std::optional<std::uint32_t> added;     // y as added; requires `add`
+};
 
 // One norm of the graph.
 struct NormLaunch {
-  const residency::WeightView*
-      gain;  // F32, one row's width; null for a unit gain
-  const residency::WeightView* post_gain;  // Gemma 3's post-norm of y, or null
-  bool add;                       // add y into X first; required by a post-norm
-  residency::BufferRange output;  // y: the block's output
-  residency::BufferRange hidden;  // X
-  residency::BufferRange normed;
-  float epsilon;
-  Rows rows;  // LastToken for the final norm
+  const residency::WeightView* gain =
+      nullptr;  // F32, one row's width; null for a unit gain
+  const residency::WeightView* post_gain =
+      nullptr;       // Gemma 3's post-norm of y, or null
+  bool add = false;  // add y into X first; required by a post-norm
+  residency::BufferRange output = {};  // y: the block's output
+  residency::BufferRange hidden = {};  // X
+  residency::BufferRange normed = {};
+  float epsilon = 0.0f;
+  Rows rows = Rows::EveryToken;  // LastToken for the final norm
   // Gemma 4's layer output scale: an F32 view of one float that multiplies
   // X after the add, or null.
   const residency::WeightView* scale = nullptr;
@@ -212,12 +269,16 @@ struct NormLaunch {
   // A unit gain's row width, where `gain` is null; the block's output is
   // then bound in the gain's place, so it must not be X or normed.
   std::uint32_t width = 0;
+  // What the launch writes into the capture store, if anything (above).
+  NormCapture capture = {};
 };
 
 // The launch for one norm. Preconditions: the gains are F32 views of one
 // row's width, at most 4,096; a post-norm or a scale only where the launch
 // adds; a launch that does not normalize adds; rows_per_token 1 for a launch
-// over the last token.
+// over the last token; `capture.store` the plan's capture store, and each
+// slot in it one of capture::layout()'s, of the norm's width; `added` only
+// where the launch adds.
 [[nodiscard]] Launch norm_launch(const NormLaunch& norm);
 
 }  // namespace frizzle::kernels

@@ -56,9 +56,14 @@
 //     and "captures" is
 //     the engine's Captured (runtime/engine.h), as it gave it:
 //       {"status": "taken", "slots": [[first, width], ...]}, one pair a
-//         layer, with the neurons themselves crossing in the same call as
-//         the answer: frizzleOnAnswer(request, answer, neurons), `neurons`
-//         a Float32Array of every slot's words, bit for bit;
+//         layer, its neurons slot, with the neurons themselves crossing in
+//         the same call as the answer: frizzleOnAnswer(request, answer,
+//         neurons), `neurons` a Float32Array of the store's neuron region,
+//         every layer's neurons slot, bit for bit (capture/capture.h,
+//         region 1). The store's other captures do not cross yet: the
+//         page has nothing to show them in until the step after this one
+//         (QUEUE, slice 4, step 6), and sending 2.5 MiB more a run for
+//         nothing to read was not worth it;
 //       {"status": "not-taken"}: the turn was cancelled, so there are none;
 //       {"status": "unread", "reason"}: the read back failed, named by
 //         residency::Mapped ("cancelled", "device-lost", "unexplained",
@@ -362,10 +367,11 @@ std::string captures_json(const runtime::Captured& captured) {
   switch (captured.status) {
     case runtime::CaptureStatus::Taken: {
       std::string slots;
-      for (const frizzle::capture::Slot& s : captured.slots) {
+      // Each layer's neurons slot: the region that crosses (the header).
+      for (const frizzle::capture::LayerSlots& l : captured.layout->layers) {
         if (!slots.empty()) slots += ',';
-        slots +=
-            "[" + std::to_string(s.first) + "," + std::to_string(s.width) + "]";
+        slots += "[" + std::to_string(l.neurons.first) + "," +
+                 std::to_string(l.neurons.width) + "]";
       }
       return "{\"status\":\"taken\",\"slots\":[" + slots + "]}";
     }
@@ -405,8 +411,12 @@ void on_end(const runtime::TurnResult& result,
       ",\"captures\":" + captures_json(captured) + "}";
   reply.clear();
   if (captured.status == runtime::CaptureStatus::Taken) {
-    frizzle_answer_neurons(request, json.c_str(), captured.neurons.data(),
-                           static_cast<std::uint32_t>(captured.neurons.size()));
+    // The store's first region, every layer's neurons; the rest crosses in
+    // slice 4, step 6 (the header).
+    const std::span<const float> neurons =
+        captured.words.first(captured.layout->neuron_words);
+    frizzle_answer_neurons(request, json.c_str(), neurons.data(),
+                           static_cast<std::uint32_t>(neurons.size()));
     return;
   }
   answer(request, json);

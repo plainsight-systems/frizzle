@@ -1,3 +1,8 @@
+// Axis E: changes with a new or optimized kernel.
+//
+// Contract, algorithm, cost and corpus guidance: norm.h. This file
+// defines what that header states.
+
 #include "core/kernels/norm/norm.h"
 
 #include <cstdint>
@@ -12,6 +17,8 @@ namespace {
 struct Constants {
   float epsilon;
   float post_scale;
+  std::uint32_t residual_slot;  // 0 where the launch captures no residual
+  std::uint32_t added_slot;     // 0 where it captures no addition
 };
 
 constexpr std::uint32_t kWorkgroupSize = 256;
@@ -28,7 +35,9 @@ Binding whole(const residency::BufferRange& range) {
 }  // namespace
 
 Launch norm_launch(const NormLaunch& n) {
-  const Constants constants{n.epsilon, n.post_scale};
+  const Constants constants{n.epsilon, n.post_scale,
+                            n.capture.residual.value_or(0),
+                            n.capture.added.value_or(0)};
   std::vector<std::byte> bytes(sizeof constants);
   std::memcpy(bytes.data(), &constants, sizeof constants);
   const bool post = n.post_gain != nullptr;
@@ -45,7 +54,7 @@ Launch norm_launch(const NormLaunch& n) {
       std::move(bytes),
       {fill, post ? whole(*n.post_gain) : fill, whole(n.output),
        whole(n.hidden), whole(n.normed), scaled ? whole(*n.scale) : fill,
-       renorm ? whole(*n.renorm_gain) : fill},
+       renorm ? whole(*n.renorm_gain) : fill, whole(n.capture.store)},
       kWorkgroupSize * n.rows_per_token,
       kWorkgroupSize,
       n.rows,
@@ -56,6 +65,8 @@ Launch norm_launch(const NormLaunch& n) {
        {"renorm", renorm ? 1.0 : 0.0},
        {"unit_gain", unit ? 1.0 : 0.0},
        {"rows_per_token", static_cast<double>(n.rows_per_token)},
+       {"capture_residual", n.capture.residual.has_value() ? 1.0 : 0.0},
+       {"capture_added", n.capture.added.has_value() ? 1.0 : 0.0},
        {"width", static_cast<double>(width)}},
   };
 }

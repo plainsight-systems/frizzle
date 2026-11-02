@@ -420,8 +420,11 @@ void on_captures_read(residency::Mapped outcome, std::span<const float> words,
     captured.mapped = outcome;
   } else {
     captured.status = CaptureStatus::Taken;
-    captured.slots = s.layout.slots;
-    captured.neurons = words;
+    captured.layout = &s.layout;
+    captured.words = words;
+    // The step that ends the prompt's last row: the prompt's last position
+    // (a turn's prompt is never empty, runtime.h).
+    captured.position = call->result.prompt - 1;
   }
   call->result.message = call->message;
   call->result.tail = call->tail;
@@ -438,7 +441,7 @@ void on_generate_end(const TurnResult& result, void* userdata) {
   // A loaded engine has its reader (on_reader_made); a turn runs only on a
   // loaded one, and no load begins while it runs.
   if (s.reader == nullptr) std::abort();
-  // Only a turn whose prompt step ran has this run's neurons in the store;
+  // Only a turn whose prompt step ran has this run's captures in the store;
   // any other may hold an earlier run's, which are never reported.
   if (!prompt_step_ran(result) || s.cancelled) {
     s.running = false;

@@ -48,6 +48,9 @@ add_executable(frizzle_kernels
     support/main.cpp
     contracts/kernels/edit_kernel_test.cpp
     contracts/kernels/capture_test.cpp
+    contracts/kernels/norm_capture_test.cpp
+    contracts/kernels/attention_capture_test.cpp
+    contracts/kernels/weights_test.cpp
 )
 target_link_libraries(frizzle_kernels PRIVATE frizzle_gpu doctest::doctest)
 target_include_directories(frizzle_kernels PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

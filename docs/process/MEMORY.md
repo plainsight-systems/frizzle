@@ -190,7 +190,11 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
   both are estimates, not measured. Measuring the peak is deferred
   (2026-10-29) until there is a sign it matters (QUEUE, open decisions).
 - Nothing is computed beside the model: no probabilities derived on the CPU,
-  no second pass to keep in step with the first.
+  no second pass to keep in step with the first. One exception, decided
+  2026-11-02 (slice 4 step 5): the attention weights are formed on the GPU
+  in the same step, from the attention kernel's own scores, maximum and
+  sum (`capture/weights.h`), since the raw scores, in log2 units, cannot
+  be read. They differ from the factors the model applied by rounding only.
 - The page sets no limit on a reply's length: it sends the engine's own
   "no other limit", so a reply ends when the model ends its turn or the
   context (32,768 tokens) is full. A strong edit can make the model repeat
@@ -218,10 +222,13 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 ## Engine requirements
 
 - Capture, at the last position for every layer: the neurons from slice 4
-  (6,912 a layer, after the edits: about 702 KiB a run at f32); the
-  residual and Q with the pass map (slice 5), and the attention weights
-  over earlier positions and itself after them. Every run sends all 26
-  layers to the page, so switching layers needs no request.
+  (6,912 a layer, after the edits); from slice 4 step 5 (2026-11-02), the
+  residual coming into each layer, what its attention and feed-forward
+  blocks add, and its attention weights over the keys it read, with their
+  maximum and sum: a store of 3.2 MiB a run at f32, sized to the trained
+  context. Q comes with the pass map (slice 5). The neurons, 702 KiB,
+  cross to the page on every run, all 26 layers, so switching layers
+  needs no request; the rest is read back and crosses from step 6.
 - Edits are a set, applied together in one pass: any number of neurons in
   any layers.
 - Apply edits inside the pass, each over a range of steps, from a branch
@@ -241,9 +248,13 @@ Concepts for each are in [`docs/design/concepts/`](../design/concepts/).
 - Captures are taken in the step that ends the prompt, after that layer's
   edit, and read back once a run, after the turn; a turn that is cancelled
   or fails reports none, since the store may still hold an earlier run's.
-  The capture launch runs once a layer in every step that scores a token
-  and stops at once in decode: about 40 µs a token, an estimate, as for
-  edits.
+  The capture launch and the weights launch each run once a layer in
+  every step that scores a token and stop at once in decode: about 80 µs a
+  token for both, an estimate, as for edits. The norm and attention
+  kernels write their captures in launches that run anyway; on the
+  target, X before plus the captured addition is X written, bit for bit,
+  and the scores and statistics are the same bits split or not (the
+  kernels suite).
 - Edits cost something when they are off, by decision (2026-10-28): the edit
   kernel runs once a layer in every step that scores a token, edits or not.
   About 40 µs a token, from Charlotte's 1.5 µs a dispatch on one machine; an

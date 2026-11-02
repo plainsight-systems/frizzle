@@ -1,3 +1,5 @@
+// Axis E: changes with a new or optimized kernel.
+//
 // Attention (kernels/attention/attention.h). Two entry points share this
 // module: main, FlashAttention-2's online softmax over the layer's KV cache
 // in 64-key chunks fixed by position; and combine, which folds a split
@@ -9,6 +11,12 @@
 //                                out = Σ_j softmax(s)_j × v_j
 // computed in log2 units — queries staged × scale × log2(e), exp2 for exp.
 //
+// The capture (attention.h, Capture): in the step that ends the prompt
+// (logits 1, fed 0), the last row's live scores, as phase 2 forms them, go
+// to the store's weights slot, and its final m and l to the stats slot,
+// from main's fold when the step is unsplit and the combine's when it
+// splits. The output is written as before.
+//
 // unpack4 is the KV cache format's (format.h); exp2, max, select, dot and
 // workgroupBarrier are WGSL built-ins.
 
@@ -16,6 +24,11 @@ struct Attention {
     slots: u32,
     window: u32,
     scale_log2e: f32,
+    // The capture's (attention.h, Capture): the layer's weights and stats
+    // slots in the store, first words, and its keys a head.
+    weights: u32,
+    stats: u32,
+    keys: u32,
 }
 
 // The program sets workgroup_size from the launcher (attention.cpp, 64) and
@@ -54,12 +67,14 @@ const kChunkKeys = 64u;
 @group(0) @binding(5) var<storage, read_write> attended: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read_write> partials: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read_write> partial_stats: array<vec2<f32>>;
+@group(0) @binding(8) var<storage, read_write> store: array<f32>;
 
 // combine's: the same buffers, partials read-only — two entry points may
 // share binding numbers.
 @group(0) @binding(2) var<storage, read> c_partials: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> c_stats: array<vec2<f32>>;
 @group(0) @binding(4) var<storage, read_write> c_output: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> c_store: array<f32>;
 
 // main's workgroup memory: the tile of queries, f32, M × d = 1,024; the
 // tile of keys as stored, each row padded by a word against bank
@@ -98,6 +113,18 @@ fn key_chunks() -> vec3<u32> {
 fn is_live(r: u32, rows: u32, j: u32, k_end: u32, p_first: u32) -> bool {
     let p = p_first + r;
     return r < rows && j < k_end && j <= p && j + attention.window > p;
+}
+
+// Whether this step writes the capture: the step that ends the prompt.
+fn captures() -> bool {
+    return step.logits == 1u && step.fed == 0u;
+}
+
+// The earliest key the step's last position reads, which the weights slot
+// starts at: p + 1 − min(p + 1, keys).
+fn captured_earliest() -> u32 {
+    let p = step.position + step.tokens - 1u;
+    return p + 1u - min(p + 1u, attention.keys);
 }
 
 // Folding a chunk's state into a query's: the result is a × state + b ×
@@ -140,6 +167,8 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
     let words = d / 2u;           // a key or value row, as stored
     let quads = d / 4u;           // vec4s a row; word pairs a row
     let chunks = key_chunks();
+    let capturing = captures();
+    let capture_from = captured_earliest();
     let tiles = (step.tokens + rows_per_tile - 1u) / rows_per_tile;
     // Workgroup: key-value head, then row tile, then split. All uniform.
     let kv = wg.x % key_value_heads;
@@ -257,6 +286,11 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
                         let qa = qm * d + 4u * w;
                         s += dot(vec4<f32>(q_tile[qa], q_tile[qa + 1u], q_tile[qa + 2u], q_tile[qa + 3u]), kk);
                     }
+                    // The step's last row: its score, as phase 3 reads it.
+                    if (capturing && row0 + qm / group == step.tokens - 1u) {
+                        let h = kv * group + qm % group;
+                        store[attention.weights + h * attention.keys + (j0 + b - capture_from)] = s;
+                    }
                 }
                 p_tile[pair] = s;
             }
@@ -354,6 +388,11 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             }
             attended[at * quads + lane + k * lanes_per_query] = out;
         }
+        // The step's last row: its final maximum and sum, the fold's.
+        if (capturing && owner && row0 + r == step.tokens - 1u) {
+            store[attention.stats + 2u * head] = run_m;
+            store[attention.stats + 2u * head + 1u] = run_l;
+        }
     }
 }
 
@@ -389,4 +428,10 @@ fn combine(@builtin(global_invocation_id) id: vec3<u32>) {
         out = finish(o, l);
     }
     c_output[(row * query_heads + head) * quads + quad] = out;
+    // The step's last row: its final maximum and sum, by the invocation
+    // holding the query's first vec4.
+    if (captures() && quad == 0u && row == step.tokens - 1u) {
+        c_store[attention.stats + 2u * head] = m;
+        c_store[attention.stats + 2u * head + 1u] = l;
+    }
 }

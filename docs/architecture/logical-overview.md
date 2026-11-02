@@ -56,7 +56,7 @@ the file it is read from.
 | Operation | Does | Returns |
 | --- | --- | --- |
 | `load(file)` | Read the GGUF, put the weights on the GPU | Ready, or a named refusal |
-| `generate(text, kept, edits, seed)` | Run the model over the rendered prompt and the reply tokens a branch keeps, each edit at the steps its range holds; a limit of 0 inspects, drawing nothing | The reply, streamed a token at a time with its identifier; then its end, its identifiers, and every layer's neurons at the input's last position, step k |
+| `generate(text, kept, edits, seed)` | Run the model over the rendered prompt and the reply tokens a branch keeps, each edit at the steps its range holds; a limit of 0 inspects, drawing nothing | The reply, streamed a token at a time with its identifier; then its end, its identifiers, and every layer's captures at the input's last position, step k |
 
 Frizzle shows what the model produces and computes nothing beside it. The
 cache keeps the prompt's prefix between runs, so running the same prompt
@@ -82,35 +82,45 @@ Top to bottom is the order of work for position n−1.
 
 ```mermaid
 flowchart TD
-  N1["Norm that opens the layer<br/>adds the last block into X [P]"]
-  X(["◉ residual<br/>last row of X [N copy]<br/>✎ residual, slice 7"])
+  N1["Norm that opens the layer<br/>adds the last block into X [C]"]
+  MA(["◉ what layer l−1's feed-forward added<br/>[N, written by the norm]"])
+  X(["◉ residual<br/>last row of X [N, written by the norm]<br/>✎ residual, slice 7"])
   QKV["Q, K, V matmul [P]"]
   R["QK-norm, RoPE,<br/>cache write at n−1 [C]"]
-  Q(["◉ Q, normed and rotated [N copy]"])
-  A["Attention [P]"]
-  AW(["◉ attention weights<br/>slice 5 [N output]"])
-  O["Out projection [P]<br/>post-norm, add into X,<br/>FFN norm [P]"]
+  Q(["Q, normed and rotated<br/>not captured; with the pass map"])
+  A["Attention [C]"]
+  AW(["◉ scores, max and sum<br/>[N output], then the weights launch [N]"])
+  O["Out projection [P]<br/>post-norm, add into X,<br/>FFN norm [C]"]
+  AA(["◉ what the attention added<br/>[N, written by the norm]"])
   GU["Gate · up matmul<br/>writes activation [P]"]
   E(["✎ neurons [N]<br/>then ◉ neurons [N copy]"])
-  D["Down projection [P]<br/>added into X by the next layer's norm"]
-  N1 --> X --> QKV --> R --> Q --> A --> AW --> O --> GU --> E --> D
+  D["Down projection [P]<br/>added into X by the next layer's norm<br/>(the last layer's by the final norm)"]
+  N1 --> MA --> X --> QKV --> R --> Q --> A --> AW --> O --> AA --> GU --> E --> D
 ```
 
-Each capture is copied out at its point into a capture store with a slot
-per layer, so it holds what the model used even if the buffer it came from
-is reused. Every run sends the whole store to the page, so switching layers
-never asks the engine for anything.
+Each capture is written at its point into a capture store, a slot per
+layer and kind, so it holds what the model used even if the buffer it came
+from is reused (capture/capture.h). The neurons are copied by a launch of
+their own; the residual and what each block adds are written by the norm
+kernel, the only place the added vector exists; the attention kernel
+writes the last row's scores and its final maximum and sum, and a launch
+after it turns them into weights. Every word of the store is written in
+the step that ends the prompt (slice 4, step 5).
 
 | Per layer, at f32 | Size | Captured |
 | --- | --- | --- |
 | Neurons, 6,912 | 27 KiB | From slice 4: 702 KiB a run for 26 layers |
-| Residual, 1,152 | 4.5 KiB | With the pass map (slice 5) |
+| Residual, 1,152 | 4.5 KiB | From slice 4, step 5 |
+| What the attention adds, 1,152 | 4.5 KiB | From slice 4, step 5 |
+| What the feed-forward adds, 1,152 | 4.5 KiB | From slice 4, step 5 |
+| Attention weights, 4 heads × keys | 8 KiB for a 512-key window; 512 KiB for a global layer, sized to the trained 32,768 | From slice 4, step 5 |
+| Each head's softmax maximum and sum | 32 B | From slice 4, step 5 |
 | Q, 4 heads × 256 | 4 KiB | With the pass map (slice 5) |
-| Attention weights, 4 heads × positions | 16 B per position | After them (slice 5) |
-| **All of them, 26 layers, 512-token prompt** | **about 1.1 MiB** | |
+| **The store, 26 layers** | **3.2 MiB, 2 MiB of it the 4 global layers' weights** | |
 
 That is a small fraction of one decode step's reads (the 722 MB of
-weights). An edited stage is captured after its
+weights). Until slice 4's step 6 only the neurons cross to the page; the
+rest is read back with them. An edited stage is captured after its
 edit: the screen shows what the model used. The unedited values are the
 store from the run without edits, which the app keeps.
 
@@ -120,10 +130,12 @@ which are one kernel today. How to open that up is slice 7's design.
 ## A run's captures: when the store is written and read
 
 The store is written once a run, inside the step that ends the prompt, and
-read once, after the turn ends. The capture launch runs in every step that
-asks for logits; it tells the step that ends the prompt from a decode step by
-whether the step's token was fed from the last draw
-([capture.h](../../src/core/capture/capture.h)).
+read once, after the turn ends. The copy and weights launches run in every
+step that asks for logits; they tell the step that ends the prompt from a
+decode step by whether the step's token was fed from the last draw. The norm
+and attention run in every step, so they also read whether the step asks for
+logits ([capture.h](../../src/core/capture/capture.h)). The diagram follows
+the neurons; the other captures are written in the same step.
 
 ```mermaid
 flowchart TD
@@ -141,8 +153,8 @@ flowchart TD
   end
   EXIT["ffn.edit holds the pins;<br/>ffn.capture reads fed, stops"]
   END{"how the turn ended"}
-  READ["Reader::read<br/>one copy, one mapping, 702 KiB"]
-  T(["on_end: reply's end + Taken neurons"])
+  READ["Reader::read<br/>one copy, one mapping, 3.2 MiB"]
+  T(["on_end: reply's end + Taken captures"])
   N(["on_end: reply's end + NotTaken"])
   U(["on_end: reply's end + Unread, why"])
 
@@ -158,13 +170,13 @@ flowchart TD
 ```
 
 - The store is never cleared. Only a turn whose step that ends the prompt
-  ran is read, so the page is never shown an earlier run's neurons as this
-  run's.
+  ran is read, and that step writes every word of it, so the page is never
+  shown an earlier run's captures as this run's.
 - The turn's own result is reported as it was in every case: a capture never
   turns a reply into a failure, or a failure into a reply.
-- Cost, estimated and not measured: 26 dispatches a decode step that read
-  one word and stop, about 40 µs a token, as the edit launch costs; once a
-  run, 702 KiB copied on the GPU and one readback.
+- Cost, estimated and not measured: 52 dispatches a decode step (the copy's
+  and the weights') that read the step and stop, about 80 µs a token; once a
+  run, 3.2 MiB copied on the GPU and one readback.
 
 How a run's neurons reach the page, once a run, with its answer:
 

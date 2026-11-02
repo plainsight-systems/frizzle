@@ -123,15 +123,51 @@ namespace frizzle::kernels {
 //   - Variants are override constants — `head_dimension`, `query_heads`,
 //     `key_value_heads` — so tile shapes and indices fold when the pipeline
 //     is built; one pipeline per role for a model.
+//   - Capture (capture/capture.h; slice 4, step 5). In the step that ends
+//     the prompt (step.logits 1 and step.fed 0), for the step's last row,
+//     at position p, the kernel also writes into the capture store, for
+//     each query head h of the layer:
+//       - each live key's score s_j, in log2 units exactly as phase 2 forms
+//         it (the query already × scale × log2(e)), to
+//         weights[h × keys + (j − earliest)], earliest = p + 1 − min(p + 1,
+//         keys): by the workgroup that scores the key's tile, its split's
+//         or its row tile's, once a key;
+//       - the query's maximum m and sum l once every chunk is folded, to
+//         stats[2h] and stats[2h + 1]: by the query's owner lane at the end
+//         of an unsplit step, or, when the step splits, by the combine's
+//         invocation holding the query's first vec4.
+//     It writes nothing else there: the weights launch turns each score
+//     into exp2(s − m) / l and writes the zeros past the live keys
+//     (capture/weights.h). No other step and no other row writes to the
+//     store. The output is the same bits whether the step captures or not:
+//     the writes read the kernel's values and change none of them.
+//     Determinism: a score is one invocation's dot product, the same tile
+//     code for a query however its step is shaped, and m and l are the
+//     fold's; so the scores and statistics are batch-invariant as the
+//     output is, the same bits for a query at one position as the last row
+//     of a prefill step or as a one-token step, split or not, on the
+//     target's compiler (GDSA.2, above).
+//     The step's `logits`, which no kernel read before, tells the step that
+//     ends the prompt from a prefill step that does not: neither is fed
+//     (kernels/step.wgsl).
+//     Cost: a test of the step at each score and at the end; in the step
+//     that ends the prompt, one row's live scores and two words a head,
+//     8 KiB a layer for a 512-key window, 512 KiB at most for a global
+//     layer at Gemma 3's trained 32,768; in any other step, the test alone.
+//     Why scores and not weights: the kernel never forms a normalized
+//     weight (GDSA.16), and its final (m, l) exist only after the last
+//     chunk is folded, in main or in the combine; a launch of its own after
+//     both normalizes them.
 //   - Constants (binding 1): struct Attention { slots: u32, window: u32,
-//     scale_log2e: f32 }, the layer's.
-//   - Bindings: 2 the query buffer, 3 the layer's keys and 4 its values in
-//     the KV cache, read-only; 5 the attention buffer, 6 the partial values and
-//     7 the partial statistics, written. The combine binds 2 the partial
-//     values and 3 the partial statistics, read-only, and 4 the attention
-//     buffer, written: its own declarations, which share binding numbers
-//     with main's as two entry points may. Six storage buffers at most,
-//     under WebGPU's default 8.
+//     scale_log2e: f32, weights: u32, stats: u32, keys: u32 }, the layer's;
+//     the last three the capture's (above).
+//     Bindings: 2 the query buffer, 3 the layer's keys and 4 its values in
+//     the KV cache, read-only; 5 the attention buffer, 6 the partial values,
+//     7 the partial statistics and 8 the capture store, written. The combine
+//     binds 2 the partial values and 3 the partial statistics, read-only,
+//     and 4 the attention buffer and 5 the capture store, written: its own
+//     declarations, which share binding numbers with main's as two entry
+//     points may. Seven storage buffers at most, under WebGPU's default 8.
 //
 // What it asks of the other contracts:
 //   - kernels/interface.h and program.h: a launch may cover whole tiles of
@@ -278,6 +314,12 @@ namespace frizzle::kernels {
 // prefilled and decoded, giving the same bits; and a chunk wholly masked for
 // some rows. On the CPU: key_chunks at its boundaries, and each launch's
 // geometry, bindings and variant.
+// The capture alone has a test of its own, in the kernels suite
+// (tests/README.md): the scores against f64 dot products from the same
+// queries and stored keys, the statistics against the scores, the same bits
+// as the last row of a prefill step and as a one-token step, a window over a
+// wrapped ring, nothing written in other steps, and the output unchanged by
+// it. The attention's arithmetic stays the oracle's to check.
 //
 // Guidelines, by corpus:
 //   C++ Core Guidelines
@@ -301,25 +343,39 @@ namespace frizzle::kernels {
 //     GPU.6  Batch tiny GPU work — the combine runs only when split.
 //     GDSA.4 Never spin-wait on another workgroup without a
 //            forward-progress guarantee — the combine is a launch.
+//   and for the capture: GDSA.16, still no score matrix, one row written;
+//   GPU.2, the scores' stores coalesced, adjacent lanes adjacent keys;
+//   GDSA.2, its scores and statistics batch-invariant as the output is.
+
+// Where the capture writes (the header's Capture): the store, and the
+// layer's slots in it as word offsets (capture/capture.h, layout).
+struct AttentionCapture {
+  residency::BufferRange store = {};
+  std::uint32_t weights = 0;  // first word: query heads × keys scores
+  std::uint32_t stats = 0;    // first word: query heads × (m, l)
+  std::uint32_t keys = 0;     // keys a head: min(window, trained context)
+};
 
 // One layer's attention.
 struct AttentionLaunch {
-  model::LayerDescription layer;       // heads, head dimension, window
-  float scale;                         // the model's attention scale
-  residency::BufferRange query;        // rotated queries, rope's
-  residency::PlannedCacheLayer cache;  // the layer's
-  const formats::Format*
-      cache_format;                  // never null; its unpack4 reads the cache
-  residency::BufferRange attention;  // the output
-  residency::BufferRange partials;   // a split's unnormalized O
-  residency::BufferRange partial_stats;  // and its m and l
-  std::uint32_t partial_rows;            // the query rows they hold
+  model::LayerDescription layer = {};       // heads, head dimension, window
+  float scale = 0.0f;                       // the model's attention scale
+  residency::BufferRange query = {};        // rotated queries, rope's
+  residency::PlannedCacheLayer cache = {};  // the layer's
+  const formats::Format* cache_format =
+      nullptr;  // never null; its unpack4 reads the cache
+  residency::BufferRange attention = {};      // the output
+  residency::BufferRange partials = {};       // a split's unnormalized O
+  residency::BufferRange partial_stats = {};  // and its m and l
+  std::uint32_t partial_rows = 0;             // the query rows they hold
+  AttentionCapture capture = {};              // the layer's slots in the store
 };
 
 // The layer's attention launch and its combine, in that order.
 // Preconditions: the head dimension is 64, 128 or 256; the query heads a
 // key-value head serves divide 1,024 / d; `cache_format` has a pack and is
-// the format the plan sized `cache` in.
+// the format the plan sized `cache` in; `capture` names the plan's capture
+// store and the layer's slots in it.
 [[nodiscard]] std::array<Launch, 2> attention_launches(
     const AttentionLaunch& attention);
 

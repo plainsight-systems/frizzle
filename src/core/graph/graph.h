@@ -23,7 +23,9 @@ namespace frizzle::graph {
 // family runs them in, and what its family does that the model description
 // does not carry, such as Gemma 3's embedding scale (arch/gemma3/gemma3.cpp).
 // The edit point (✎, docs/architecture/file-mapping.md) is here, in the
-// feed-forward block, and the neurons' capture point (◉) just after it.
+// feed-forward block, and the capture points (◉): the neurons just after
+// the edit, and the residual, what each block adds and the attention
+// weights at the norms and the attention that already hold them.
 //
 // Contract
 //   - Builder appends a step's launches to `out`, block by block, in the
@@ -63,19 +65,38 @@ namespace frizzle::graph {
 //     without it.
 //   - The capture launch follows it in every layer: in the step that ends
 //     the prompt it copies the activation's last row, as edited, into the
-//     layer's slot of `captures` (capture/capture.h), and it writes nothing
-//     the model reads, so the graph computes what it computed without it.
+//     layer's neurons slot of `captures` (capture/capture.h).
+//   - The other captures, written where their values already are
+//     (capture/capture.h), in the step that ends the prompt only, at its
+//     last row:
+//       - layer l's attention norm: the residual coming into layer l, and,
+//         for l > 0, what layer l − 1's feed-forward block added, which
+//         this norm adds (kernels/norm/norm.h);
+//       - layer l's feed-forward norm: what layer l's attention block
+//         added;
+//       - the final norm: what the last layer's feed-forward block added;
+//       - layer l's attention and its combine: the last row's scores and
+//         its maximum and sum (kernels/attention/attention.h), then the
+//         weights launch, after the combine, turning them into weights
+//         (capture/weights.h).
+//     So every word of `captures` is written in that step: each layer's
+//     neurons, residual, two additions, weights and stats, the last
+//     layer's feed-forward addition by the final norm.
+//   - No capture writes a buffer the model reads, and none changes what a
+//     launch computes, so the graph computes what it computed without
+//     them.
 //   - Names: every launch carries its role and layer (kernels/interface.h),
 //     for a profile: "embed"; "attention.norm", "attention.qkv" — or
 //     "attention.q", ".k" and ".v" where the three are not one group —
 //     "attention.rope", "attention.scores", "attention.combine",
-//     "attention.output"; "ffn.norm", "ffn.gate_up", "ffn.edit", "ffn.capture",
-//     "ffn.down"; and "output.norm", "output.head", "output.select",
-//     "output.draw", which belong to no layer.
+//     "attention.weights", "attention.output"; "ffn.norm", "ffn.gate_up",
+//     "ffn.edit", "ffn.capture", "ffn.down"; and "output.norm", "output.head",
+//     "output.select", "output.draw", which belong to no layer.
 //   - Determinism (GDSA.2): every kernel the blocks launch is
 //     batch-invariant — the gather, norms and rope work a row alone,
 //     attention folds chunks fixed by position, each matrix product adds in
-//     an order fixed by K, the edit and capture kernels add nothing — and
+//     an order fixed by K, the edit and copy kernels add nothing, the
+//     weights launch divides by the attention fold's sum — and
 //     no block adds a reduction of its own. So a token's logits are the same
 //     bits whether its prompt was prefilled in one step, in several, or decoded
 //     a token at a time, as each kernel states.
@@ -87,27 +108,34 @@ namespace frizzle::graph {
 //       1. Attention norm: `output` added into `hidden` and `hidden`
 //          normalized into `normed` with the layer's gain — without the add
 //          before any block has written `output` (kernels/norm/norm.h).
+//          Captures the residual into the layer's slot, and what it added
+//          into the last layer's mlp_added slot.
 //       2. Q, K and V from `normed`: the plan's group as one product into
 //          `query`, `key` and `value`; where the plan made none, three
 //          products (kernels/matmul/matmul.h).
 //       3. QK-norm where the layer has it, RoPE, and the key and value
 //          appended to the layer's cache (kernels/rope/rope.h).
 //       4. Attention over the layer's cache into `attention`, and its
-//          combine (kernels/attention/attention.h).
-//       5. Output projection: `attention` into `output`.
+//          combine (kernels/attention/attention.h); both capture into the
+//          layer's weights and stats slots.
+//       5. The weights launch, over the layer's weights and stats slots
+//          (capture/weights.h).
+//       6. Output projection: `attention` into `output`.
 //   - gated_feed_forward(layer):
-//       6. Feed-forward norm: `output` added into `hidden`, normalized into
-//          `normed`.
-//       7. Gate and up from `normed`, the plan's group as one product writing
+//       7. Feed-forward norm: `output` added into `hidden`, normalized into
+//          `normed`. Captures what it added into the layer's
+//          attention_added slot.
+//       8. Gate and up from `normed`, the plan's group as one product writing
 //          activation(gate) × up into `activation`.
-//       8. The edit: the run's edits for the layer, from `edit_table`,
+//       9. The edit: the run's edits for the layer, from `edit_table`,
 //          applied to `activation`'s last row (edit/edit_kernel.h).
-//       9. The capture: `activation`'s last row into the layer's slot of
-//          `captures`, in the step that ends the prompt
+//      10. The capture: `activation`'s last row into the layer's neurons
+//          slot of `captures`, in the step that ends the prompt
 //          (capture/capture.h).
-//      10. Down: `activation` into `output`.
+//      11. Down: `activation` into `output`.
 //   - output(): the final norm, `output` added into `hidden` and normalized
-//     with the output norm's gain; the head, `normed` into `logits` — the
+//     with the output norm's gain, capturing what it added into the last
+//     layer's mlp_added slot; the head, `normed` into `logits` — the
 //     output head's weight, or the token embedding's where the file ties
 //     them; top-k selection, `logits` to `candidates` (kernels/topk/topk.h);
 //     and the draw, `candidates` to the record in `sampled`
@@ -132,9 +160,9 @@ namespace frizzle::graph {
 //     layer, over the last token, after the edit launch. It adds 26 more
 //     dispatches in each scoring step for Gemma 3 1B, which in decode read
 //     one word and stop: about 40 µs a token at the same estimate, not
-//     measured. `captures` is one working buffer of every layer's slot,
-//     702 KiB, planned in decoder_working_set. The alternatives, folding
-//     the copy into the edit kernel or skipping it in the schedule, are in
+//     measured. The weights launch adds 26 more a scoring step, the same
+//     again. `captures` is one working buffer of every slot, 3.2 MiB,
+//     planned in decoder_working_set. The alternatives are in
 //     capture/capture.h.
 //   - Charlotte's count, for Qwen3 0.6B at Q4_0 with an F16 cache, before
 //     the edit launch; not recounted for Gemma 3: 8 dispatches a layer a
@@ -205,8 +233,8 @@ struct GraphResult {
 // projections — at least one float: 13.5 MiB for Gemma 3; and
 // `edit_table`, one row of 2 × layers + 3 × edit::kMaxEdits u32 words, the
 // run's edits (edit/edit.h), 48 KiB for Gemma 3 1B; and `captures`, one row
-// of capture::layout's words, every layer's neurons at the last prompt
-// position (capture/capture.h), 702 KiB for Gemma 3 1B. Every product's
+// of capture::layout's words, every layer's captures at the last prompt
+// position (capture/capture.h), 3.2 MiB for Gemma 3 1B. Every product's
 // launches take that gate and that buffer (kernels/matmul/matmul.h). A decoder
 // keeps a KV cache. Which buffers a graph binds is the graph's to say, and
 // where they lie the planner's (docs/architecture/change-axes.md).
@@ -257,6 +285,9 @@ class Builder {
     bool written = false;  // no block yet: the first norm does not add
     const residency::WeightView* post_gain =
         nullptr;  // the writer's post-norm, or null
+    // The added slot of the block that wrote it, which the next norm
+    // captures what it adds into: a layer's attention_added or mlp_added.
+    std::optional<std::uint32_t> added_slot;
   };
 
   // The plan's working buffers, by what they hold.
@@ -284,7 +315,7 @@ class Builder {
   std::vector<const residency::WeightView*>
       views_;  // by tensor id; null for a tensor the plan did not place
   Buffers buffers_;
-  std::vector<capture::Slot> slots_;  // each layer's slot in `captures`
+  std::vector<capture::LayerSlots> slots_;  // each layer's in `captures`
   Pending pending_;
 };
 

@@ -1,3 +1,8 @@
+// Axis E: changes with a new or optimized kernel.
+//
+// Contract, algorithm, cost and corpus guidance: attention.h. This file
+// defines what that header states.
+
 #include "core/kernels/attention/attention.h"
 
 #include <cstddef>
@@ -17,7 +22,9 @@ struct Constants {
   std::uint32_t slots;
   std::uint32_t window;
   float scale_log2e;
-  std::uint32_t padding;
+  std::uint32_t weights;  // the capture's slots and keys (attention.h)
+  std::uint32_t stats;
+  std::uint32_t keys;
 };
 
 Binding whole(const residency::BufferRange& range) {
@@ -33,15 +40,20 @@ std::array<Launch, 2> attention_launches(const AttentionLaunch& a) {
   const std::uint32_t rows_per_tile = 1024 / d / group;  // M / G
 
   // The scale in log2 units, so the kernel's exp2 is the softmax's exp.
-  const Constants constants{a.cache.slots, layer.attention_window,
+  const Constants constants{a.cache.slots,
+                            layer.attention_window,
                             static_cast<float>(a.scale * std::numbers::log2e),
-                            0};
+                            a.capture.weights,
+                            a.capture.stats,
+                            a.capture.keys};
   const auto bytes = std::as_bytes(std::span(&constants, 1));
   // The tile's shape, derived here rather than in the kernel: WebKit
   // fails overrides initialized from overrides, and workgroup arrays
   // sized by expressions of them (attention.wgsl).
   const std::uint32_t queries_per_tile = 1024 / d;  // M
   const std::uint32_t keys_per_tile = 2048 / d;     // B
+  const std::uint32_t lanes_per_query = kWorkgroupSize / queries_per_tile;
+  const std::uint32_t k_tile_words = keys_per_tile * (d / 2 + 1);
   const std::vector<Override> shape{
       {"head_dimension", static_cast<double>(d)},
       {"query_heads", static_cast<double>(layer.query_heads)},
@@ -51,16 +63,16 @@ std::array<Launch, 2> attention_launches(const AttentionLaunch& a) {
       {"keys_per_tile", static_cast<double>(keys_per_tile)},
       {"group", static_cast<double>(group)},
       {"rows_per_tile", static_cast<double>(rows_per_tile)},
-      {"lanes_per_query",
-       static_cast<double>(kWorkgroupSize / queries_per_tile)},
-      {"k_tile_words", static_cast<double>(keys_per_tile * (d / 2 + 1))},
+      {"lanes_per_query", static_cast<double>(lanes_per_query)},
+      {"k_tile_words", static_cast<double>(k_tile_words)},
       {"p_tile_floats", static_cast<double>(queries_per_tile * keys_per_tile)}};
 
   Launch attend{shaders::attention,
                 nullptr,
                 std::vector<std::byte>(bytes.begin(), bytes.end()),
                 {whole(a.query), whole(a.cache.keys), whole(a.cache.values),
-                 whole(a.attention), whole(a.partials), whole(a.partial_stats)},
+                 whole(a.attention), whole(a.partials), whole(a.partial_stats),
+                 whole(a.capture.store)},
                 // A tile's workgroups are one a key-value head.
                 layer.key_value_heads * kWorkgroupSize / rows_per_tile,
                 kWorkgroupSize,
@@ -72,16 +84,16 @@ std::array<Launch, 2> attention_launches(const AttentionLaunch& a) {
   attend.window = layer.attention_window;
   attend.partial_rows = a.partial_rows;
 
-  Launch combine{
-      shaders::attention,
-      nullptr,
-      std::vector<std::byte>(bytes.begin(), bytes.end()),
-      {whole(a.partials), whole(a.partial_stats), whole(a.attention)},
-      layer.query_heads * d / 4,  // a vec4 of every query's output
-      kWorkgroupSize,
-      Rows::EveryToken,
-      shape,
-      a.cache_format};
+  Launch combine{shaders::attention,
+                 nullptr,
+                 std::vector<std::byte>(bytes.begin(), bytes.end()),
+                 {whole(a.partials), whole(a.partial_stats), whole(a.attention),
+                  whole(a.capture.store)},
+                 layer.query_heads * d / 4,  // a vec4 of every query's output
+                 kWorkgroupSize,
+                 Rows::EveryToken,
+                 shape,
+                 a.cache_format};
   combine.key_split = KeySplit::WhenSplit;
   combine.window = layer.attention_window;
   combine.partial_rows = a.partial_rows;

@@ -8,7 +8,10 @@
 // writes nothing in a decode step (fed) or a prefill step that does not end
 // the prompt, and nothing outside its slot in any step. The store is read
 // back through the reader, whose words are the store's bits. layout() puts
-// each layer's slot after the earlier layers', its own width long.
+// every layer's neurons first, each layer's after the earlier layers', its
+// own width long; then each layer's residual, two additions, weights and
+// stats in that order, the weights min(window, trained context) keys a
+// head (changed in slice 4, step 5, with the store's contract).
 //
 // What it does not check, and what does:
 //   - That the graph places the launch after the edit launch, so a pinned
@@ -24,8 +27,10 @@
 //     cannot be made to fail a mapping on demand.
 //
 // Inputs, all made here: a 3-layer description of feed-forward widths 200,
-// 136 and 264; an activation of 3 rows of layer 1's 136 words; a store of
-// layout()'s 600 words, filled first with a pattern that no activation word
+// 136 and 264, an embedding width of 8, 2 query heads, windows 16, 64 and
+// 16 and a trained context of 40, so the middle layer's keys are the
+// trained context's; an activation of 3 rows of layer 1's 136 words; a store of
+// layout()'s 828 words, filled first with a pattern that no activation word
 // shares; a program of one launch, layer 1's, over a plan of those two
 // working buffers. The activation holds a NaN with a payload, both
 // infinities, a negative zero and a subnormal in its last row. No model file.
@@ -77,11 +82,17 @@ constexpr std::uint32_t kWidth = kWidths[kLayer];
 constexpr std::uint32_t kRows = 3;
 constexpr std::size_t kChunk = std::size_t{1} << 20U;
 
+constexpr std::array<std::uint32_t, 3> kWindows = {16, 64, 16};
+
 frz::model::ModelDescription description() {
   frz::model::ModelDescription model{};
-  for (const std::uint32_t width : kWidths) {
+  model.embedding_width = 8;
+  model.trained_context = 40;
+  for (std::size_t l = 0; l < kWidths.size(); ++l) {
     frz::model::LayerDescription layer{};
-    layer.feed_forward_width = width;
+    layer.feed_forward_width = kWidths.at(l);
+    layer.query_heads = 2;
+    layer.attention_window = kWindows.at(l);
     model.layers.push_back(layer);
   }
   return model;
@@ -180,8 +191,8 @@ class Harness {
     activation_ = plan.scratch.at(0).range;
     store_ = plan.scratch.at(1).range;
     std::vector<frz::kernels::Launch> launches;
-    launches.push_back(frz::capture::capture_launch(activation_, store_,
-                                                    layout_.slots.at(kLayer)));
+    launches.push_back(frz::capture::capture_launch(
+        activation_, store_, layout_.layers.at(kLayer).neurons));
     struct Built {
       std::unique_ptr<frz::kernels::Program> program;
       std::string message;
@@ -326,16 +337,42 @@ void same_words(std::span<const std::uint32_t> got,
 
 }  // namespace
 
-TEST_CASE("layout puts each layer's slot after the earlier layers'") {
+TEST_CASE("layout puts every layer's neurons first, then each layer's rest") {
   const frz::capture::Layout l = frz::capture::layout(description());
-  REQUIRE(l.slots.size() == kWidths.size());
-  CHECK(l.slots[0].first == 0);
-  CHECK(l.slots[0].width == 200);
-  CHECK(l.slots[1].first == 200);
-  CHECK(l.slots[1].width == 136);
-  CHECK(l.slots[2].first == 336);
-  CHECK(l.slots[2].width == 264);
-  CHECK(l.words == 600);
+  REQUIRE(l.layers.size() == kWidths.size());
+  const auto at = [&](std::size_t layer) { return l.layers.at(layer); };
+  const auto slot = [](const frz::capture::Slot& s, std::uint32_t first,
+                       std::uint32_t width) {
+    CHECK(s.first == first);
+    CHECK(s.width == width);
+  };
+  // Region 1: the neurons, contiguous.
+  slot(at(0).neurons, 0, 200);
+  slot(at(1).neurons, 200, 136);
+  slot(at(2).neurons, 336, 264);
+  CHECK(l.neuron_words == 600);
+  // Region 2, a layer at a time: residual, the two additions (the
+  // embedding width each), weights (heads × keys), stats (heads × 2).
+  slot(at(0).residual, 600, 8);
+  slot(at(0).attention_added, 608, 8);
+  slot(at(0).mlp_added, 616, 8);
+  slot(at(0).weights, 624, 32);
+  slot(at(0).stats, 656, 4);
+  slot(at(1).residual, 660, 8);
+  slot(at(1).attention_added, 668, 8);
+  slot(at(1).mlp_added, 676, 8);
+  slot(at(1).weights, 684, 80);  // keys: the trained context's 40, not 64
+  slot(at(1).stats, 764, 4);
+  slot(at(2).residual, 768, 8);
+  slot(at(2).attention_added, 776, 8);
+  slot(at(2).mlp_added, 784, 8);
+  slot(at(2).weights, 792, 32);
+  slot(at(2).stats, 824, 4);
+  CHECK(at(0).keys == 16);
+  CHECK(at(1).keys == 40);
+  CHECK(at(2).keys == 16);
+  CHECK(at(1).query_heads == 2);
+  CHECK(l.words == 828);
 }
 
 TEST_CASE("a prefill step that ends the prompt copies its last row") {
@@ -343,15 +380,17 @@ TEST_CASE("a prefill step that ends the prompt copies its last row") {
   const std::vector<std::uint32_t> a = activation();
   const std::vector<std::uint32_t> before = pattern(h.layout().words);
   same_words(h.run(kRows, true, false, a, before),
-             copied(before, h.layout().slots.at(kLayer), row_of(a, kRows - 1)));
+             copied(before, h.layout().layers.at(kLayer).neurons,
+                    row_of(a, kRows - 1)));
 }
 
 TEST_CASE("the one-token step that ends the prompt copies its one row") {
   Harness h;
   const std::vector<std::uint32_t> a = activation();
   const std::vector<std::uint32_t> before = pattern(h.layout().words);
-  same_words(h.run(1, true, false, a, before),
-             copied(before, h.layout().slots.at(kLayer), row_of(a, 0)));
+  same_words(
+      h.run(1, true, false, a, before),
+      copied(before, h.layout().layers.at(kLayer).neurons, row_of(a, 0)));
 }
 
 TEST_CASE("a decode step changes nothing") {

@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "core/capture/capture.h"
+#include "core/capture/weights.h"
 #include "core/edit/edit.h"
 #include "core/edit/edit_kernel.h"
 #include "core/kernels/attention/attention.h"
@@ -198,8 +199,8 @@ residency::WorkingSet decoder_working_set(
               // and edit::kEditWords an edit, at most edit::kMaxEdits
               // (edit/edit.h); the engine writes it before each run.
               {"edit_table", 1, edit_table},
-              // Every layer's neurons at the last prompt position, a slot a
-              // layer, u32 words (capture/capture.h).
+              // Every layer's captures at the last prompt position, u32
+              // words (capture/capture.h, layout).
               {"captures", 1, capture::layout(model).words},
           },
           true,
@@ -223,7 +224,7 @@ Builder::Builder(const model::ModelDescription& model,
                scratch(plan, "partials_b"), scratch(plan, "candidates"),
                scratch(plan, "sampled"),    scratch(plan, "range_sums"),
                scratch(plan, "edit_table"), scratch(plan, "captures")},
-      slots_(capture::layout(model).slots) {
+      slots_(capture::layout(model).layers) {
   for (const residency::PlannedTensor& t : plan.tensors) {
     const std::size_t i = index_of(t.tensor);
     if (i >= views_.size()) views_.resize(i + 1, nullptr);
@@ -289,11 +290,21 @@ GraphResult Builder::attention(std::uint32_t layer) {
   }
   const Buffers& b = buffers_;
 
+  const capture::LayerSlots& slots = slots_.at(layer);
+
   std::size_t at = out_->size();
-  out_->push_back(kernels::norm_launch(
-      {role(layer, Role::AttentionNorm), pending_.post_gain, pending_.written,
-       b.output, b.hidden, b.normed, model_->norm_epsilon,
-       kernels::Rows::EveryToken}));
+  kernels::NormLaunch norm{role(layer, Role::AttentionNorm),
+                           pending_.post_gain,
+                           pending_.written,
+                           b.output,
+                           b.hidden,
+                           b.normed,
+                           model_->norm_epsilon,
+                           kernels::Rows::EveryToken};
+  // The residual coming into the layer, and what the last layer's
+  // feed-forward block added (graph.h).
+  norm.capture = {b.captures, slots.residual.first, pending_.added_slot};
+  out_->push_back(kernels::norm_launch(norm));
   named(*out_, at, "attention.norm", layer);
 
   const auto& t = l.tensors;
@@ -334,21 +345,33 @@ GraphResult Builder::attention(std::uint32_t layer) {
        cache_format_}));
   named(*out_, at, "attention.rope", layer);
 
-  for (kernels::Launch& a : kernels::attention_launches(
-           {l, model_->attention_scale, b.query, plan_->cache[layer],
-            cache_format_, b.attention, b.partials, b.partial_stats,
-            plan_->partial_rows})) {
+  for (kernels::Launch& a :
+       kernels::attention_launches({l,
+                                    model_->attention_scale,
+                                    b.query,
+                                    plan_->cache[layer],
+                                    cache_format_,
+                                    b.attention,
+                                    b.partials,
+                                    b.partial_stats,
+                                    plan_->partial_rows,
+                                    {b.captures, slots.weights.first,
+                                     slots.stats.first, slots.keys}})) {
     at = out_->size();
     const bool combine = a.entry_point == "combine";
     out_->push_back(std::move(a));
     named(*out_, at, combine ? "attention.combine" : "attention.scores", layer);
   }
+  at = out_->size();
+  out_->push_back(capture::weights_launch(b.captures, slots));
+  named(*out_, at, "attention.weights", layer);
 
   at = out_->size();
   product(*role(layer, Role::AttentionOutput), b.attention, b.output,
           kernels::Rows::EveryToken);
   named(*out_, at, "attention.output", layer);
-  pending_ = {true, role(layer, Role::PostAttentionNorm)};
+  pending_ = {true, role(layer, Role::PostAttentionNorm),
+              slots.attention_added.first};
   return {};
 }
 
@@ -361,11 +384,20 @@ GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
   }
   const Buffers& b = buffers_;
 
+  const capture::LayerSlots& slots = slots_.at(layer);
+
   std::size_t at = out_->size();
-  out_->push_back(kernels::norm_launch(
-      {role(layer, Role::FeedForwardNorm), pending_.post_gain, pending_.written,
-       b.output, b.hidden, b.normed, model_->norm_epsilon,
-       kernels::Rows::EveryToken}));
+  kernels::NormLaunch norm{role(layer, Role::FeedForwardNorm),
+                           pending_.post_gain,
+                           pending_.written,
+                           b.output,
+                           b.hidden,
+                           b.normed,
+                           model_->norm_epsilon,
+                           kernels::Rows::EveryToken};
+  // What the layer's attention block added.
+  norm.capture = {b.captures, std::nullopt, pending_.added_slot};
+  out_->push_back(kernels::norm_launch(norm));
   named(*out_, at, "ffn.norm", layer);
   at = out_->size();
   append(*out_, kernels::matmul_launches(
@@ -384,13 +416,14 @@ GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
   named(*out_, at, "ffn.edit", layer);
   at = out_->size();
   out_->push_back(
-      capture::capture_launch(b.activation, b.captures, slots_.at(layer)));
+      capture::capture_launch(b.activation, b.captures, slots.neurons));
   named(*out_, at, "ffn.capture", layer);
   at = out_->size();
   product(*role(layer, Role::Down), b.activation, b.output,
           kernels::Rows::EveryToken);
   named(*out_, at, "ffn.down", layer);
-  pending_ = {true, role(layer, Role::PostFeedForwardNorm)};
+  pending_ = {true, role(layer, Role::PostFeedForwardNorm),
+              slots.mlp_added.first};
   return {};
 }
 
@@ -403,10 +436,17 @@ GraphResult Builder::output() {
   }
   const Buffers& b = buffers_;
   std::size_t at = out_->size();
-  out_->push_back(kernels::norm_launch(
-      {&view(present(model_->output_norm)), pending_.post_gain,
-       pending_.written, b.output, b.hidden, b.normed, model_->norm_epsilon,
-       kernels::Rows::LastToken}));
+  kernels::NormLaunch norm{&view(present(model_->output_norm)),
+                           pending_.post_gain,
+                           pending_.written,
+                           b.output,
+                           b.hidden,
+                           b.normed,
+                           model_->norm_epsilon,
+                           kernels::Rows::LastToken};
+  // What the last layer's feed-forward block added.
+  norm.capture = {b.captures, std::nullopt, pending_.added_slot};
+  out_->push_back(kernels::norm_launch(norm));
   named(*out_, at, "output.norm");
   const residency::WeightView& head =
       view(model_->output_head.value_or(present(model_->token_embedding)));

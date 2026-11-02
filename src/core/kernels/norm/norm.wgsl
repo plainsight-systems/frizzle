@@ -1,3 +1,5 @@
+// Axis E: changes with a new or optimized kernel.
+//
 // RMSNorm with the residual add before it (kernels/norm/norm.h). One
 // workgroup per row: the row is read once into registers, reduced in a fixed
 // tree in workgroup memory, and written normalized.
@@ -19,6 +21,13 @@
 // gain once the add is done, and written back so; with `unit_gain`, normed
 // without a gain.
 //
+// The capture (norm.h, Capture): in the step that ends the prompt (logits 1,
+// fed 0), the workgroup of the step's last row also writes x, once the add
+// and its variants are done and before it is normalized, into the store's
+// residual slot (`capture_residual`), and y as it was added into the added
+// slot (`capture_added`). Nothing else changes: the same x and normed are
+// written either way.
+//
 // inverseSqrt, dot, select and workgroupBarrier are WGSL built-ins; reduce is
 // below.
 
@@ -27,6 +36,9 @@ struct Norm {
     // What the post-normed y is multiplied by before the add: 1 but for a
     // half-step feed-forward's 0.5. A multiply by 1 is exact.
     post_scale: f32,
+    // The capture's slots in the store, first words (norm.h, Capture).
+    residual_slot: u32,
+    added_slot: u32,
 }
 
 // The program sets workgroup_size from the launcher (norm.cpp, 256); the
@@ -40,6 +52,8 @@ override normalize: bool = true;
 override renorm: bool = false;
 override unit_gain: bool = false;
 override rows_per_token: u32 = 1u;
+override capture_residual: bool = false;
+override capture_added: bool = false;
 // The row's width, set by the program from the launcher; with no default, a
 // pipeline that is not given it fails to build.
 override width: u32;
@@ -52,6 +66,8 @@ override width: u32;
 @group(0) @binding(6) var<storage, read_write> normed: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read> scale: array<f32>;
 @group(0) @binding(8) var<storage, read> renorm_gain: array<vec4<f32>>;
+// The capture store, by words: a slot need not start on a vec4.
+@group(0) @binding(9) var<storage, read_write> store: array<u32>;
 
 // Rows up to 4,096 wide: at most 4 vec4s an invocation of 256.
 const kMaxVec4s = 4u;
@@ -76,6 +92,15 @@ fn reduce(index: u32, value: f32) -> f32 {
     return partial[0];
 }
 
+// Writes vec4 i of a row into the store slot at `slot`, word for word.
+fn write_captured(slot: u32, i: u32, v: vec4<f32>) {
+    let at = slot + 4u * i;
+    store[at] = bitcast<u32>(v.x);
+    store[at + 1u] = bitcast<u32>(v.y);
+    store[at + 2u] = bitcast<u32>(v.z);
+    store[at + 3u] = bitcast<u32>(v.w);
+}
+
 @compute @workgroup_size(workgroup_size)
 fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) index: u32) {
     // The row: this workgroup's, of the step's tokens × rows_per_token, or
@@ -91,6 +116,9 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
     // 1 for Qwen3, 2 for Llama 3.2 and Gemma 3. Every loop below runs that
     // many times, not kMaxVec4s.
     let per_invocation = (vec4s + workgroup_size - 1u) / workgroup_size;
+    // The capture's row: the step's last, in the step that ends the prompt.
+    let captures = step.logits == 1u && step.fed == 0u &&
+        row == step.tokens * rows_per_token - 1u;
 
     // Step 1: read the row into registers, vec4s index, index + 256, … — read
     // once, used by every step below.
@@ -131,6 +159,15 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
                 }
             }
         }
+        // y as it is added, below.
+        if (capture_added && captures) {
+            for (var k = 0u; k < per_invocation; k++) {
+                let i = index + k * workgroup_size;
+                if (i < vec4s) {
+                    write_captured(norm.added_slot, i, y[k]);
+                }
+            }
+        }
         // Gemma 4's layer output scale, after the add: x = (x + y) × s.
         var s = 1.0;
         if (scaled) {
@@ -165,6 +202,16 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
                     x[k] = (x[k] * r) * renorm_gain[i];
                     hidden[base + i] = x[k];
                 }
+            }
+        }
+    }
+    // X as the layer's later steps read it: after the add and its
+    // variants, or as read where the launch does not add.
+    if (capture_residual && captures) {
+        for (var k = 0u; k < per_invocation; k++) {
+            let i = index + k * workgroup_size;
+            if (i < vec4s) {
+                write_captured(norm.residual_slot, i, x[k]);
             }
         }
     }

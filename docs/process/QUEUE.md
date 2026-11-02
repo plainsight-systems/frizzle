@@ -90,8 +90,9 @@ tests, then its code.
 
 Ends with the layer deck in the night-glass theme: every run's neurons at
 the last position, in all 26 layers, with the ranked list, search, the
-neuron card and the pins beside it. Captures are the neurons only; the
-residual and Q come with the pass map. Each step: headers and tests
+neuron card and the pins beside it. Captures were the neurons only until
+step 5, which adds the residual, what each block adds and the attention
+weights; Q comes with the pass map. Each step: headers and tests
 reviewed, then its code, then review.
 
 1. **Captures in the engine** (C++, O). The capture store in
@@ -162,14 +163,39 @@ reviewed, then its code, then review.
    scenario's step 7 stops one and accepts it. Rollback: (b)
    adds to generate and keeps its old runs as k = 0 with edits from step
    0; reverting (c) leaves (b) unused.
+5. **More captures in the engine** (capture, the norm and attention
+   kernels, graph, engine), built, awaiting review of the code. So a view can show
+   which layer did the work at a word: at the point, every layer's
+   residual coming in, what its attention and feed-forward blocks add
+   into it, and its attention weights over the words before, beside the
+   neurons (the user, 2026-11-01). The norm kernel writes the residual and
+   what a block adds, which exist only in its registers; the attention
+   kernel writes the last row's scores and its final maximum and sum; a
+   new launch (`capture/weights.h`) turns them into weights (weights
+   over raw scores, the user, 2026-11-02; MEMORY's one exception). An
+   architectural change: two ported kernels gain outputs, the store's
+   contract changes (every word written in the step that ends the
+   prompt, 3.2 MiB for Gemma 3 1B, from 702 KiB), and the step's `logits`
+   is read by kernels; 26 more dispatches a decode step, an estimate. The
+   neurons cross to the page as before; the rest is read back and does
+   not cross yet. Q, planned with the pass map, is not captured. Tests:
+   in the kernels suite, the norm's, the attention's and the weights
+   launch's captures, and the layout case changed with the contract; the
+   replay scenario's case 7 compares the whole store. The oracle and the
+   replay scenario run, since two inference kernels change. Rollback:
+   revert the step; the store holds the neurons alone again, and nothing
+   outside the engine read the rest.
+6. **The other captures reach the page, and the Map** (bindings, worker,
+   `protocol/`, session, views). The store crosses whole; the Map
+   (docs/design/concepts/explore.html) shows every layer at the point,
+   on one scale across layers. Its design waits on the concept's review.
 
 ## 5. Pass map
 
 - The isometric layer in three.js, stages at their real widths, layer
   stepping, clicking into a workbench.
-- Captures gain the residual and Q at the last position.
-- Attention weights written out at the last position (new kernel output),
-  with its kernel test.
+- Captures gain Q at the last position. (The residual and the attention
+  weights are captured from slice 4, step 5.)
 
 ## 6. The site
 
@@ -202,3 +228,7 @@ reviewed, then its code, then review.
 - Which libc++ the native build links on macOS: today the system's
   `/usr/lib/libc++.1.dylib`, while compiling against LLVM 21.1.8's headers.
 - Hosting and CI.
+- The browser scenario hung once (2026-11-02): the page's WebGPU status
+  never settled, before the model loaded; not reproduced in 88 tries after.
+  If it hangs again, the test is rethought, not retried (the user,
+  2026-11-02).

@@ -136,7 +136,7 @@ Fixed by scope. Swapping one is an architectural change, not a local one.
 
 | Change | Touches | Leaves alone |
 | --- | --- | --- |
-| Capture attention weights (slice 5) | E(attention), A, O, H | Q, G, M, R |
+| Capture the residual, what each block adds and the attention weights (slice 4, step 5) | E(norm, attention), A, O, M (the engine's Captured) | Q, G, R, H (until step 6) |
 | Edit residual dimensions (slice 7) | Q, E (the add-and-norm kernel opens up), A, H | O (already captured), R, G, F |
 | The deck's colours | H(theme) | Everything else, the deck view included |
 | The deck reworked | H(deck) | The other views, H(session), H(shape) |

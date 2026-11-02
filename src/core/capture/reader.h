@@ -3,7 +3,7 @@
 // Axis O: changes with a new captured value, or what is sent.
 //
 // Reads the capture store (capture/capture.h) back to the CPU, once a run,
-// so the engine can hand the run's neurons to its host with the run's
+// so the engine can hand the run's captures to its host with the run's
 // result (runtime/engine.h).
 //
 // Contract
@@ -39,17 +39,17 @@
 //      `done` with the host copy. Otherwise call `done` with the outcome.
 //
 // Design and cost
-//   - Everything allocated at load (MEM.9): the mappable buffer, 718,848
+//   - Everything allocated at load (MEM.9): the mappable buffer, 3,356,480
 //     bytes for Gemma 3 1B, and the host copy, as much again. A read
 //     allocates nothing.
 //   - One copy and one mapping a run, after the turn (GPU.1): the store is
 //     final output, read once, never inside the step loop. Its cost is
 //     a readback's fixed wait, about 0.5 ms at Charlotte's measure (one
-//     machine, the browser), and 702 KiB moved twice (GPU to the mapping,
+//     machine, the browser), and 3.2 MiB moved twice (GPU to the mapping,
 //     the mapping to the host copy); not measured here.
 //   - Its own buffer, not the program's readback slots: those carry each
 //     step's 16-byte draw record and are at most kMaxReadback, 4 KiB
-//     (kernels/program.h); widening them would copy 702 KiB every step.
+//     (kernels/program.h); widening them would copy 3.2 MiB every step.
 //   - The words cross as floats copied by memcpy, which keeps every bit;
 //     the host decides what to show.
 //

@@ -13,6 +13,9 @@
 
 namespace frizzle::kernels {
 
+// Axis D: changes with how every kernel is bound and launched
+// (docs/architecture/file-mapping.md: kernels/program, order, schedule).
+//
 // Contract 7: kernel launch.
 //
 // Every kernel binds the same way, so one piece of code launches all of them
@@ -101,7 +104,7 @@ namespace frizzle::kernels {
 //     MEM.9  Allocate at init, not in steady state — every pipeline, bind
 //            group and buffer at load.
 
-enum class Regime {
+enum class Regime : std::uint8_t {
   // One token: matrix times vector, bound by weight bandwidth.
   Decode,
   // Many tokens: matrix times block, bound by arithmetic.
@@ -155,7 +158,9 @@ inline constexpr std::uint32_t kFirstWeightBinding = 2;
 // video's frames each between its own two tokens, so they are named by
 // their identifier, not by one range. sampler::apply writes the
 // seed and settings. `logits` is the program's,
-// read by no kernel; `fed` is gather's; the seed and the settings are the
+// and the capturing norm and attention read it, with `fed`, to find the step
+// that ends the prompt (capture/capture.h); `fed` is gather's and the
+// captures'; the seed and the settings are the
 // draw's (sampler/sampler.h), the turn's, written with every step. Token i's
 // identifier is ids[i / 4][i % 4]. A step writes its head and only the
 // identifier words it uses: 64 bytes for a fed decode step, which uses none,
@@ -165,36 +170,37 @@ inline constexpr std::uint32_t kFirstWeightBinding = 2;
 // already binds, so a step is one write, not one for its parameters and one
 // for its tokens (WASM.2).
 struct Step {
-  std::uint32_t position;  // the first token's position in the context
+  std::uint32_t position = 0;  // the first token's position in the context
   // 1 .. kPrefillBlock for a step of tokens; a vision step's patches, up
   // to its plan's rows, with no identifiers.
-  std::uint32_t tokens;
+  std::uint32_t tokens = 0;
   // 1 when the step's last token's logits are sampled; 0 for a prefill
   // step that does not end the prompt, which runs no launch over the last
   // token alone — the final norm and the head (graph/graph.h).
-  std::uint32_t logits;
+  std::uint32_t logits = 0;
   // 1 when the step is one token, the last step's draw, which gather reads
   // from the draw's record on the GPU (kernels/gather/gather.h); the step
   // writes no identifier.
-  std::uint32_t fed;
+  std::uint32_t fed = 0;
   // The draw's: the turn's seed, low word first, and its settings
   // (policy::SamplingSettings), checked before the turn (sampler.h).
-  std::uint32_t seed[2];
-  std::uint32_t top_k;
-  float temperature;
-  float top_p;
-  float min_p;
-  float log_min_p;  // ln min_p, once a turn: the draw's min-p threshold
+  std::array<std::uint32_t, 2> seed = {};
+  std::uint32_t top_k = 0;
+  float temperature = 0.0f;
+  float top_p = 0.0f;
+  float min_p = 0.0f;
+  float log_min_p = 0.0f;  // ln min_p, once a turn: the draw's min-p threshold
   std::uint32_t columns = 0;      // a vision step's patch grid columns
   std::uint32_t media = 0;        // 1 when a text step carries a medium
   std::uint32_t media_token = 0;  // then the identifier its media rows carry
   std::uint32_t padding1 = 0;
   std::uint32_t padding2 =
       0;  // WGSL places `ids` at 64, a uniform array's 16-byte stride
-  std::array<std::uint32_t, residency::kPrefillBlock> ids;
+  std::array<std::uint32_t, residency::kPrefillBlock> ids = {};
 };
-static_assert(sizeof(Step) == 64 + 4 * residency::kPrefillBlock);
 inline constexpr std::size_t kStepHead = 64;
+static_assert(sizeof(Step) ==
+              kStepHead + (sizeof(std::uint32_t) * residency::kPrefillBlock));
 
 // Each launch's constants lie at their own offset in one uniform buffer, in
 // a whole number of slots on the alignment WebGPU's default limits require
@@ -213,7 +219,7 @@ struct Binding {
 };
 
 // The rows a launch covers.
-enum class Rows {
+enum class Rows : std::uint8_t {
   EveryToken,
   LastToken,
 };
@@ -244,9 +250,14 @@ struct KeyChunks {
 
 // Preconditions: tokens >= 1, at most kPrefillBlock; window >= 1;
 // position + tokens <= kMaxPositions.
+// Four counts in the order the kernel's WGSL takes them (attention.wgsl's
+// key_chunks), held to agreement by its tests; a struct for them would
+// differ from the shader's form.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 [[nodiscard]] constexpr KeyChunks key_chunks(
     std::uint32_t position, std::uint32_t tokens, std::uint32_t window,
     std::uint32_t partial_rows) noexcept {
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   const std::uint32_t earliest =
       position + 1 > window ? position + 1 - window : 0;
   const std::uint32_t first = earliest / kChunkKeys;
@@ -255,7 +266,7 @@ struct KeyChunks {
 }
 
 // How a launch uses the step's key chunks.
-enum class KeySplit {
+enum class KeySplit : std::uint8_t {
   // Not at all.
   None,
   // Its workgroups are multiplied by the step's splits.
@@ -266,11 +277,11 @@ enum class KeySplit {
 
 // What decides how many invocations a launch runs in a step.
 struct Geometry {
-  Rows rows;
-  std::uint32_t invocations_per_row;
-  std::uint32_t rows_per_tile;  // 0: a launch over rows
-  KeySplit key_split;
-  std::uint32_t window;
+  Rows rows = Rows::EveryToken;
+  std::uint32_t invocations_per_row = 0;
+  std::uint32_t rows_per_tile = 0;  // 0: a launch over rows
+  KeySplit key_split = KeySplit::None;
+  std::uint32_t window = 0;
   // The steps it runs in, by its rows (below); every step by default.
   TokenRange tokens = {};
   // A key split's partial buffers' query rows (key_chunks).
@@ -292,9 +303,12 @@ struct Geometry {
 // tiles' workgroups once for each chunk, each a whole number of
 // workgroups. Preconditions: tokens >= 1; workgroup_size >= 1; a key
 // split's window >= 1; position + tokens <= kMaxPositions.
+// The step's position and tokens in the order key_chunks takes them (above).
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 [[nodiscard]] constexpr std::uint64_t workgroups_for(
     const Geometry& g, std::uint32_t workgroup_size, std::uint32_t position,
     std::uint32_t tokens, bool logits) noexcept {
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   const std::uint32_t launch_rows = tokens / g.row_divisor;
   if (launch_rows < g.tokens.least || launch_rows > g.tokens.most) return 0;
   if (g.rows == Rows::LastToken && !logits) return 0;

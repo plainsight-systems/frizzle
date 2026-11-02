@@ -80,8 +80,8 @@ slice 1 and the TypeScript rules from slice 3.
 | `core/gguf/` | C | [P] | The file reader |
 | `core/gpu/`, `core/residency/`, `core/kernels/program`, `order`, `schedule`, `core/run_guard.h` | D | [P] | Device, placement, upload, launching; the context offered is sized in `residency/plan` |
 | `core/kernels/<kernel>/` | E | [P] | gather, matmul, norm, rope, attention, top-k |
-| `core/kernels/attention/` | E | [C] | Writing the attention weights (slice 5) |
-| `core/kernels/norm/` | E | [C] | Opening up the add and the norm, if slice 7 needs it |
+| `core/kernels/attention/` | E | [C] | Writing the last row's scores and their maximum and sum into the capture store (slice 4, step 5) |
+| `core/kernels/norm/` | E | [C] | Writing the residual and what each block adds into the capture store (slice 4, step 5); opening up the add and the norm, if slice 7 needs it |
 | `core/sampler/` | F | [P] | Keyed by seed and position |
 | `core/cache/kv.*` | G | [C] | The three-part cache in the [overview](logical-overview.md#the-state-the-cache-in-three-parts) |
 | `core/cache/prefix.*` | G | [P] | The prefix diff |
@@ -91,7 +91,7 @@ slice 1 and the TypeScript rules from slice 3.
 | `core/runtime/runtime.*`, `turn.*`, `stops.*` | M | [P] | The turn loop |
 | `core/runtime/generator.*` | M | [P] | Text in, text out over the turn loop |
 | `core/runtime/engine.*` | M | [N] | `load` and `generate`, the operations every host calls |
-| `core/capture/` | O | [N] | The store, a slot per layer, its layout (`capture.h`); `capture.wgsl` and its launcher; the reader that brings the store back once a run (`reader.h`) |
+| `core/capture/` | O | [N] | The store, its slots a layer and kind, its layout (`capture.h`); `capture.wgsl`, the neurons' copy, and its launcher; `weights.wgsl` and its launcher, the attention scores into weights (`weights.h`); the reader that brings the store back once a run (`reader.h`) |
 | `core/edit/` | Q | [N] | Edit kinds and what each does as a plain function; `edit.wgsl` and its launcher |
 | `core/diagnostics.h` | U | [P] | The build's instrumentation gate |
 | `ported.json` | V | [N] | Each ported file's SHA-256 as ported, written by `scripts/port_charlotte.py`; tells unchanged files from changed ones |
