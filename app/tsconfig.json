@@ -8,7 +8,6 @@
   "references": [
     { "path": "./tsconfig.page.json" },
     { "path": "./tsconfig.worker.json" },
-    { "path": "./tsconfig.node.json" },
-    { "path": "../tests/integration/browser/tsconfig.json" }
+    { "path": "./tsconfig.node.json" }
   ]
 }

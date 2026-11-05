@@ -228,7 +228,12 @@ reviewed, then its code, then review.
 - Which libc++ the native build links on macOS: today the system's
   `/usr/lib/libc++.1.dylib`, while compiling against LLVM 21.1.8's headers.
 - Hosting and CI.
-- The browser scenario hung once (2026-11-02): the page's WebGPU status
-  never settled, before the model loaded; not reproduced in 88 tries after.
-  If it hangs again, the test is rethought, not retried (the user,
-  2026-11-02).
+- Auditing all the tests (the user, 2026-11-02). The browser scenario was
+  dropped first: four of about thirty runs hung five minutes before the
+  model loaded, and 88 tries did not reproduce it. So the page, worker and
+  module have no end-to-end test; the steps above that name the scenario
+  as their check are unchecked there, and these headers still cite it:
+  `shape/paint.ts`, `views/prompt/PromptView.tsx`,
+  `views/deck/Inspector.tsx`, `tests/contracts/kernels/capture_test.cpp`,
+  `tests/contracts/pins/pins.test.ts`,
+  `tests/contracts/delivery/download.test.ts`.

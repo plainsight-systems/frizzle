@@ -16,8 +16,6 @@ npm run build      # dist/
 ```
 
 The checks run from the repository's root, through `python3 scripts/check.py`
-(format, boundaries, and the type check in `test`). The type check covers
-the browser scenario too, so it needs `npm ci` in
-`../tests/integration/browser/` as well; `npm run build` needs the engine's
-module, built by CMake's `wasm-release` preset. The import rules are the
+(format, boundaries, and the type check in `test`). `npm run build` needs
+the engine's module, built by CMake's `wasm-release` preset. The import rules are the
 [file mapping's](../docs/architecture/file-mapping.md).

@@ -83,22 +83,6 @@ estimated at about 140 tok/s and has not been measured.
   that erases (no enum, namespace or parameter properties; `tsc` enforces
   it) and tested modules use no Vite-only features. Vitest, the alternative,
   would add about 20 packages.
-- The browser scenario drives Chrome for Testing 155.0.8059.84, headless,
-  with puppeteer-core 25.15.0 (the Chrome build that version is made for; a
-  bump of one is a bump of both) and @puppeteer/browsers 3.2.5 to install
-  it, in its own npm project (`tests/integration/browser/`), so the driver's
-  packages never enter the app's lockfile. Playwright was the alternative;
-  its Chromium is pinned only through its own version. On an Apple M3 Max,
-  2026-10-28, that Chrome gave a WebGPU device headless and headed, with no
-  flags: adapter vendor apple, architecture metal-3, shader-f16.
-- The scenario answers the pinned URL from the local copy and blocks every
-  other host, so it needs no network. It runs before every push as the
-  pre-push hook (`.githooks/`, `scripts/pre_push.py`), which rebuilds the
-  browser module first; not in CI, which has no GPU. Its pins are one of
-  each kind (layer 2 neuron 1000 scaled by -4, layer 16 neuron 3000 set to
-  8, layer 24 neuron 100 zeroed, seed 7): they change the reply and let it
-  end by itself, since captures arrive with a run's end, and each pin is
-  read back from the page, exactly.
 
 ## Relationship to Charlotte
 

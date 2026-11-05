@@ -56,9 +56,6 @@ App (app/package.json):
   - Build and checks: vite 8.3.4 and @vitejs/plugin-react 6.1.2, MIT;
     typescript 7.0.2, Apache-2.0; prettier 3.9.10, MIT; @types packages,
     MIT.
-Browser scenario (tests/integration/browser/package.json):
-  - puppeteer-core 25.15.0 and @puppeteer/browsers 3.2.5, Apache-2.0,
-    driving Chrome for Testing.
 Native:
   - Dawn, BSD-3-Clause: WebGPU for native builds and tests, a prebuilt
     release fetched by scripts/fetch_dawn.py.

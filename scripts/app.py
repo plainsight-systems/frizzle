@@ -6,9 +6,7 @@ installs with `npm ci` in app/; a missing app/node_modules fails here, by
 name, rather than installing anything.
 
 - format: Prettier over the app's TypeScript and HTML (--fix applies it).
-- typecheck: tsc over each of the app's type-check projects, and the
-  browser scenario's (tests/integration/browser/), whose packages a person
-  installs with `npm ci` there.
+- typecheck: tsc over each of the app's type-check projects.
 - suites: Node's built-in runner over tests/contracts/**/*.test.ts, the
   TypeScript suites of the inventory (tests/README.md), run as written: Node
   strips the types itself.
@@ -46,11 +44,6 @@ def format_app(fix=False):
 
 
 def typecheck():
-    # The browser scenario is type-checked with the app's TypeScript against
-    # its own packages (tests/integration/browser/package.json).
-    if not (ROOT / 'tests' / 'integration' / 'browser' / 'node_modules').is_dir():
-        raise ValueError('tests/integration/browser/node_modules is missing: run `npm ci` there. '
-                         'Nothing was installed.')
     _run('typecheck')
     print('TypeScript: the app type-checks', flush=True)
 

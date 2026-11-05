@@ -8,7 +8,7 @@ This writes a compilation database for them that the host's tools can
 follow, and checks that it does.
 
 What it does, in order; each step fails by name:
-  1. In the container (pre_push.EMSDK, as the browser build): configures the
+  1. In the container (tooling.EMSDK, as the browser build): configures the
      wasm-release preset, which exports its compilation database; prints the
      flags em++ adds to every compile with the emdawnwebgpu port; and copies
      the headers those flags name (the sysroot's, the port's, clang's own)
@@ -45,8 +45,7 @@ import shutil
 import subprocess
 import sys
 
-from pre_push import EMSDK
-from tooling import BROWSER_ONLY, ROOT, find_tool
+from tooling import BROWSER_ONLY, EMSDK, ROOT, find_tool
 
 CONTAINER_ROOT = '/src/'
 CONTAINER_EMSDK = '/emsdk/'

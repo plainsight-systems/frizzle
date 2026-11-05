@@ -141,9 +141,8 @@ Two Vite entries, the page and the worker. `worker/delivery/` reads
 | `app/package.json`, lockfile, Vite config | U | Exact npm versions |
 | `tools/frizzle/` | V | The native tool: the reply to a prompt; the edited reply beside it from slice 2 |
 | `tools/reference_logits/` | V | Makes llama.cpp's logits, the frozen reference, again; its own build against llama.cpp |
-| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, the test fixtures, the pre-push hook |
-| `.githooks/` | V | Git's hooks for this repository, enabled per clone with `git config core.hooksPath .githooks`: `pre-push` runs `scripts/pre_push.py` |
-| `tests/integration/<scenario>/` | V | One directory per scenario in the [inventory](../../tests/README.md): `reference-logits`, `replay`, `browser`, `site`. `browser` is its own npm project, with the driver's exact pins and lockfile, apart from the app's |
+| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, the test fixtures |
+| `tests/integration/<scenario>/` | V | One directory per scenario in the [inventory](../../tests/README.md): `reference-logits`, `replay`, `site` |
 | `tests/contracts/<suite>/` | V | One per suite: `tokenizer`, `gguf`, `kernels`, `edits` |
 | `tests/fixtures/` | V | Small inputs and frozen references |
 | `tests/support/` | V | What the tests share: reading files, driving the GPU, doctest's main |

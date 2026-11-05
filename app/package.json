@@ -8,9 +8,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc -p tsconfig.page.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json && tsc -p ../tests/integration/browser/tsconfig.json",
-    "format": "prettier --write src index.html vite.config.ts ../tests/contracts ../tests/support ../tests/integration/browser/*.ts",
-    "format:check": "prettier --check src index.html vite.config.ts ../tests/contracts ../tests/support ../tests/integration/browser/*.ts"
+    "typecheck": "tsc -p tsconfig.page.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.node.json",
+    "format": "prettier --write src index.html vite.config.ts ../tests/contracts ../tests/support",
+    "format:check": "prettier --check src index.html vite.config.ts ../tests/contracts ../tests/support"
   },
   "dependencies": {
     "@huggingface/jinja": "0.5.10",

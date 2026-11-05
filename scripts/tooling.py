@@ -18,6 +18,8 @@ SEPARATE_BUILDS = ('tools/reference_logits',)
 # database holds it: formatted, and reviewed rather than analyzed
 # (docs/process/workflow.md, Checks).
 BROWSER_ONLY = ('src/wasm',)
+# The container the browser build runs in (CMakePresets.json, wasm-release).
+EMSDK = 'emscripten/emsdk:6.0.8'
 
 
 def find_tool(name):
