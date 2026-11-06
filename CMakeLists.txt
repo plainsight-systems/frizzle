@@ -13,8 +13,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
 endif()
 
-# The toolchain is pinned (docs/process/MEMORY.md). Any other compiler is
-# refused rather than substituted.
+# The toolchain is pinned (docs/architecture/logical-overview.md, Pinned
+# versions). Any other compiler is refused rather than substituted.
 set(FRIZZLE_EMSCRIPTEN_VERSION 6.0.8)
 set(FRIZZLE_NATIVE_CLANG_VERSION 21.1.8)
 if(EMSCRIPTEN)

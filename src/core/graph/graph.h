@@ -151,7 +151,7 @@ namespace frizzle::graph {
 //     block not here adds one, and no other family's graph changes (C.129).
 //     Frizzle has one family, Gemma 3.
 //   - The edit launch is the graph's own, always present: one a layer, over
-//     the last token. Accepted cost (docs/process/MEMORY.md): 26 more
+//     the last token. Accepted cost (logical-overview.md, Edits): 26 more
 //     dispatches in each scoring step for Gemma 3 1B, estimated at about
 //     40 µs a token at Charlotte's 1.5 µs a dispatch; not measured here.
 //     Rebuilding the graph for each edit set, or folding the edit into

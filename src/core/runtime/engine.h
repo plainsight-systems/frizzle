@@ -232,8 +232,7 @@ namespace frizzle::runtime {
 //   - on_end's type is RunEndCallback, not the generator's EndCallback: the
 //     native tool takes the captures and reads nothing of them; the replay
 //     scenario compares two runs' stores; the browser bindings send the
-//     neurons to the page (slice 4, step 2), and the rest crosses in the
-//     step after this one (QUEUE, slice 4, step 6).
+//     neurons to the page, and the rest stays in the engine.
 //
 // Corpus guidance
 //   C++ Core Guidelines

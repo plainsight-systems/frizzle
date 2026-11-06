@@ -24,8 +24,8 @@
 //     every ported kernel (tests/README.md).
 //   - That the weights launch turns these into weights: weights_test.cpp.
 //   - That the graph gives the launch its layer's slots: the replay
-//     scenario's inspection compares whole stores; the page's read-back
-//     comes with the step that shows them (QUEUE, slice 4, step 6).
+//     scenario's inspection compares whole stores; these captures do not
+//     cross to the page, so no page read-back checks them.
 //
 // The sum's margin: the fold adds at most `count` exp2 terms a head, each
 // within (3 + 2|x|) units of exp2 (WGSL), rescaled by a chain of factors as

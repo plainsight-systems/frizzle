@@ -32,7 +32,7 @@ Two slots are unassigned. Browser, end to end (the app as it ships, in
 a real browser with WebGPU, driven by puppeteer-core) was dropped on
 2026-11-02: four of about thirty runs hung for five minutes before the
 model loaded, and the cause was not found. The page, worker and module
-have no end-to-end test until the tests are audited (QUEUE).
+have no end-to-end test.
 
 ## Contract suites
 

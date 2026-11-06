@@ -64,8 +64,9 @@
 // Design and cost
 //   - Weights, not raw scores (the user, 2026-11-02): scores in log2 units
 //     cannot be read, and forming the weights on the page would be a
-//     computation beside the model; this launch is MEMORY's one exception
-//     to "nothing is computed beside the model".
+//     computation beside the model; this launch is the one exception to
+//     "nothing is computed beside the model" (AGENTS.md, Recurring
+//     mistakes).
 //   - In place: the scores' words become the weights. The scores are not
 //     kept; what is shown is the weights.
 //   - A launch of its own, after the combine, not inside the attention

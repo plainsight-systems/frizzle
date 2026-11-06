@@ -60,10 +60,9 @@
 //         the same call as the answer: frizzleOnAnswer(request, answer,
 //         neurons), `neurons` a Float32Array of the store's neuron region,
 //         every layer's neurons slot, bit for bit (capture/capture.h,
-//         region 1). The store's other captures do not cross yet: the
-//         page has nothing to show them in until the step after this one
-//         (QUEUE, slice 4, step 6), and sending 2.5 MiB more a run for
-//         nothing to read was not worth it;
+//         region 1). The store's other captures do not cross: the page
+//         has nothing to show them in, and sending 2.5 MiB more a run for
+//         nothing to read is not worth it;
 //       {"status": "not-taken"}: the turn was cancelled, so there are none;
 //       {"status": "unread", "reason"}: the read back failed, named by
 //         residency::Mapped ("cancelled", "device-lost", "unexplained",

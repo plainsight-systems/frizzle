@@ -6,8 +6,9 @@ IBM's, the same text in both packages.
 
 Copied from IBM's npm packages, from `fonts/complete/woff2/`, on 2026-10-29.
 Each package archive matched the registry's published integrity before the
-files were taken from it. The packages are not dependencies of the app (MEMORY,
-Platform).
+files were taken from it. The packages are not dependencies of the app: both
+depend on @ibm/telemetry-js, which would enter the lockfile with an install
+script that only `.npmrc` keeps from running.
 
 | File                         | Package               | SHA-256                                                            |
 | ---------------------------- | --------------------- | ------------------------------------------------------------------ |

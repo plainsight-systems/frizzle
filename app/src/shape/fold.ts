@@ -23,7 +23,7 @@
 //
 // Design
 //   - 96 columns: Gemma 3 1B's 6,912 neurons fold to 96 × 72, the deck's
-//     agreed card (MEMORY, Interface), a little wider than tall. The count
+//     card (docs/architecture/interface.md), a little wider than tall. The count
 //     of columns is this file's choice; how many neurons there are is the
 //     model's.
 //   - The deck paints the grid with paint.ts, picks a neuron from a cell

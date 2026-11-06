@@ -15,8 +15,7 @@ an engine in C++ compiled to WebAssembly. Nothing runs on a server.
 **Status:** working, run locally; not yet hosted. The engine runs Gemma 3 1B
 in the browser through WebGPU. The app writes a reply, opens a workbench of
 every layer's MLP neurons, pins the ones you choose, and writes the steered
-reply beside it from the same seed. Steering from any word of the reply is
-next; the [work queue](docs/process/QUEUE.md) says what follows.
+reply beside it from the same seed, steering from any word of the reply.
 
 ## Why Frizzle
 
@@ -41,7 +40,6 @@ under Plainsight Systems LLC.
 | `config/model.json` | The one pinned model file |
 | `tests/` | The tests, and the inventory of what each one guards |
 | `tools/`, `scripts/` | Reference and fixture generators; checks and pinned tooling |
-| `docs/process/` | Current decisions and remaining work |
 | `docs/architecture/` | The system as it is: its parts, flows, invariants and file layout |
 | `docs/research/` | Investigations, each dated |
 | `docs/design/` | Interface and theme concepts |

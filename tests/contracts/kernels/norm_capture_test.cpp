@@ -18,8 +18,7 @@
 //   - That the graph gives each norm the right layer's slots, so the store
 //     holds layer l's residual where layout() says: no test names it on
 //     its own; the replay scenario's inspection compares whole stores, and
-//     the page's read-back of these captures comes with the step that shows
-//     them (QUEUE, slice 4, step 6).
+//     these captures do not cross to the page.
 //   - The identity "X before plus y is X written" holds where the target's
 //     compiler does not fuse the post-norm's last multiply into the add;
 //     WGSL does not say it may not. Checked here on the target, as the
