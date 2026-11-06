@@ -42,7 +42,7 @@ under Plainsight Systems LLC.
 | `tests/` | The tests, and the inventory of what each one guards |
 | `tools/`, `scripts/` | Reference and fixture generators; checks and pinned tooling |
 | `docs/process/` | Current decisions and remaining work |
-| `docs/architecture/` | The design, written before the code it governs |
+| `docs/architecture/` | The system as it is: its parts, flows, invariants and file layout |
 | `docs/research/` | Investigations, each dated |
 | `docs/design/` | Interface and theme concepts |
 
