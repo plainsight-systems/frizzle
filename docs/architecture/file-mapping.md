@@ -154,7 +154,7 @@ Charlotte's tests come over only where one implements an inventory row.
 
 - All C++ is in namespace `frizzle`, macros prefixed `FRIZZLE_`. Ported files
   are renamed mechanically on porting, which the
-  [workflow](../process/workflow.md#file-header-comments) does not count as a
+  [instructions](../../AGENTS.md#design-in-the-files) do not count as a
   change.
 - 82 of the 128 ported files (112 C++, 16 WGSL) name no axis in their
   header. 21 of them are headers; most of the rest are `.cpp` files whose

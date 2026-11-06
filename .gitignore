@@ -8,10 +8,12 @@ build/
 dist/
 .cache/
 /models/
-# Internal planning stays local, following Serenity and Dolittle.
-/brief.md
+# Plans, research and local notes stay untracked (AGENTS.md, Slices).
+/research/
 /CLAUDE.local.md
 /.local/
+# Slice worktrees.
+/.claude/worktrees/
 /CMakeUserPresets.json
 /compile_commands.json
 .env

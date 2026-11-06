@@ -1,7 +1,7 @@
 # Test inventory
 
 This list is the whole test suite. Each entry locks the contract it names.
-Follow the [test rules](../docs/process/workflow.md#tests): refactors never
+Follow the [test rules](../AGENTS.md#testing): refactors never
 change tests, and adding or removing an entry is a recorded decision.
 
 An entry is "built" when the test exists and passes.

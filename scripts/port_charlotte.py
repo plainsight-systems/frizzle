@@ -3,7 +3,7 @@
 
 Each file listed in docs/research/2026-10-27-charlotte-inventory.md is read
 from Charlotte's pinned commit (not its working tree), given only the
-mechanical changes the workflow allows on porting, and written to the same
+mechanical changes AGENTS.md allows on porting, and written to the same
 path here:
 
   1. the namespace `bllm` becomes `frizzle`, and the macro prefix `BLLM_`

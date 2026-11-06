@@ -6,7 +6,7 @@ Adapted from Bullet Witch. `format` (clang-format, and Prettier for the app),
 and `test` (the routine suite, tests/README.md, and the app's type check)
 work today; the site check joins `all` when the site exists.
 The llama.cpp oracle is not a check here: it runs when the inference path
-changes (docs/process/workflow.md, Tests).
+changes (AGENTS.md, Checks).
 """
 import argparse
 import os

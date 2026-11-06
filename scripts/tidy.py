@@ -7,7 +7,7 @@ CMake's database is unchanged. Headers are analyzed through their includers.
 Files ported from Charlotte and unchanged since porting are not analyzed: a
 file whose SHA-256 still matches src/ported.json is left out, as a translation
 unit and as a header, and every run lists what was left out. A ported file
-that has changed is analyzed like any other (docs/process/workflow.md).
+that has changed is analyzed like any other (AGENTS.md, Checks).
 """
 import concurrent.futures
 import hashlib

@@ -8,7 +8,7 @@
 #                    run. It needs a GPU and fails without one, never skips.
 #   frizzle_oracle   the llama.cpp comparison, an integration test, not
 #                    registered: run it when the inference path changes
-#                    (docs/process/workflow.md, Tests).
+#                    (AGENTS.md, Checks).
 #   frizzle_replay   the replay and edits scenario, an integration test, not
 #                    registered: run it when edits, the graph or the turn
 #                    loop change.

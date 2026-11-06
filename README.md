@@ -41,17 +41,15 @@ under Plainsight Systems LLC.
 | `config/model.json` | The one pinned model file |
 | `tests/` | The tests, and the inventory of what each one guards |
 | `tools/`, `scripts/` | Reference and fixture generators; checks and pinned tooling |
-| `docs/process/` | Current decisions, remaining work and the workflow |
+| `docs/process/` | Current decisions and remaining work |
 | `docs/architecture/` | The design, written before the code it governs |
 | `docs/research/` | Investigations, each dated |
 | `docs/design/` | Interface and theme concepts |
 
 ## Working on Frizzle
 
-Start with [project memory](docs/process/MEMORY.md), the
-[work queue](docs/process/QUEUE.md) and the
-[workflow](docs/process/workflow.md). Agent entry points are
-[`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md).
+Start with [`AGENTS.md`](AGENTS.md), the one instruction set, for people
+and agents alike; [`CLAUDE.md`](CLAUDE.md) points to it.
 
 ## License
 

@@ -16,7 +16,7 @@ SUFFIXES = TRANSLATION_SUFFIXES | {'.h', '.hh', '.hpp', '.hxx'}
 SEPARATE_BUILDS = ('tools/reference_logits',)
 # Compiled only by the browser build (Emscripten), so no native compilation
 # database holds it: formatted, and reviewed rather than analyzed
-# (docs/process/workflow.md, Checks).
+# (AGENTS.md, Checks).
 BROWSER_ONLY = ('src/wasm',)
 # The container the browser build runs in (CMakePresets.json, wasm-release).
 EMSDK = 'emscripten/emsdk:6.0.8'
