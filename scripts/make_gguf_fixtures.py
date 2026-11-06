@@ -4,8 +4,7 @@ tests/fixtures/gguf/.
 
 One valid file, and each malformed file one deliberate change from a valid
 one, so a reviewer can see what is wrong with each byte rather than trust a
-hand-edited binary. Taken from Charlotte e003048's tools/make_fixture_gguf.py,
-keeping only the cases tests/contracts/gguf/ reads; the bytes are the same.
+hand-edited binary. It writes only the cases tests/contracts/gguf/ reads.
 
     python3 scripts/make_gguf_fixtures.py           # write every case
     python3 scripts/make_gguf_fixtures.py --check   # fail if a file differs

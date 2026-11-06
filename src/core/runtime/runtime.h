@@ -126,10 +126,11 @@ namespace frizzle::runtime {
 //     a step queued behind a turn's end keeps each position whose input
 //     token is accepted (turn.h), where sampler/sampler.h said the queued
 //     step's position is truncated.
-//   - Verification: Charlotte's turn-loop tests were not ported. In
-//     Frizzle the replay and edits suite (tests/README.md), planned, runs
-//     turns through the engine, edited and not, against a fresh engine's;
-//     until it is built, only the native tool exercises the loop.
+//   - Verification: the replay and edits scenario (tests/integration/replay/,
+//     tests/README.md) runs turns through the engine, edited and not,
+//     against a fresh engine's; the turn suite (tests/contracts/turn/)
+//     locks the inspection, a turn with a limit of 0. No test locks the
+//     other ways a turn ends on their own.
 //
 // Corpus guidance
 //   C++ Core Guidelines

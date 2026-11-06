@@ -14,7 +14,7 @@
 //     only a worker may hold, to stream it into the engine.
 //
 // Design
-//   - Ported from Charlotte e003048's web/opfs.js, for one pinned model.
+//   - Built for one pinned model.
 //   - A kept file is trusted by its record, which is written only after the
 //     download matched its pinned size and SHA-256 (download.ts); it is not
 //     hashed again at every load, about 2 s of the worker's time for 722 MB.

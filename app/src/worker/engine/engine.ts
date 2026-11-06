@@ -51,9 +51,8 @@
 //     view of the heap, so it survives the heap growing.
 //   - The module and a promise per call: request 0 is the device's answer;
 //     every other call takes the next number.
-//   - Ported from Charlotte e003048's web/wasm_runtime.js and web/load.js,
-//     without what Gemma 3 does not use: preflight, media, companions,
-//     embedding, the diagnostic passes.
+//   - Only what Gemma 3 uses: no preflight, media, companions, embedding
+//     or diagnostic passes.
 
 import createModule, { type FrizzleModule } from "@frizzle/engine";
 

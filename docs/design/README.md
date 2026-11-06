@@ -33,8 +33,6 @@ kept as they were made. Their values are made up.
 
 They are static pages: serve the parent `tech-demos` folder over HTTP (for
 example `python3 -m http.server`) and open
-`/frizzle/docs/design/concepts/…`. The theme pages load IBM Plex fonts from a
-sibling Dolittle checkout (`../../../../dolittle/web/static/fonts/`) until
-Frizzle has its own copies, and the 3D concepts load three.js r128 from a CDN.
-Neither is a pinned dependency of Frizzle. Without the sibling checkout the
-pages fall back to system fonts.
+`/frizzle/docs/design/concepts/…`. The pages load IBM Plex from the app's
+own copies (`app/src/theme/fonts/`), and the 3D concepts load three.js r128
+from a CDN, which is not a pinned dependency of Frizzle.

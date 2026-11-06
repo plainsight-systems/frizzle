@@ -4,10 +4,10 @@
 //
 // Renders the chat template the model file carries
 // (tokenizer.chat_template, Jinja) over a conversation, with the variables
-// Hugging Face transformers gives every chat template. It renders; it does
-// not interpret: the text it returns is what the model reads, and the
-// engine reads it as given (src/core/runtime/engine.h). Wrapping a message
-// in <bos> and the turn markers is this module's job, not the engine's.
+// transformers gives every chat template. It renders; it does not
+// interpret: the text it returns is what the model reads, and the engine
+// reads it as given (src/core/runtime/engine.h). Wrapping a message in
+// <bos> and the turn markers is this module's job, not the engine's.
 //
 // Contract
 //   - compileTemplate(chat) parses chat.template once, and returns
@@ -47,13 +47,12 @@
 //   rather than read the clock.
 //
 // Design and cost
-//   - The Jinja interpreter is @huggingface/jinja 0.5.10, the version
-//     Charlotte vendored, as an exact-pinned npm dependency: no
-//     dependencies of its own, its own types, and the lockfile's integrity
-//     hash in place of a vendored copy's. A dependency decision.
-//   - Ported from Charlotte e003048's web/template.js, without what Gemma 3
-//     does not use: the thinking switch, template variables, and the
-//     clock.
+//   - The Jinja interpreter is @huggingface/jinja 0.5.10, an exact-pinned
+//     npm dependency: no dependencies of its own, its own types, and the
+//     lockfile's integrity hash in place of a vendored copy's. A
+//     dependency decision.
+//   - Only what Gemma 3's template uses: no thinking switch, no template
+//     variables, no clock.
 //   - Cost: a parse at load; a render a turn, linear in the conversation's
 //     text, far below a turn's prefill.
 

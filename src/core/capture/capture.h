@@ -111,9 +111,9 @@
 //         most of it the global layers' zeros past the prompt. Once a run.
 //       - Every decode step: the copy's 26 dispatches and the weights' 26
 //         (capture/weights.h), each reading the step and stopping: 52 at
-//         Charlotte's 1.5 µs a dispatch (one machine, the browser), about
-//         80 µs a token, an estimate. The norm and attention kernels add a
-//         test of the step to launches that run anyway.
+//         about 1.5 µs a dispatch (an estimate, not measured in Frizzle),
+//         about 80 µs a token. The norm and attention kernels add a test of
+//         the step to launches that run anyway.
 //       - Memory: 3.2 MiB on the device for the store, and the reader's
 //         (capture/reader.h).
 //   - Alternatives considered:

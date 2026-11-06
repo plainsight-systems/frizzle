@@ -13,9 +13,10 @@ namespace frizzle::kernels {
 // Axis E: changes with a new or optimized kernel.
 //
 // Attention: scores, the causal and window mask, softmax and the weighted
-// sum of values, never writing the scores out (docs/architecture/
-// kernel-fusions.md). Between rope, which wrote this step's keys and values
-// into the KV cache and its queries in place, and the output projection.
+// sum of values, never writing the scores out. Between rope, which wrote this
+// step's keys and values into the KV cache and its queries in place, and the
+// output projection (docs/architecture/logical-overview.md, "Inside one
+// layer").
 //
 // "KV cache" below is always the stored keys and values (cache/kv.h); the
 // GPU's own caches, the hardware between its cores and device memory, are
@@ -31,17 +32,17 @@ namespace frizzle::kernels {
 // listed model. Every key is read from the KV cache, the step's own included,
 // rounded as stored (kernels/rope/rope.h).
 //
-// The shape of the computation: FlashAttention-2's online softmax. Keys and
+// The shape of the computation: an online softmax over tiles of keys. Keys and
 // values stream through workgroup memory a tile at a time; each query keeps
 // a running maximum m, sum l and weighted sum O, rescaled when its maximum
 // rises; nothing larger than a tile of scores exists (GDSA.16).
 //
 //   - Chunks. Keys are taken in chunks of 64 consecutive positions, chunk c
-//     holding positions 64c .. 64c + 63, fixed by position alone — ONNX
-//     Runtime's fixed decode tile, so a decode step at 1,024 keys runs 128
-//     workgroups where 256-key chunks ran 32 (costs, below). Each
-//     chunk's (m, l, O) is computed from an empty state, then folded into the
-//     query's result in chunk order by one merge function:
+//     holding positions 64c .. 64c + 63, fixed by position alone; a decode
+//     step at 1,024 keys runs 128 workgroups where 256-key chunks ran 32
+//     (costs, below). Each chunk's (m, l, O) is computed from an empty
+//     state, then folded into the query's result in chunk order by one merge
+//     function:
 //       merge((m, l, O), (m_c, l_c, O_c)), m' = max(m, m_c):
 //         l' = l × 2^(m − m') + l_c × 2^(m_c − m'),  O' likewise
 //     where a factor whose exponent is 0 is exactly 1, and an empty side —
@@ -61,10 +62,9 @@ namespace frizzle::kernels {
 //   - Splits. When a step has few rows, one workgroup a chunk: split s takes
 //     chunk first + s, writes its unnormalized (m, l, O) for each query to
 //     the partial buffers, and a combine launch folds the count of them in
-//     chunk order and divides — Flash-Decoding's split, and vLLM's
-//     PagedAttention V2 over 512-token partitions. When it has many, one
-//     workgroup folds every active chunk itself, with the same merge. A
-//     layer's step splits when tokens × count <= P, the partial buffers'
+//     chunk order and divides. When it has many, one workgroup folds every
+//     active chunk itself, with the same merge. A layer's step splits when
+//     tokens × count <= P, the partial buffers'
 //     rows: 512, the attention buffer's own size, or the trained context's
 //     chunks, ceil(C / 64), where that is more — 640 for Qwen3's 40,960 —
 //     so a decode step splits at every position any offered context reaches
@@ -102,7 +102,7 @@ namespace frizzle::kernels {
 //     sum itself, so the fold needs no barrier.
 //   - Exponentials are base 2: queries are multiplied by scale × log2(e)
 //     as they are staged, so a score is already in log2 units and exp2
-//     replaces exp, FlashAttention-2's form.
+//     replaces exp.
 //   - Masks: a key is live for query p when j <= p and j >= p − W + 1. A
 //     masked score is never formed: its weight is set to 0 and it is left
 //     out of the maximum. Liveness is recomputed from positions wherever it
@@ -205,7 +205,8 @@ namespace frizzle::kernels {
 // combine are separate pipelines, and WGSL lets each fuse or reassociate
 // that function's multiply-adds as it chooses, so equal bits are what the
 // target's compiler gives, which the GPU test checks, not what WGSL
-// promises. Not bit for bit with llama.cpp, whose tiles and order differ.
+// promises. Not bit for bit with other implementations or across GPUs, since
+// the summation order is this kernel's.
 //
 // Accuracy, against the same computation in f64 from the same queries and
 // the KV cache's stored keys and values: the scores' rounding dominates. A
@@ -236,12 +237,12 @@ namespace frizzle::kernels {
 //   - Prefill, 512 tokens from position 0: query-key pairs under the causal
 //     mask, T(T + 1) / 2 = 131,328 a head; 2 × d multiply-adds a pair, the
 //     score's and the weighted sum's, 4 × d operations: 1.08 × 10⁹ a layer,
-//     30 × 10⁹ a step, about 2 ms at the M3 Max's roughly 14 f32 TFLOPS
-//     (third-party figure) if the arithmetic ran at peak. A row tile streams
-//     the keys up to its last row, half a layer's 2 MiB of keys and values
-//     on average: about 128 MiB of KV cache reads a layer. From device
-//     memory that is between the layer's 2 MiB, if the GPU's caches keep it
-//     while its row tiles run, as they can hold it, and the whole 128 MiB,
+//     30 × 10⁹ a step, about 2 ms at roughly 14 f32 TFLOPS (an M3 Max, an
+//     estimate, not measured in Frizzle) if the arithmetic ran at peak. A
+//     row tile streams the keys up to its last row, half a layer's 2 MiB of
+//     keys and values on average: about 128 MiB of KV cache reads a layer. From
+//     device memory that is between the layer's 2 MiB, if the GPU's caches keep
+//     it while its row tiles run, as they can hold it, and the whole 128 MiB,
 //     about 0.3 ms a layer at 400 GB/s, if they do not; WebGPU promises
 //     neither the order workgroups run in nor what the caches keep, so where
 //     in that range a step falls is the target's, to be measured.
@@ -249,19 +250,16 @@ namespace frizzle::kernels {
 //     for Gemma 3 — a decode workgroup's whole chain — and the merge at each
 //     chunk's end needs none.
 // Optimization (practice): the softmax is online and tiled, so the
-// T × L scores are never written — FlashAttention-2 (GDSA.16).
+// T × L scores are never written (GDSA.16).
 // Optimization (practice): a decode step is split across the context in
 // fixed chunks and combined, so 128 workgroups at 1,024 tokens and 512 at
-// 4,096 read the KV cache where one a key-value head would be 8 —
-// Flash-Decoding, vLLM's PagedAttention V2 (GDSA.8). The chunk is 64 keys,
-// ONNX Runtime's: llama.cpp's and ONNX Runtime's WebGPU decode reach 256
-// workgroups or more at 1,024 keys, and 256-key chunks ran 40 at the
-// profile's position 1,024 — 1,025 keys, 5 chunks — which read the KV
-// cache at about 32 GB/s (docs/research/2026-10-07-forward-pass-profile.md);
-// 64-key chunks run 136 there (GPU.3).
+// 4,096 read the KV cache where one a key-value head would be 8 (GDSA.8).
+// The chunk is 64 keys: 256-key chunks run 40 workgroups at position 1,024
+// — 1,025 keys, 5 chunks — which read the KV cache at about 32 GB/s (an
+// estimate, not measured in Frizzle); 64-key chunks run 136 there (GPU.3).
 // Optimization (practice): chunks fixed by position and folded in order,
-// so a split does not change a result — the fixed split size Thinking
-// Machines' batch-invariant attention uses (CDSA.23).
+// so a split does not change a result: the split size is fixed, not chosen
+// by the batch (CDSA.23).
 // Optimization (practice): a key-value head's keys are read once for its
 // whole group of query heads, and the scale folded into the staged queries.
 //
@@ -269,14 +267,14 @@ namespace frizzle::kernels {
 //   - Workgroup memory is 16 KiB at WebGPU's defaults, which the harness
 //     keeps for cross-browser compatibility (gpu/device_requirements.h). A
 //     tile is therefore M = 1,024 / d query vectors — 4 rows for Qwen3 —
-//     where FlashAttention-2 takes 64 to 128 rows; prefill reads each
+//     where a larger workgroup memory would hold 64 to 128; prefill reads each
 //     layer's KV cache 128 times rather than 4 to 8: 16 to 32 times the
 //     reads, which the GPU's caches serve as far as they keep the layer's
 //     keys and values (costs, above).
 //   - Subgroup operations are optional, for the same reason: each score is
 //     one invocation's whole dot product, and the softmax's per-tile maxima
-//     and sums are one invocation's loop over B, where llama.cpp's Metal
-//     kernels reduce across a SIMD-group.
+//     and sums are one invocation's loop over B, where a subgroup reduction
+//     would take one step.
 //   - WebGPU has no matrix-multiply units: Chrome's subgroup matrices are
 //     an experiment, not cross-browser. The arithmetic is f32 on the
 //     shader cores.

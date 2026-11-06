@@ -3,10 +3,9 @@
 //
 // Contract, algorithm, cost and corpus guidance: engine.h. This file defines
 // the Engine as that header states it: load's three stages and generate,
-// each as a chain of callbacks that carry the engine's state. The
-// refusals' wording, and the checks begin_load makes before the upload,
-// follow Charlotte e003048's preflight.cpp (plan_load, load_tokenizer),
-// which Frizzle did not port; Frizzle's engine names them itself.
+// each as a chain of callbacks that carry the engine's state. The engine
+// words its own refusals and makes begin_load's checks before the upload
+// itself; no separate preflight unit makes them.
 
 #include "core/runtime/engine.h"
 

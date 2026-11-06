@@ -44,9 +44,9 @@
 //     allocates nothing.
 //   - One copy and one mapping a run, after the turn (GPU.1): the store is
 //     final output, read once, never inside the step loop. Its cost is
-//     a readback's fixed wait, about 0.5 ms at Charlotte's measure (one
-//     machine, the browser), and 3.2 MiB moved twice (GPU to the mapping,
-//     the mapping to the host copy); not measured here.
+//     a readback's fixed wait, about 0.5 ms (an estimate, not measured in
+//     Frizzle), and 3.2 MiB moved twice (GPU to the mapping, the mapping to
+//     the host copy), counted, not measured.
 //   - Its own buffer, not the program's readback slots: those carry each
 //     step's 16-byte draw record and are at most kMaxReadback, 4 KiB
 //     (kernels/program.h); widening them would copy 3.2 MiB every step.

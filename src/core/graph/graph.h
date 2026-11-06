@@ -152,8 +152,8 @@ namespace frizzle::graph {
 //     Frizzle has one family, Gemma 3.
 //   - The edit launch is the graph's own, always present: one a layer, over
 //     the last token. Accepted cost (logical-overview.md, Edits): 26 more
-//     dispatches in each scoring step for Gemma 3 1B, estimated at about
-//     40 µs a token at Charlotte's 1.5 µs a dispatch; not measured here.
+//     dispatches in each scoring step for Gemma 3 1B, about 40 µs a token
+//     at about 1.5 µs a dispatch, an estimate, not measured in Frizzle.
 //     Rebuilding the graph for each edit set, or folding the edit into
 //     gate·up's epilogue, were the alternatives (edit/edit_kernel.h).
 //   - The capture launch is the graph's own too, always present: one a
@@ -164,15 +164,15 @@ namespace frizzle::graph {
 //     again. `captures` is one working buffer of every slot, 3.2 MiB,
 //     planned in decoder_working_set. The alternatives are in
 //     capture/capture.h.
-//   - Charlotte's count, for Qwen3 0.6B at Q4_0 with an F16 cache, before
-//     the edit launch; not recounted for Gemma 3: 8 dispatches a layer a
-//     step, where a launch an operation would be 17 (GPU.6); 231 a step,
-//     259 when every layer's combine runs, 225 in a prefill step that does
-//     not end the prompt. At about 1.5 µs a dispatch, 0.35 to 0.39 ms of GPU
-//     time. Pipelines, bind groups and launch constants are made once, at
-//     load (kernels/program.h).
+//   - A count for Qwen3 0.6B at Q4_0 with an F16 cache, before the edit
+//     launch; not recounted for Gemma 3: 8 dispatches a layer a step, where
+//     a launch an operation would be 17 (GPU.6); 231 a step, 259 when every
+//     layer's combine runs, 225 in a prefill step that does not end the
+//     prompt. At about 1.5 µs a dispatch (an estimate, not measured in
+//     Frizzle), 0.35 to 0.39 ms of GPU time. Pipelines, bind groups and
+//     launch constants are made once, at load (kernels/program.h).
 //   - Optimization (practice): logits only for a step whose last token is
-//     sampled, as llama.cpp computes them only for the tokens a batch marks.
+//     sampled, the only logits the sampler reads.
 //     A prefill step that does not end the prompt skips the final norm, the
 //     head and the edit launches (GDSA.6): for Gemma 3 1B the head is the
 //     Q8_0 token embedding, about 321 MB not read.
@@ -182,7 +182,6 @@ namespace frizzle::graph {
 //     integration): Gemma 3 1B decoded a token at a time over a pinned
 //     600-token sequence, every position's top 20 within llama.cpp's own
 //     CPU-to-Metal spread, through this graph with an empty edit table.
-//     Charlotte's own graph tests were not ported.
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -190,7 +189,7 @@ namespace frizzle::graph {
 //            inheritance: families share blocks by composition; the
 //            interface is architecture.h's function pointer.
 //   C++ performance guidelines
-//     GPU.6  Batch tiny GPU work: 8 dispatches a layer in Charlotte's count;
+//     GPU.6  Batch tiny GPU work: 8 dispatches a layer in the count above;
 //            the edit's tiny launch a layer is counted above, its fused
 //            alternative named.
 //     GDSA.6 Count passes over global memory: the head's read, and the edit

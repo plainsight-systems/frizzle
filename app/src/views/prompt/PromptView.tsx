@@ -71,16 +71,16 @@
 //     supersedes it.
 //
 // Design
-//   - After Dolittle's composer: the prompt box carries its own action
-//     row, so Run is beside what it sends, and the pins sit on the box as
-//     chips because they go out with the run. Pins are made in the
-//     workbench, never typed here.
-//   - Words, not tokens, after Dolittle's rewind: a person steers meaning,
-//     and a word is whole tokens (branch.ts). The words are buttons only
-//     once the reply is done: while it streams it is text, so a long reply
-//     is not redrawn as hundreds of buttons on every token. Only the
-//     pressed word takes the tab; the arrows move the point, so the keys
-//     reach every word without a tab stop for each.
+//   - A composer: the prompt box carries its own action row, so Run is
+//     beside what it sends, and the pins sit on the box as chips because
+//     they go out with the run. Pins are made in the workbench, never
+//     typed here.
+//   - Words, not tokens, as the points to steer from: a person steers
+//     meaning, and a word is whole tokens (branch.ts). The words are
+//     buttons only once the reply is done: while it streams it is text, so
+//     a long reply is not redrawn as hundreds of buttons on every token.
+//     Only the pressed word takes the tab; the arrows move the point, so
+//     the keys reach every word without a tab stop for each.
 //   - The replies side by side, the comparison the demo is for; one above
 //     the other where the window is narrow. Capped, so a long reply (one
 //     can run to the end of the context) scrolls inside its pane rather

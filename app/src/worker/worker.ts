@@ -33,8 +33,6 @@
 //     before has finished, since the engine runs one operation at a time;
 //     a cancel acts at once. So a generation sent after a cancel waits for
 //     the cancelled turn to end, rather than finding the engine busy.
-//   - Ported from Charlotte e003048's web/worker.js, for Frizzle's three
-//     requests.
 
 import pin from "../../../config/model.json" with { type: "json" };
 import type {

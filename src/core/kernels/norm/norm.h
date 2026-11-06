@@ -12,9 +12,9 @@ namespace frizzle::kernels {
 // Axis E: changes with a new or optimized kernel.
 //
 // RMSNorm, with the residual add before it fused in (docs/architecture/
-// kernel-fusions.md). One kernel for the attention, feed-forward and final
-// norms of every architecture here, and for both regimes: a row's norm needs
-// only that row.
+// logical-overview.md, "Inside one layer"). One kernel for the attention,
+// feed-forward and final norms of every architecture here, and for both
+// regimes: a row's norm needs only that row.
 //
 // For each row it covers:
 //   1. Where the launch adds: y, the last block's output, is added into X,
@@ -22,9 +22,9 @@ namespace frizzle::kernels {
 //      a block's output before adding it — Gemma 3's post-attention and
 //      post-feed-forward norms — y is first normalized with its own gain.
 //   2. normed = (X × r) × g, where r = 1 / sqrt(mean(X²) + ε) and g is the
-//      norm's gain: llama.cpp's RMS_NORM then MUL, in that order. ε is the
-//      file's (model description). Gemma 3's gains need no special case:
-//      llama.cpp's converter stored them as 1 + w (arch/architecture.h).
+//      norm's gain: normalize, then multiply by the gain, in that order. ε is
+//      the file's (model description). Gemma 3's gains need no special case:
+//      the GGUF file stores them as 1 + w (arch/architecture.h).
 // The first layer's attention norm does not add — the embedding wrote X —
 // and the final norm covers only the step's last token, row tokens - 1,
 // which is all the output head reads (interface.h).
@@ -49,7 +49,8 @@ namespace frizzle::kernels {
 //     rows and its token count, since one workgroup reduces one row in one
 //     fixed order — so a token's normed row, and the key and value computed
 //     from it, are the same whether the token was prefilled or decoded. Not
-//     bit for bit with llama.cpp or across GPUs, which sum in other orders.
+//     bit for bit with other implementations or across GPUs, which sum in
+//     other orders.
 //   - Accuracy, for finite rows whose squares stay finite in f32 — every
 //     activation the listed models produce: each output within 2⁻¹⁸ of the
 //     same computation in f64, measured against the largest output of its
@@ -67,9 +68,8 @@ namespace frizzle::kernels {
 //     An encoder's (graph/encoder.h) take three more, each changing one
 //     launch's form and none of the decoder's:
 //       `scaled` (requires `add`): X multiplied by a scalar after the add
-//         and before the reduction — Gemma 4's layer output scale, which
-//         llama.cpp applies to the whole residual stream once a layer's last
-//         block is added;
+//         and before the reduction — Gemma 4's layer output scale, applied
+//         to the whole residual stream once a layer's last block is added;
 //       `normalize` (default true): false writes X after the add and
 //         nothing else — the add before the per-layer gate, which reads X;
 //       `rows_per_token` (default 1): a launch covers tokens ×
@@ -80,9 +80,8 @@ namespace frizzle::kernels {
 //     launch's form and none of the others':
 //       `post_scale` (requires `post_norm`): y, through its post-norm, times
 //         the constants' post_scale before the add — the half-step
-//         feed-forward's residual weight, 0.5: X + c × postnorm(y), as
-//         llama.cpp's gemma4a graph adds ggml_scale of the post-normed
-//         result. 1 elsewhere, and not applied.
+//         feed-forward's residual weight, 0.5: X + c × postnorm(y). 1
+//         elsewhere, and not applied.
 //       `renorm` (requires `add`): after the add, X replaced by its own
 //         norm with the layer's output gain, written back as X, and then,
 //         where the launch normalizes, normalized again with its gain into
@@ -162,8 +161,7 @@ namespace frizzle::kernels {
 // — y's scale is needed before X can be added to and reduced — 16 levels and
 // two inverse square roots.
 // Optimization (practice): the residual add and the gain ride in the norm's
-// launch, as vLLM's fused_add_rms_norm and llama.cpp's RMS_NORM + MUL + ADD
-// do, rather than in launches of their own (GPU.6).
+// launch, rather than in launches of their own (GPU.6).
 // Optimization (practice): the width fixed at pipeline creation, not read
 // from a uniform, so the loops run as many times as the row needs, not 4
 // (GDSA.6's whole-tile accounting: an inactive iteration still costs its
@@ -176,22 +174,19 @@ namespace frizzle::kernels {
 //     compatibility the harness requires only WebGPU's defaults and no
 //     optional feature (gpu/device_requirements.h), though the target
 //     itself offers subgroups. So the reduction is the tree above, 9 barriers,
-//     where the practice of llama.cpp's Metal kernel (simd_sum) and vLLM's
-//     (CUB's block reduce, over warp shuffles) — a subgroup sum, the partials
-//     through workgroup memory, a subgroup sum of those — needs 1.
+//     where a subgroup reduction — a subgroup sum, the partials through
+//     workgroup memory, a subgroup sum of those — needs 1.
 //   - WGSL zero-fills workgroup memory before a workgroup runs, so each one
 //     also stores its 1 KiB of partial sums and waits at one more barrier
 //     before Step 1, though the kernel writes every entry before reading it.
-// Within those limits the reduction follows the practice for a tree without
-// subgroups (Harris, "Optimizing Parallel Reduction in CUDA"): sequential
-// addressing, so active invocations stay contiguous (his kernel 3); each
-// invocation's own vec4s summed before the tree (4); several vec4s an
-// invocation for rows wider than 1,024 (7). His kernel 5, the last levels
-// run without barriers within a warp, is the subgroup sum above. And one
-// workgroup a row, one vec4 an invocation for Qwen3, as llama.cpp and vLLM
-// size theirs: a 4 KiB row split across workgroups would need a second
-// launch or atomics to combine its sums, slower for a decode step's one
-// row, not faster.
+// Within those limits the reduction is a tree without subgroups: sequential
+// addressing, so active invocations stay contiguous; each invocation's own
+// vec4s summed before the tree; several vec4s an invocation for rows wider
+// than 1,024. The last levels, run without barriers within a subgroup, are
+// the subgroup sum above. And one
+// workgroup a row, one vec4 an invocation for Qwen3: a 4 KiB row split
+// across workgroups would need a second launch or atomics to combine its
+// sums, slower for a decode step's one row, not faster.
 //
 // Verification the implementation is held to, on the GPU against an f64
 // reference: every variant, at the widths of the listed models; rows of

@@ -7,9 +7,8 @@
 // the turn ends Limit having emitted nothing, and the cache keeps the whole
 // prompt. A turn with a limit of 1 still emits its one draw, as before.
 //
-// Not locked: every other way a turn ends, which Charlotte's turn tests
-// covered and were not ported (runtime.h, Verification). Plain values, no
-// device.
+// Not locked: every other way a turn ends (runtime.h, Verification). Plain
+// values, no device.
 
 #include "core/runtime/turn.h"
 

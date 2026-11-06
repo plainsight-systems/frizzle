@@ -85,8 +85,8 @@
 //   - Cost, counted for Gemma 3 1B (not measured): in the step that ends
 //     the prompt, each local layer reads and writes 8 KiB, each global one
 //     512 KiB, 2.2 MiB in all, once a run; in a decode step, 26 dispatches
-//     each reading the step and stopping, about 40 µs a token at
-//     Charlotte's 1.5 µs a dispatch, an estimate.
+//     each reading the step and stopping, about 40 µs a token at about
+//     1.5 µs a dispatch, an estimate, not measured in Frizzle.
 //
 // Corpus guidance
 //   C++ performance guidelines

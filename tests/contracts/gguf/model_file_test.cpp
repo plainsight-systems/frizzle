@@ -5,8 +5,8 @@
 // in the browser only its front is held while the index is read.
 //
 // Inputs: tests/fixtures/gguf/, written by scripts/make_gguf_fixtures.py,
-// each malformed file one deliberate change from a valid one. Taken from
-// Charlotte e003048's reader tests, keeping the cases this contract names.
+// each malformed file one deliberate change from a valid one, for the cases
+// this contract names.
 //
 // Corpus guidance
 //   C++ Core Guidelines

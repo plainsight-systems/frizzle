@@ -23,7 +23,7 @@
 //      the record.
 //
 // Design and cost
-//   - Ported from Charlotte e003048's web/download.js, for one pinned model.
+//   - Built for one pinned model.
 //   - One pass over the bytes: each is hashed and written once, and no more
 //     than one chunk is held.
 

@@ -110,11 +110,10 @@ namespace frizzle::runtime {
 //     boundary's one crossing a token (WASM.2).
 //     Nothing is allocated a token.
 //
-//   - Verification: Charlotte's generator tests were not ported. In Frizzle
-//     the tokenizer suite (tests/contracts/tokenizer/) locks the encoding,
-//     and the replay and edits suite, planned (tests/README.md), runs turns
-//     through the engine; until it is built, only the native tool exercises
-//     the streaming.
+//   - Verification: the tokenizer suite (tests/contracts/tokenizer/) locks
+//     the encoding, and the replay and edits scenario
+//     (tests/integration/replay/, tests/README.md) runs turns through the
+//     engine and compares their text and identifiers.
 //
 // Corpus guidance
 //   C++ Core Guidelines

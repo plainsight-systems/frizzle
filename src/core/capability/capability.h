@@ -45,10 +45,9 @@ namespace frizzle::capability {
 //   2. If no row matches, it returns null.
 //
 // Design and cost
-//   - Changed from Charlotte e003048: the media-encoder and pre-tokenizer
-//     lookups, and every row for an architecture, format or tokenizer the
-//     pinned model does not use, are removed. Nothing in the ported code
-//     calls the removed lookups.
+//   - The tables hold a row only for an architecture, format or tokenizer
+//     the pinned model uses, and there is no media-encoder or pre-tokenizer
+//     lookup.
 //   - The tables are constexpr arrays of an identifier and a pointer to a
 //     constant: constant-initialized read-only data, with no work at startup
 //     and no dependence on another translation unit's initialization order.

@@ -16,9 +16,8 @@
 //   then compresses the last blocks.
 //
 // Design and cost
-//   - Ported from Charlotte e003048's web/sha256.js. One block's compression
-//     is the whole cost of hashing a file; it uses locals and one reused
-//     64-word schedule, allocating nothing an update.
+//   - One block's compression is the whole cost of hashing a file; it uses
+//     locals and one reused 64-word schedule, allocating nothing an update.
 //   - A byte count past 2^53 would lose precision; the model is 722 MB.
 
 const K = new Uint32Array([

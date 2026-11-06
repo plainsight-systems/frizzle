@@ -140,6 +140,8 @@ These are part of Frizzle and are named freely:
   generator and the test that compares against them, and the documents and
   scripts that say when that test runs.
 - The record of the port: the Charlotte inventory and `src/ported.json`.
+- How each frozen reference under `tests/fixtures/` was made: its generator
+  and where its inputs came from, so it can be made again.
 
 For every other source:
 
@@ -161,7 +163,9 @@ For every other source:
 - When the user accepts the slice, before it is committed, every `Source:`
   citation and omission note leaves the tree. A comment that explains what
   the code does or why stays, in our words, naming no source; a platform
-  fact is stated as the fact. The citations and omissions stay in the plan.
+  fact is stated as the fact. A number measured outside Frizzle is stated as
+  an estimate, not measured in Frizzle. The citations and omissions stay in
+  the plan.
 - Before every commit, `git grep -n -P '\bSource:' -- src tests tools app web
   cmake docs scripts` is empty, and so is a case-insensitive grep over the
   same paths, outside the files named above, for each source the slice plan

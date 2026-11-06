@@ -10,9 +10,8 @@
 //     silently; an abort rejects with the signal's own reason.
 //
 // Design
-//   Ported from Charlotte e003048's web/fetch.js, the whole-file download
-//   alone: Frizzle reads the file's front from its own copy, so no range
-//   requests.
+//   The whole-file download alone: Frizzle reads the file's front from its
+//   own copy, so no range requests.
 
 export type FetchReason = "network" | "not-found" | "needs-sign-in" | "http";
 

@@ -1,9 +1,8 @@
 <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Frizzle theme directions</title>
 <style>
-@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Regular.woff2) format('woff2');font-weight:400}
-@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Medium.woff2) format('woff2');font-weight:500}
-@font-face{font-family:"Plex Serif";src:url(../../../../dolittle/web/static/fonts/PlexSerif-Light.woff2) format('woff2');font-weight:300}
-@font-face{font-family:"Plex Mono";src:url(../../../../dolittle/web/static/fonts/PlexMono-Regular.woff2) format('woff2')}
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Regular.woff2) format('woff2');font-weight:400}
+@font-face{font-family:"Plex Serif";src:url(../../../app/src/theme/fonts/IBMPlexSerif-Medium.woff2) format('woff2');font-weight:500}
+@font-face{font-family:"Plex Mono";src:url(../../../app/src/theme/fonts/IBMPlexMono-Regular.woff2) format('woff2')}
 *{box-sizing:border-box}
 body{margin:0;font-family:"Plex Serif",Georgia,serif;background:#e9e6dc;color:#222}
 .switch{position:sticky;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:10px 16px;background:#e9e6dc;border-bottom:1px solid #cfcabd;font:13px "Plex Mono",monospace}
@@ -112,7 +111,7 @@ h3{font:12px "Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase
   </div>
 </div>
 <script>
-const notes={a:'Dolittle\'s shell as is: navy masthead, ivory pages, brass. Values as ink.',b:'From the banner: the app is the night scene; values glow amber like the grid lights.',c:'Printed matter: warm paper, values as halftone ink dots, a vermilion edit mark.'};
+const notes={a:'The family shell as is: navy masthead, ivory pages, brass. Values as ink.',b:'From the banner: the app is the night scene; values glow amber like the grid lights.',c:'Printed matter: warm paper, values as halftone ink dots, a vermilion edit mark.'};
 function rng(s){return function(){s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 const r=rng(3),vals=new Float32Array(6912);for(let i=0;i<6912;i++)vals[i]=Math.pow(r(),14)*1.7;vals[1768]=0;
 function css(n){return getComputedStyle(document.getElementById('theme')).getPropertyValue(n).trim()}

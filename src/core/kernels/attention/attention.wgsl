@@ -1,9 +1,9 @@
 // Axis E: changes with a new or optimized kernel.
 //
 // Attention (kernels/attention/attention.h). Two entry points share this
-// module: main, FlashAttention-2's online softmax over the layer's KV cache
-// in 64-key chunks fixed by position; and combine, which folds a split
-// step's chunks. Both fold chunks with the same functions, fold_factors,
+// module: main, an online softmax over the layer's KV cache in 64-key
+// chunks fixed by position; and combine, which folds a split step's
+// chunks. Both fold chunks with the same functions, fold_factors,
 // fold and finish, in chunk order, so a query's output is the same bits
 // however its step was shaped.
 //

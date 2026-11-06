@@ -179,15 +179,15 @@ namespace frizzle::runtime {
 //      the turn's message and tail are copied to outlive the read.
 //
 // Design and cost
-//   - The engine is the composition Charlotte's browser bindings made
-//     inline, as a class every host shares. It changes nothing ported but
+//   - The engine makes the composition once, as a class every host shares,
+//     not inline in each host's bindings. It changes nothing ported but
 //     where the ported header says (runtime.h's and generator.h's rewind,
 //     graph.h's edit launch).
 //   - The tokenizer and stops load before the upload begins, on the CPU,
-//     so every refusal begin_load names comes at once. Charlotte overlapped
-//     them with the device's buffer creation (20 to 56 ms, its bindings);
-//     not done here until it is measured to matter.
-//   - Settings: Charlotte never measured Gemma 3, so the load and turn
+//     so every refusal begin_load names comes at once. Overlapping them with
+//     the device's buffer creation, about 20 to 56 ms (an estimate, not
+//     measured in Frizzle), is not done until it is measured to matter.
+//   - Settings: Gemma 3 has not been measured, so the load and turn
 //     policies are policy.h's defaults for an unmeasured model; the tool
 //     prints what it ran with. Measuring is J's, still open.
 //   - State shared with in-flight callbacks (F.27), as the runtime's is: each

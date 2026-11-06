@@ -16,9 +16,8 @@
 //   2. If no row matches, it returns null.
 //
 // Design and cost
-//   - Changed from Charlotte e003048: only the rows the pinned Gemma 3 file
-//     needs remain (capability.h lists them), and the media-encoder and
-//     pre-tokenizer lookups are gone.
+//   - Only the rows the pinned Gemma 3 file needs are present (capability.h
+//     lists them), and there is no media-encoder or pre-tokenizer lookup.
 //   - Adding an implementation adds its file and one row here, and nothing
 //     else.
 //   - The tables are constexpr arrays of an identifier and a pointer to a

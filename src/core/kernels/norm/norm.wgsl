@@ -9,8 +9,8 @@
 //   rms(x)   = sqrt((x₁² + x₂² + … + xₙ²) / n + epsilon)
 //   normed   = (x / rms(x)) × g
 //
-// computed as x × r with r = inverseSqrt(mean of squares + epsilon), then × g,
-// llama.cpp's RMS_NORM then MUL. Where the launch adds, the block's output y
+// computed as x × r with r = inverseSqrt(mean of squares + epsilon), then × g:
+// normalize first, then the gain. Where the launch adds, the block's output y
 // is added into x first, x written back as the new hidden row; with Gemma 3's
 // post-norm, y is itself normalized, with its own gain, before the add; with
 // Gemma 4's layer output scale, x is multiplied by a scalar after the add.

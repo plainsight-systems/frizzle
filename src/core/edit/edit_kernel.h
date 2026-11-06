@@ -59,9 +59,9 @@
 //     scratch need of kMaxEdits edits (graph decoder_working_set); the
 //     engine writes it once before each run.
 //   - Cost when nothing is edited: 26 more dispatches in each step,
-//     one workgroup each, that read two words and stop. At Charlotte's
-//     measured 1.5 µs a dispatch in the browser (one machine), about 40 µs a
-//     token. Not measured against Gemma 3's decode step here.
+//     one workgroup each, that read two words and stop. At about 1.5 µs a
+//     dispatch (an estimate, not measured in Frizzle), about 40 µs a token.
+//     Not measured against Gemma 3's decode step.
 //   - That cost is not zero. Accepted by the user
 //     (docs/architecture/logical-overview.md, Edits): speed is not this
 //     demo's aim. The alternatives

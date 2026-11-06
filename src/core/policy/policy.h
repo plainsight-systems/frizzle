@@ -56,8 +56,8 @@ struct LoadPolicy {
   std::vector<std::string> stop;
 };
 
-// Defaults are llama.cpp's, the most widely exercised settings for models
-// without a card of their own.
+// Defaults are the most widely exercised sampling settings, for a model
+// without a card of its own.
 struct SamplingSettings {
   float temperature = kDefaultTemperature;
   std::uint32_t top_k = kDefaultTopK;
