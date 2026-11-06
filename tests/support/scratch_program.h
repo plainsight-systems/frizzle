@@ -87,7 +87,7 @@ class ScratchProgram {
     } ready;
     const gguf::TensorIndex index;
     residency::Upload::begin(
-        *device_, index, plan, 0, capability::find_format, {}, kChunk,
+        *device_, index, plan, 0, capability::find_format, kChunk,
         [](std::unique_ptr<residency::Upload> upload,
            residency::UploadError error, const char* subject, void* userdata) {
           auto& r = *static_cast<Ready*>(userdata);

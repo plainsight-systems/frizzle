@@ -498,10 +498,6 @@ std::string_view name(policy::CachePrecision precision) noexcept {
   switch (precision) {
     case policy::CachePrecision::F16:
       return "F16";
-    case policy::CachePrecision::BF16:
-      return "BF16";
-    case policy::CachePrecision::Q8_0:
-      return "Q8_0";
   }
   return "unknown";
 }

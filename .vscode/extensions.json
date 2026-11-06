@@ -1,7 +1,10 @@
 {
   "recommendations": [
-    "ms-vscode.cpptools",
+    "llvm-vs-code-extensions.vscode-clangd",
     "ms-vscode.cmake-tools",
     "wgsl-analyzer.wgsl-analyzer"
+  ],
+  "unwantedRecommendations": [
+    "ms-vscode.cpptools"
   ]
 }

@@ -92,7 +92,6 @@ add_library(frizzle_core STATIC
     src/core/kernels/rope/rope.cpp
     src/core/kernels/schedule.cpp
     src/core/kernels/topk/topk.cpp
-    src/core/residency/file_ranges.cpp
     src/core/residency/piece_writer.cpp
     src/core/residency/plan.cpp
     src/core/residency/routes.cpp

@@ -1,6 +1,14 @@
+// Axis D: changes with the WebGPU surface used to read buffers back, or how a
+// device reports their failure.
+//
+// Contract, algorithm, cost and corpus guidance: upload_check.h. This file
+// defines what that header states.
+
 #include "core/residency/upload_check.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <span>
 #include <utility>
 
 #include "core/gpu/callback_mode.h"
@@ -65,8 +73,9 @@ const Route* route_at(const Upload& upload, BufferIndex buffer,
                       std::uint64_t offset) {
   for (const Route& r : upload.routes()) {
     if (r.buffer == buffer && offset >= r.buffer_offset &&
-        offset - r.buffer_offset < r.length)
+        offset - r.buffer_offset < r.length) {
       return &r;
+    }
   }
   return nullptr;
 }
@@ -95,16 +104,22 @@ void compare(WGPUMapAsyncStatus status, Comparison& c) {
     c.accepted(s.failed, c.userdata);
     return;
   }
-  const auto* device = static_cast<const std::byte*>(range);
+  // The mapping holds every write's range, back to back, c.bytes in all.
+  const std::span<const std::byte> device(static_cast<const std::byte*>(range),
+                                          static_cast<std::size_t>(c.bytes));
   std::uint64_t at = 0;
   for (const Write& w : c.writes) {
     // A write may span pieces (piece_writer.h): the first differing byte
     // of each is reported, so every tensor a write covers is named.
-    const auto* held = device + at;
+    const auto held =
+        device.subspan(static_cast<std::size_t>(at), w.bytes.size());
     std::uint64_t i = 0;
     while (i < w.bytes.size()) {
       const auto from = w.bytes.begin() + static_cast<std::ptrdiff_t>(i);
-      const auto mine = std::mismatch(from, w.bytes.end(), held + i).first;
+      const auto mine =
+          std::mismatch(from, w.bytes.end(),
+                        held.begin() + static_cast<std::ptrdiff_t>(i))
+              .first;
       if (mine == w.bytes.end()) break;
       const std::uint64_t offset =
           w.offset + static_cast<std::uint64_t>(mine - w.bytes.begin());
@@ -128,7 +143,7 @@ UploadCheck::UploadCheck(const Upload& upload, std::size_t max_chunk)
     : instance_(gpu::retain(upload.instance())),
       device_(gpu::retain(upload.device())),
       upload_(upload),
-      writer_(upload.routes(), max_chunk, upload.ranges()),
+      writer_(upload.routes(), max_chunk),
       pending_(std::make_shared<CheckState>()) {
   CheckState& s = *pending_;
   s.instance = gpu::retain(upload.instance());
@@ -189,7 +204,9 @@ void UploadCheck::check(std::uint64_t file_offset,
   s.comparing = true;
   auto record = std::make_unique<Comparison>(Comparison{
       pending_, &upload_, std::exchange(writes_, {}), at, accepted, userdata});
-  WGPUBufferMapCallbackInfo info = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+  // Value-initialized, every field set below: the _INIT macro casts 0 to the
+  // callback mode, which is no mode at all.
+  WGPUBufferMapCallbackInfo info{};
   info.mode = gpu::kCallbackMode;
   info.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* userdata1,
                      void*) {
@@ -211,10 +228,12 @@ void UploadCheck::check(std::uint64_t file_offset,
 CheckError UploadCheck::finish(std::uint64_t file_size) {
   CheckState& s = *pending_;
   // A chunk still being compared is not yet compared.
-  if (s.failed == CheckError::Ok && s.comparing)
+  if (s.failed == CheckError::Ok && s.comparing) {
     s.failed = CheckError::Unfinished;
-  if (s.failed == CheckError::Ok)
+  }
+  if (s.failed == CheckError::Ok) {
     s.failed = from_write(writer_.finish(file_size));
+  }
   return s.failed;
 }
 

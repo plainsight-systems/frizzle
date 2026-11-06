@@ -21,8 +21,8 @@ What it does, in order; each step fails by name:
      clang 21 does not take them all) dropped; container paths moved to the
      repository and the header copy, with clang's own headers as its
      resource directory. Written to ignored
-     build/wasm-editor/compile_commands.json, which .vscode/settings.json
-     lists after the native database.
+     build/wasm-editor/compile_commands.json, which .clangd names for
+     src/wasm/.
   3. Runs every rewritten command with -fsyntax-only. A file that does not
      compile there fails the run, so the editor is never handed a database
      it cannot follow.

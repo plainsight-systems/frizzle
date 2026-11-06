@@ -1,17 +1,10 @@
 {
-  "C_Cpp.default.compileCommands": [
-    "${workspaceFolder}/build/native-debug/compile_commands.json",
-    "${workspaceFolder}/build/wasm-editor/compile_commands.json"
-  ],
-  "C_Cpp.default.cppStandard": "c++23",
-  "C_Cpp.default.includePath": [
-    "${workspaceFolder}/src",
-    "${workspaceFolder}/build/native-debug/generated"
-  ],
-  "C_Cpp.clang_format_path": "${workspaceFolder}/scripts/clang-format",
-  "C_Cpp.clang_format_style": "file",
+  "clangd.path": "${workspaceFolder}/scripts/clangd",
+  "clangd.arguments": ["--clang-tidy", "--header-insertion=never"],
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "C_Cpp.formatting": "disabled",
   "[cpp]": {
-    "editor.defaultFormatter": "ms-vscode.cpptools",
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
     "editor.formatOnSave": true
   },
   "files.associations": {

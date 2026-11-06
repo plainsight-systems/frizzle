@@ -165,17 +165,8 @@ std::string fit_failure(const residency::PlanResult& r,
     case PlanError::ScratchExceedsBinding:
       return "the " + r.subject +
              " working buffer is wider than one storage binding";
-    case PlanError::UnsupportedCachePrecision:
-      return "the cache precision cannot store the head dimension of " +
-             r.subject;
     case PlanError::Overflow:
       return "sizes overflow (" + r.subject + ")";
-    case PlanError::MissingTensorBytes:
-      return r.subject + " lies outside the bytes the load reads";
-    case PlanError::UnboundSpan:
-      return r.subject +
-             " and the bounds its product reads cannot share one storage "
-             "binding";
   }
   return "unknown";
 }
@@ -594,7 +585,7 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
   s.phase = Phase::Beginning;
   s.call_pending = true;
   residency::Upload::begin(*s.device, index, plan, front.size(),
-                           capability::find_format, {}, max_chunk, on_ready,
+                           capability::find_format, max_chunk, on_ready,
                            gpu::hand_off(std::make_unique<LoadCall>(
                                LoadCall{state_, ready, userdata})));
   return {};

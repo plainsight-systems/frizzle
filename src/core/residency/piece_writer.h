@@ -12,98 +12,131 @@
 
 namespace frizzle::residency {
 
-// Axis D: changes with the WebGPU surface or the limits a device grants.
+// Axis D: changes with how the file's bytes reach the buffers the plan lays
+// out.
 //
 // Turns the file, as it arrives in chunks, into the writes that fill the
-// planned buffers. A deterministic state machine with no I/O: it holds no GPU
-// object and says what to write, not how; upload issues each write as one
-// wgpuQueueWriteBuffer (upload.h), and every rule here is tested without a
-// device. The same chunks always give the same writes, so the diagnostic
-// check runs it again to know what the device should hold (upload_check.h).
+// planned weight buffers, each piece in its format's device layout. A
+// deterministic state machine with no I/O and no GPU object: it says what to
+// write, not how. Upload issues each write as one wgpuQueueWriteBuffer
+// (upload.h); the diagnostic check runs a second writer over the same routes
+// to know what the device should hold (upload_check.h).
 //
-//   - Chunks arrive in order, of any size; a block, a row or a piece may
-//     span chunks. The bytes of a block cut off at a chunk's end are held
-//     until the next chunk completes it — never more than one block (210
-//     bytes, Q6_K's), so what is held does not grow with the file.
-//   - A chunk's whole blocks of a piece are laid out as the piece's device
-//     layout says: each stream's run of fields, contiguous, the blocks
-//     repacked first by a layout that repacks (device_layout.h). A piece in
-//     a 16 MiB chunk takes one run per stream, not one per block.
-//   - A chunk's writes are issued in device order, and a run that continues
-//     the write before it, in the same buffer, joins it rather than starting
-//     its own: the streams of a piece the chunk holds whole, and the pieces
-//     the plan packs back to back into one buffer. Padding is joined only
-//     if every buffer's pieces lie in route order, each after the one
-//     before it — checked once, at construction — so that the gap between
-//     two consecutive pieces of a buffer holds no other piece; and only
-//     between a piece the chunk finished and the next piece's first run, at
-//     most kMaxJoinedPadding bytes. The join writes the gap as zeros, which
-//     is what WebGPU created it holding, so the buffer ends byte for byte as
-//     it would without the join. A gap inside a piece, which a later chunk
-//     fills, is never joined. A chunk takes a write for each buffer it
-//     reaches, and one more for each stream of a piece it cuts, rather than
-//     one for each stream of every piece: Qwen3 0.6B's 567 writes become 78.
-//     Optimization (browser): every write crosses into the browser and is
-//     validated there (WASM.2), about half a millisecond a call in the desktop
-//     app's Chromium on the target whatever its length, so the writes scale
-//     with buffers and cut pieces, not with streams or tensors. Qwen3 0.6B from
-//     the browser's cache, warm, release module, the desktop app's Chromium
-//     152, Apple M3 Max, medians of six runs before and twelve after: the
-//     worker's load 174 -> 119 ms, the page's 198 -> 140 ms.
-//   - Every run is copied into staging, even one already in device order
-//     (F32): a layout whose one stream is its whole block is copied as one
-//     memcpy, which costs far less than the write it would otherwise take
-//     on its own.
+// Contract
+//   - PieceWriter(routes, max_chunk): `routes` in file order, as plan_routes
+//     gives them, outliving the writer; `max_chunk` the largest chunk accept
+//     will be given. Allocates its staging once, staging_bound(routes,
+//     max_chunk) bytes, and never grows it.
+//   - accept(file_offset, chunk, out): appends to `out` the writes the chunk
+//     completes. Chunks arrive in order, each starting where the last ended,
+//     of any size up to max_chunk; a block, a row or a piece may span chunks.
+//     A chunk out of order is OutOfOrder, one larger than max_chunk
+//     ChunkTooLarge; on either, `out` is left as it was.
+//   - finish(file_size): Ok only if the chunks reached `file_size` and every
+//     route was filled; otherwise Unfinished.
+//   - The first failure, Unfinished included, is final: every later accept
+//     and finish returns it and writes nothing.
+//   - A Write's bytes borrow the writer's staging: valid until the next call
+//     to accept. Ownership never passes to the caller.
 //   - Every write starts on a 4-byte boundary and is a multiple of 4 bytes
-//     long, as writeBuffer requires. A stream's run that ends partway through
-//     a word holds back those bytes for the next chunk; the run that ends the
-//     piece is padded with zeros to the word, which the piece's bound length
-//     covers.
-//   - Writes are made from one staging area, allocated once and reused: the
-//     heap holds a chunk and its staging, whatever the file (WASM.1, WASM.9,
-//     MEM.9). Its size is proved from the routes, not guessed: what one chunk
-//     stages is at most the chunk itself, plus one block held over from the
-//     chunk before, plus, for each route the chunk reaches, up to 3 bytes
-//     held back and 3 bytes of padding in each of its streams and the
-//     padding joined before it. Every route could end inside one chunk — a
-//     file of adjacent one-block tensors does — so the bound counts all of
-//     them:
+//     long, as writeBuffer requires, and lies inside its piece's bound range
+//     or the plan's padding before it.
+//   - Once every chunk is accepted, each piece's range holds, for each of its
+//     layout's streams in order, that field of every block in block order,
+//     the last stream's run padded with zeros to the word
+//     (formats/device_layout.h). Bytes outside every route (the header, the
+//     padding between tensors) are skipped.
+//   - The same chunks, of the same sizes, give the same writes.
+//
+// Algorithm, one chunk
+//   1. Check the chunk's size and that it starts at the next expected offset.
+//   2. Walk the routes from the first unfilled one while bytes remain: skip
+//      to the route's next byte (its first block, plus blocks done, plus any
+//      held bytes); take the chunk's bytes up to the route's end.
+//   3. If part of a block was held from the last chunk, complete it from the
+//      front; if the chunk ends first, hold the bytes and go on.
+//   4. Lay out the held block and the whole blocks that follow
+//      (write_blocks):
+//        a. if this piece follows one this call finished, in the same buffer,
+//           at most kMaxJoinedPadding bytes on, with every buffer's pieces in
+//           route order (checked once, at construction), stage that gap as
+//           zeros and emit it;
+//        b. for each stream s: stage its tail (bytes held back from its last
+//           write), then field s of every block, at width w_s each;
+//        c. emit each stream's run: when the piece is finished, padded with
+//           zeros to the word; otherwise its whole words, holding back the
+//           rest as the stream's tail. The device offset is the piece's offset
+//           + Σ earlier streams' widths × the piece's blocks + blocks done ×
+//           w_s − the tail's length.
+//      emit joins a write to the last one when it continues it both in the
+//      buffer and in staging.
+//   5. Hold what is left, less than a block, for the next chunk.
+//
+// Design and cost
+//   - What is held between chunks is at most one block (34 bytes, Q8_0's)
+//     and up to 3 bytes for each stream: it does not grow with the file.
+//   - Writes, not blocks, are the unit of cost: each crosses into the browser
+//     and is validated there, about half a millisecond a call whatever its
+//     length (an estimate, not measured in Frizzle). A chunk takes a write
+//     for each buffer it reaches and one more for each stream of a piece it
+//     cuts, rather than one for each stream of every piece: within a buffer,
+//     a finished piece's streams are contiguous and the plan's padding to
+//     the next piece, under 256 bytes, is written as zeros, so they join. The
+//     zeros are what WebGPU created the buffer holding, so the buffer ends
+//     byte for byte as it would without the join. A gap inside a piece,
+//     which a later chunk fills, is never joined. Gemma 3 1B, counted: 342
+//     pieces, 527 stream runs (two for each of 185 quantized pieces, one for
+//     each of 157 F32 norms), streamed in 44 chunks of 16 MiB.
+//   - Every run is copied into staging, even one already in device order
+//     (F32): a layout whose one stream is its whole block is copied whole,
+//     which costs far less than the write it would otherwise take on its own.
+//   - Optimization: one staging area, allocated once and reused, so the heap
+//     holds a chunk and its staging whatever the file's size. Its size is
+//     proved from the routes: one chunk stages at most the chunk itself, plus
+//     one block held over, plus, for each route the chunk reaches, up to 3
+//     bytes held back and 3 of padding in each stream and the padding joined
+//     before it. Every route could end inside one chunk (a file of adjacent
+//     one-block tensors does), so the bound counts them all:
 //       max_chunk + kMaxBlockBytes + routes × (kMaxStreams × 6 +
 //       kMaxJoinedPadding),
-//     95,970 bytes beyond the chunk for Gemma 3's 342 routes. A native test
-//     drives the case the bound is set by — a full chunk that completes a
-//     held block, then many adjacent one-block routes, each padded and
-//     joined — and checks what it staged against the bound.
-//   - Bytes outside every route — the header, the padding between tensors —
-//     are skipped. A chunk that does not start where the last one ended, or
-//     the file ending with a route unfilled, is a named failure.
+//     91,690 bytes beyond the chunk for Gemma 3 1B's 342 routes, counted.
+//     Taking more than the bound aborts (piece_writer.cpp, take): the proof
+//     would be wrong.
+//   - Verification: nothing tests the writer alone, the staging bound
+//     included. The oracle and replay stream the pinned model through it and
+//     check what the model then computes.
 //
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     C.2    Use class if the class has an invariant — the members below, and
-//            the invariant each keeps.
-//     E.4    Design your error-handling strategy around invariants — after a
-//            failure the writer accepts nothing, so no write follows a broken
-//            invariant.
-//     E.27   Use error codes systematically — WriteError.
-//     R.14   Prefer span to pointer and count — chunks in, writes out.
+//     C.2    A class with an invariant: the members below, each with the
+//            invariant it keeps.
+//     E.4    Error handling around invariants: after a failure the writer
+//            accepts nothing, so no write follows a broken invariant.
+//     E.27   Error codes systematically: WriteError.
+//     R.14   Prefer span: chunks in, writes out, routes held, as spans.
+//     I.11   Never transfer ownership by a raw pointer or reference: a
+//            Write's span borrows staging the writer keeps.
+//     SL.con.3 Avoid bounds errors: blocks and staging are reached through
+//            spans, a stream's state with at(), never by pointer arithmetic.
+//     ES.45  Avoid magic constants: the bytes held back and padded in each
+//            stream, and the field widths copied at a fixed size, are named.
+//     ES.46  Avoid narrowing conversions: offsets into staging are sizes.
+//     ES.75  Avoid do-statements: the walk past empty routes is a while.
+//     Enum.7 Specify an enumeration's underlying type only when necessary:
+//            WriteError takes one byte, the smallest that holds it.
 //   C++ performance guidelines
-//     WASM.1 Size linear memory to the real high-water mark — one chunk and
-//            its staging, allocated once.
-//     WASM.2 Batch work across the JS boundary — writes joined across
-//            streams and pieces, never one per block. Its caveat, that a
-//            batch blurs which item failed, is met for content only: the
-//            diagnostic check names each piece whose bytes differ
-//            (upload_check.h). A write the browser rejects is still
-//            reported for its chunk as a whole.
-//     WASM.9 Stream in bounded chunks — what is held is at most one block.
-//     MEM.9  Allocate at init, not in steady state — the staging area.
-//     CDSA.32 Transform static data once into the layout its consumer reads —
-//            this is that transform. Its caveat, that a load-time transform
-//            doubles peak memory while source and result coexist, is met by
-//            transforming a chunk at a time; and its conversion is tested
-//            against the untransformed reference: every stream's bytes,
-//            gathered back, are the stored blocks' fields in block order.
+//     WASM.1 Size the heap to the high-water mark: one chunk and its staging,
+//            the staging allocated once at its proved bound.
+//     WASM.2 Move a phase per crossing: writes joined across streams and
+//            pieces, never one a block. Its caveat, that a batch blurs which
+//            item failed, holds: a write the browser rejects is reported for
+//            its chunk as a whole (upload.h).
+//     WASM.9 Stream in bounded chunks: what is held is at most one block.
+//     MEM.9  Allocate at init, not in steady state: the staging area.
+//     CDSA.32 Transform static data once into the layout its consumer reads:
+//            this is that transform, a chunk at a time, so source and result
+//            never coexist whole. Its conversion is not tested against the
+//            stored blocks alone; the oracle's logits cover it end to end.
 
 // One write: `bytes` at `offset` in `buffer`. The span borrows, never owns:
 // it points into the writer's staging, valid until the next call to accept.
@@ -116,10 +149,10 @@ struct Write {
   std::span<const std::byte> bytes;
 };
 
-enum class WriteError {
+// One byte, all its values need: returned, never stored or sent as a number.
+enum class WriteError : std::uint8_t {
   Ok,
-  OutOfOrder,     // a chunk did not start where the last one ended, or the next
-                  // range began, or crossed a range's end
+  OutOfOrder,     // a chunk did not start where the last one ended
   ChunkTooLarge,  // larger than the staging the writer was given
   Unfinished,     // the file ended before every route was filled
 };
@@ -136,36 +169,37 @@ class PieceWriter {
   [[nodiscard]] static constexpr std::size_t staging_bound(
       std::size_t routes, std::size_t max_chunk) noexcept {
     return max_chunk + formats::kMaxBlockBytes +
-           routes * (formats::kMaxStreams * 6 + kMaxJoinedPadding);
+           routes * (formats::kMaxStreams * (kMaxTailBytes + kMaxRunPadding) +
+                     kMaxJoinedPadding);
   }
 
   // `routes` in file order, as plan_routes gives them; `max_chunk` the
-  // largest chunk accept will be given; `ranges` the bytes the load reads
-  // (file_ranges.h), which check_ranges accepted — empty for the whole
-  // file. Precondition: `routes` outlives the writer.
-  PieceWriter(std::span<const Route> routes, std::size_t max_chunk,
-              std::span<const FileRange> ranges = {});
+  // largest chunk accept will be given. Precondition: `routes` outlives the
+  // writer.
+  PieceWriter(std::span<const Route> routes, std::size_t max_chunk);
 
   // The writes the chunk at `file_offset` completes, appended to `out`. On
   // failure `out` is left as it was and the writer accepts nothing more.
-  // Chunks are contiguous within a range; once a range's last byte has
-  // come, the next chunk starts the next range, and none crosses a range's
-  // end.
   [[nodiscard]] WriteError accept(std::uint64_t file_offset,
                                   std::span<const std::byte> chunk,
                                   std::vector<Write>& out);
 
   // Called once the file has ended at `file_size`: Unfinished unless the
-  // chunks reached it — the last range's end, for a load of ranges — and
-  // every route was filled. Unfinished is a failure like the others: from
-  // then on accept refuses every chunk.
+  // chunks reached it and every route was filled. Unfinished is a failure like
+  // the others: from then on accept refuses every chunk.
   [[nodiscard]] WriteError finish(std::uint64_t file_size);
 
  private:
+  // The most bytes of a stream's run held back, because it ended partway
+  // through a word, and the most zeros that pad a finished run to the word:
+  // each one less than a word's 4 bytes.
+  static constexpr std::size_t kMaxTailBytes = 3;
+  static constexpr std::size_t kMaxRunPadding = 3;
+
   // Bytes of one stream's run held back because it ended partway through a
   // word; they lead that stream's next write.
   struct Tail {
-    std::array<std::byte, 3> bytes{};
+    std::array<std::byte, kMaxTailBytes> bytes{};
     std::uint8_t count = 0;
   };
 
@@ -190,9 +224,6 @@ class PieceWriter {
   std::size_t route_ = 0;          // the first route not yet filled
   std::uint64_t blocks_done_ = 0;  // of route_, the blocks already written
   std::uint64_t next_offset_ = 0;  // where the next chunk must start
-  std::vector<FileRange>
-      ranges_;             // the bytes the load reads; empty for the whole file
-  std::size_t range_ = 0;  // the range the next chunk lies in
   // A block of route_ cut off at the last chunk's end: fewer than its
   // layout's block_bytes, so never more than kMaxBlockBytes - 1.
   std::array<std::byte, formats::kMaxBlockBytes> held_{};

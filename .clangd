@@ -1,0 +1,17 @@
+# clangd: the language server VS Code runs (.vscode/settings.json), LLVM
+# 21.1.8 as scripts/tooling.py pins it, started through scripts/clangd. It
+# compiles each file as the native-debug build does, from that build's
+# compilation database (configure native-debug first: scripts/README.md,
+# Building), checks it with .clang-tidy's checks as scripts/check.py tidy
+# does, all but the static analyzer's, which clangd does not run, and formats
+# it with .clang-format. Unlike check.py, it also reports findings in ported
+# files unchanged since porting.
+CompileFlags:
+  CompilationDatabase: build/native-debug
+---
+# The browser-only C++ (src/wasm/) has no entry in the native database;
+# scripts/editor_wasm.py writes one for the host's clang.
+If:
+  PathMatch: src/wasm/.*
+CompileFlags:
+  CompilationDatabase: build/wasm-editor

@@ -48,16 +48,19 @@ namespace and macro prefix, formats C++, and writes the manifest. It never
 overwrites a file that has changed since it was ported. `--verify` redoes the
 port in memory and checks the manifest against it.
 
-`scripts/clang-format` is the editor's formatter: it forwards to the same
-pinned binary and fails if it is missing.
+`scripts/clangd` starts the editor's language server (`.vscode/settings.json`)
+from the same pinned LLVM and fails if it is missing. `.clangd` points it at
+the native-debug database, so the editor compiles, analyzes and formats each
+file as the checks do, except that it runs no static analyzer and also
+reports files the checks skip (unchanged ports, `src/wasm/`).
 
 `editor_wasm.py` gives the editor the browser-only C++ (`src/wasm/`), which
 the native database cannot hold. It configures the wasm-release preset in the
 pinned container (which exports that build's database), copies the
 container's headers into ignored `.cache/emsdk-6.0.8/`, and rewrites the
 browser-only entries as commands for the pinned clang++ in ignored
-`build/wasm-editor/compile_commands.json`, which `.vscode/settings.json`
-lists after the native database. It parses every rewritten file with
+`build/wasm-editor/compile_commands.json`, which `.clangd` names for
+`src/wasm/`. It parses every rewritten file with
 `-fsyntax-only` and fails if one does not compile, so the editor never reads
 a database it cannot follow. The module is still built only by em++ in the
 container. Run it after a wasm build, and again when the image or the

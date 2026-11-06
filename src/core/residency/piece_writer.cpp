@@ -1,9 +1,16 @@
+// Axis D: changes with how the file's bytes reach the buffers the plan lays
+// out.
+//
+// Contract, algorithm, cost and corpus guidance: piece_writer.h. This file
+// defines what that header states.
+
 #include "core/residency/piece_writer.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 #include "core/gguf/checked.h"
 
@@ -24,32 +31,36 @@ std::uint64_t stream_start(const DeviceLayout& layout, std::size_t s,
   return before * blocks;
 }
 
-// Copies one field of every block in `run` into `out`, back to back, and
-// returns the bytes copied.
+// Copies field `stream`, Width bytes wide, of every block in `run` into
+// `out`, back to back, and returns the bytes copied.
 template <std::size_t Width>
 std::size_t gather_fixed(std::span<const std::byte> run,
-                         std::size_t block_bytes, std::size_t offset,
+                         std::size_t block_bytes, formats::Stream stream,
                          std::span<std::byte> out) {
-  std::byte* to = out.data();
-  for (std::size_t b = 0; b < run.size(); b += block_bytes, to += Width) {
-    std::memcpy(to, run.data() + b + offset, Width);
+  std::size_t at = 0;
+  for (std::size_t b = 0; b < run.size(); b += block_bytes, at += Width) {
+    std::memcpy(out.subspan(at, Width).data(),
+                run.subspan(b + stream.offset, Width).data(), Width);
   }
-  return static_cast<std::size_t>(to - out.data());
+  return at;
 }
 
-// Optimization (practice): every field a listed layout has is one of these
-// widths, so its copy has a size the compiler knows and inlines as a few
-// loads and stores. Copied at a width known only at run time, each field
-// was a call to memcpy: 21 million calls a stream for a Q4_0 model's
-// weights. GDSA.6 prices this stage against memcpy of the same bytes, which
-// a gather of small fields can reach about half of. make bench
-// (bench/piece_writer_bench.cpp), 360 MiB, native release, Apple M3 Max:
-//   Q4_0  83.3 ms (4.5 GB/s)  ->  11.9 ms (31.8 GB/s)
-//   Q4_1 101.4 ms (3.7 GB/s)  ->  11.1 ms (34.2 GB/s)
-//   Q8_0  49.6 ms (7.6 GB/s)  ->  10.7 ms (35.4 GB/s)
-//   Q6_K  33.2 ms (11.4 GB/s) ->  13.7 ms (27.6 GB/s), before Q6_K was
-//         repacked instead (formats/q6_k/q6_k_repack.cpp)
-//   memcpy of the same bytes: 63 GB/s
+// The field widths the listed layouts have (formats/device_layout.h): a
+// scale; Q4_1's scale and minimum; Q4_0's and Q4_1's 32 four-bit codes;
+// Q8_0's 32 one-byte codes.
+constexpr std::size_t kScaleWidth = 2;
+constexpr std::size_t kScaleAndMinimumWidth = 4;
+constexpr std::size_t kNibbleCodesWidth = 16;
+constexpr std::size_t kByteCodesWidth = 32;
+
+// Optimization: every field a listed layout has is one of these widths, so
+// its copy has a size the compiler knows and inlines as a few loads and
+// stores. Copied at a width known only at run time, each field would be a
+// call to memcpy: Gemma 3 1B's Q4_0 weights are 21,058,560 blocks, counted,
+// so as many calls a stream. For about 360 MiB of Q4_0 blocks, natively,
+// the fixed widths take this stage from about 83 ms to about 12 ms, about
+// half the speed of memcpy over the same bytes: an estimate, not measured
+// in Frizzle.
 std::size_t gather(std::span<const std::byte> run, std::size_t block_bytes,
                    formats::Stream stream, std::span<std::byte> out) {
   // A stream that is the whole block (F32) is the run itself, in order.
@@ -59,25 +70,23 @@ std::size_t gather(std::span<const std::byte> run, std::size_t block_bytes,
     return run.size();
   }
   switch (stream.width) {
-    case 2:
-      return gather_fixed<2>(run, block_bytes, stream.offset, out);
-    case 4:
-      return gather_fixed<4>(run, block_bytes, stream.offset, out);
-    case 16:
-      return gather_fixed<16>(run, block_bytes, stream.offset, out);
-    case 32:
-      return gather_fixed<32>(run, block_bytes, stream.offset, out);
-    case 64:
-      return gather_fixed<64>(run, block_bytes, stream.offset, out);
-    case 128:
-      return gather_fixed<128>(run, block_bytes, stream.offset, out);
+    case kScaleWidth:
+      return gather_fixed<kScaleWidth>(run, block_bytes, stream, out);
+    case kScaleAndMinimumWidth:
+      return gather_fixed<kScaleAndMinimumWidth>(run, block_bytes, stream, out);
+    case kNibbleCodesWidth:
+      return gather_fixed<kNibbleCodesWidth>(run, block_bytes, stream, out);
+    case kByteCodesWidth:
+      return gather_fixed<kByteCodesWidth>(run, block_bytes, stream, out);
     default:
       break;  // a width no listed layout has: copied as it comes
   }
   std::size_t at = 0;
   for (std::size_t b = 0; b < run.size();
        b += block_bytes, at += stream.width) {
-    std::memcpy(out.data() + at, run.data() + b + stream.offset, stream.width);
+    std::memcpy(out.subspan(at, stream.width).data(),
+                run.subspan(b + stream.offset, stream.width).data(),
+                stream.width);
   }
   return at;
 }
@@ -96,13 +105,10 @@ std::span<std::byte> take(std::span<std::byte> staging, std::size_t& staged,
 
 }  // namespace
 
-PieceWriter::PieceWriter(std::span<const Route> routes, std::size_t max_chunk,
-                         std::span<const FileRange> ranges)
+PieceWriter::PieceWriter(std::span<const Route> routes, std::size_t max_chunk)
     : routes_(routes),
       max_chunk_(max_chunk),
-      ranges_(ranges.begin(), ranges.end()),
       staging_(staging_bound(routes.size(), max_chunk)) {
-  if (!ranges_.empty()) next_offset_ = ranges_[0].begin;
   while (route_ < routes_.size() && routes_[route_].blocks == 0) ++route_;
   // Where each buffer's pieces have reached, walking the routes in order.
   std::vector<std::uint64_t> reached;
@@ -120,15 +126,8 @@ WriteError PieceWriter::accept(std::uint64_t file_offset,
   if (failed_ != WriteError::Ok) return failed_;
   if (chunk.size() > max_chunk_) return failed_ = WriteError::ChunkTooLarge;
   std::uint64_t end = 0;
-  if (!ranges_.empty() && next_offset_ == ranges_[range_].end &&
-      range_ + 1 < ranges_.size()) {
-    // The last chunk ended its range: the next starts the next range.
-    ++range_;
-    next_offset_ = ranges_[range_].begin;
-  }
   if (file_offset != next_offset_ ||
-      !gguf::checked_add(file_offset, chunk.size(), end) ||
-      (!ranges_.empty() && end > ranges_[range_].end)) {
+      !gguf::checked_add(file_offset, chunk.size(), end)) {
     return failed_ = WriteError::OutOfOrder;
   }
 
@@ -156,7 +155,8 @@ WriteError PieceWriter::accept(std::uint64_t file_offset,
     if (held_count_ > 0) {
       const auto fill =
           std::min<std::size_t>(block_bytes - held_count_, bytes.size());
-      std::copy_n(bytes.begin(), fill, held_.begin() + held_count_);
+      std::copy_n(bytes.begin(), fill,
+                  std::span(held_).subspan(held_count_).begin());
       held_count_ += fill;
       bytes = bytes.subspan(fill);
       if (held_count_ < block_bytes) continue;  // the chunk ended inside it
@@ -196,55 +196,51 @@ void PieceWriter::write_blocks(std::span<const std::byte> held,
   // Each stream's run: the bytes its tail held back, then its fields of
   // these blocks, in staging. The areas are taken in stream order, so a
   // stream's write can join the one before it.
+  struct Run {
+    std::span<std::byte> area;  // in staging
+    std::uint64_t device = 0;   // where it starts in the piece's buffer
+    std::size_t length = 0;     // its bytes, before padding to the word
+  };
   const std::size_t streams = layout.streams.size();
-  std::array<std::span<std::byte>, formats::kMaxStreams> areas{};
-  std::array<std::uint64_t, formats::kMaxStreams> devices{};
-  std::array<std::uint64_t, formats::kMaxStreams> lengths{};
+  std::array<Run, formats::kMaxStreams> runs{};
   for (std::size_t s = 0; s < streams; ++s) {
     const formats::Stream stream = layout.streams[s];
-    const Tail& tail = tails_[s];
+    const Tail& tail = tails_.at(s);
+    Run& run = runs.at(s);
     // The tail holds the run's bytes past its last whole word, so the
     // write starts on the word they begin.
-    devices[s] = route.buffer_offset + stream_start(layout, s, route.blocks) +
+    run.device = route.buffer_offset + stream_start(layout, s, route.blocks) +
                  blocks_done_ * stream.width - tail.count;
-    lengths[s] = tail.count + count * stream.width;
-    areas[s] = take(staging_, staged, round_up4(lengths[s]));
-    std::copy_n(tail.bytes.begin(), tail.count, areas[s].begin());
+    run.length = tail.count + static_cast<std::size_t>(count * stream.width);
+    run.area = take(staging_, staged, round_up4(run.length));
+    std::copy_n(tail.bytes.begin(), tail.count, run.area.begin());
   }
-  if (layout.repack != nullptr) {
-    std::array<std::byte*, formats::kMaxStreams> to{};
-    for (std::size_t s = 0; s < streams; ++s)
-      to[s] = areas[s].data() + tails_[s].count;
-    for (const auto run : {held, blocks}) {
-      layout.repack(run, to);
-      for (std::size_t s = 0; s < streams; ++s)
-        to[s] += run.size() / block_bytes * layout.streams[s].width;
-    }
-  } else {
-    for (std::size_t s = 0; s < streams; ++s) {
-      std::size_t at = tails_[s].count;
-      for (const auto run : {held, blocks})
-        at += gather(run, block_bytes, layout.streams[s], areas[s].subspan(at));
+  for (std::size_t s = 0; s < streams; ++s) {
+    const Run& run = runs.at(s);
+    std::size_t at = tails_.at(s).count;
+    for (const auto part : {held, blocks}) {
+      at += gather(part, block_bytes, layout.streams[s], run.area.subspan(at));
     }
   }
 
   for (std::size_t s = 0; s < streams; ++s) {
-    Tail& tail = tails_[s];
-    const auto area = areas[s];
-    const std::uint64_t length = lengths[s];
-    std::uint64_t written = length;
+    Tail& tail = tails_.at(s);
+    const Run& run = runs.at(s);
+    // The run that ends the piece is written whole, padded to the word,
+    // which the piece's bound length covers (device_layout.h); any other
+    // only to its last whole word, the rest held back as the tail.
+    const std::size_t written = finished ? run.area.size() : run.length / 4 * 4;
     if (finished) {
-      // The run that ends the piece is padded to the word; the piece's
-      // bound length covers it (device_layout.h).
-      std::fill(area.begin() + length, area.end(), std::byte{0});
-      written = area.size();
+      std::ranges::fill(run.area.subspan(run.length), std::byte{0});
       tail.count = 0;
     } else {
-      written = length / 4 * 4;
-      tail.count = static_cast<std::uint8_t>(length - written);
-      std::copy_n(area.begin() + written, tail.count, tail.bytes.begin());
+      tail.count = static_cast<std::uint8_t>(run.length - written);
+      std::copy_n(run.area.subspan(written).begin(), tail.count,
+                  tail.bytes.begin());
     }
-    if (written > 0) emit({route.buffer, devices[s], area.first(written)}, out);
+    if (written > 0) {
+      emit({route.buffer, run.device, run.area.first(written)}, out);
+    }
   }
 
   blocks_done_ += count;
@@ -252,8 +248,10 @@ void PieceWriter::write_blocks(std::span<const std::byte> held,
     finished_ = &route;
     blocks_done_ = 0;
     tails_ = {};
-    do ++route_;
-    while (route_ < routes_.size() && routes_[route_].blocks == 0);
+    ++route_;
+    while (route_ < routes_.size() && routes_[route_].blocks == 0) {
+      ++route_;
+    }
   }
 }
 
@@ -265,7 +263,7 @@ void PieceWriter::emit(const Write& w, std::vector<Write>& out) {
     Write& last = out.back();
     if (last.buffer == w.buffer &&
         last.offset + last.bytes.size() == w.offset &&
-        last.bytes.data() + last.bytes.size() == w.bytes.data()) {
+        std::to_address(last.bytes.end()) == w.bytes.data()) {
       last.bytes =
           std::span(last.bytes.data(), last.bytes.size() + w.bytes.size());
       return;
@@ -288,9 +286,7 @@ std::optional<std::uint64_t> PieceWriter::joinable_padding() const {
 
 WriteError PieceWriter::finish(std::uint64_t file_size) {
   if (failed_ != WriteError::Ok) return failed_;
-  const std::uint64_t last = ranges_.empty() ? file_size : ranges_.back().end;
-  if (route_ < routes_.size() || next_offset_ != last ||
-      (!ranges_.empty() && range_ + 1 != ranges_.size())) {
+  if (route_ < routes_.size() || next_offset_ != file_size) {
     return failed_ = WriteError::Unfinished;
   }
   return WriteError::Ok;

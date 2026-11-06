@@ -159,7 +159,7 @@ class Harness {
     const frz::gguf::TensorIndex index;
     frz::residency::Upload::begin(
         *device_, index, two_buffers(layout_.words), 0,
-        frz::capability::find_format, {}, kChunk,
+        frz::capability::find_format, kChunk,
         [](std::unique_ptr<frz::residency::Upload> upload,
            frz::residency::UploadError error, const char* subject,
            void* userdata) {

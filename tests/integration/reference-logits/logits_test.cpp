@@ -146,7 +146,7 @@ std::unique_ptr<frz::residency::Upload> upload_model(
   } ready;
   Upload::begin(
       device, front.index, plan, front.file_size, frz::capability::find_format,
-      {}, kChunk,
+      kChunk,
       [](std::unique_ptr<Upload> upload, UploadError error, const char* subject,
          void* userdata) {
         auto& r = *static_cast<Ready*>(userdata);

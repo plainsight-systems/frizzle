@@ -203,7 +203,6 @@ residency::WorkingSet decoder_working_set(
               // words (capture/capture.h, layout).
               {"captures", 1, capture::layout(model).words},
           },
-          true,
           partial_rows};
 }
 

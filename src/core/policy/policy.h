@@ -24,8 +24,6 @@ namespace frizzle::policy {
 
 enum class CachePrecision : std::uint8_t {
   F16,
-  BF16,
-  Q8_0,
 };
 
 // The defaults below, named.

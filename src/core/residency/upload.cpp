@@ -1,6 +1,15 @@
+// Axis D: changes with the WebGPU surface used to create and fill buffers, or
+// how a device reports their failure.
+//
+// Contract, algorithm, cost and corpus guidance: upload.h. This file
+// defines what that header states.
+
 #include "core/residency/upload.h"
 
+#include <algorithm>
 #include <array>
+#include <climits>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <utility>
@@ -68,8 +77,6 @@ UploadError from_route(RouteError error) {
       return UploadError::UnsupportedFormat;
     case RouteError::OutOfRange:
       return UploadError::OutOfRange;
-    case RouteError::NotACandidate:
-      return UploadError::NotACandidate;
     case RouteError::RowNotSteppable:
       return UploadError::RowNotSteppable;
   }
@@ -92,8 +99,9 @@ UploadError from_write(WriteError error) {
 
 // A popped scope: the pop's status, then the error type it caught (upload.h).
 UploadError from_scope(WGPUPopErrorScopeStatus status, WGPUErrorType type) {
-  if (status == WGPUPopErrorScopeStatus_CallbackCancelled)
+  if (status == WGPUPopErrorScopeStatus_CallbackCancelled) {
     return UploadError::Cancelled;
+  }
   if (status != WGPUPopErrorScopeStatus_Success) return UploadError::Internal;
   switch (type) {
     case WGPUErrorType_NoError:
@@ -127,9 +135,8 @@ WGPUBufferUsage usage(Pool pool) {
                                     : WGPUBufferUsage_None);
     case Pool::Cache:
       return WGPUBufferUsage_Storage;
-    // Written as well as read back: a vision step's patches are written
-    // into `pixels`, and its rows copied into a text step's `hidden`
-    // (kernels/program.h, runtime/vision.h).
+    // Read back (the sampled token, the capture store) and written (the
+    // edit table, runtime/engine.cpp).
     case Pool::Scratch:
       return WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc |
              WGPUBufferUsage_CopyDst;
@@ -141,8 +148,14 @@ WGPUBufferUsage usage(Pool pool) {
 // and WebGPU zeroed it, so reading these back shows the write ran.
 std::array<std::byte, 4> witness_bytes(std::uint64_t file_size) {
   const auto v = static_cast<std::uint32_t>(file_size ^ (file_size >> 32)) | 1u;
-  return {std::byte(v & 0xFF), std::byte((v >> 8) & 0xFF),
-          std::byte((v >> 16) & 0xFF), std::byte((v >> 24) & 0xFF)};
+  // Lowest byte first, each the next CHAR_BIT bits of v.
+  std::array<std::byte, 4> bytes{};
+  std::uint32_t rest = v;
+  for (std::byte& b : bytes) {
+    b = static_cast<std::byte>(static_cast<std::uint8_t>(rest));
+    rest >>= CHAR_BIT;
+  }
+  return bytes;
 }
 
 // The results of scopes popped together, kept by the order they were pushed,
@@ -155,31 +168,32 @@ struct Scopes {
 
   // The first scope pushed that caught something.
   [[nodiscard]] std::size_t first_failed() const {
-    for (std::size_t i = 0; i < N; ++i) {
-      if (errors[i] != UploadError::Ok) return i;
-    }
-    return N;
+    const auto failed =
+        std::find_if(errors.begin(), errors.end(),
+                     [](UploadError e) { return e != UploadError::Ok; });
+    return static_cast<std::size_t>(std::distance(errors.begin(), failed));
   }
 };
 
 // Pops `Job::kScopes` scopes, innermost first, and calls job->popped() once
 // every result has arrived. Slot i holds the scope pushed i-th.
 template <typename Job>
-void pop_scopes(WGPUDevice device, std::shared_ptr<Job> job) {
+void pop_scopes(WGPUDevice device, const std::shared_ptr<Job>& job) {
   struct Pop {
     std::shared_ptr<Job> job;
     std::size_t slot;
   };
   for (std::size_t i = Job::kScopes; i-- > 0;) {
-    WGPUPopErrorScopeCallbackInfo info =
-        WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+    // Value-initialized, every field set below: the _INIT macro casts 0 to
+    // the callback mode, which is no mode at all.
+    WGPUPopErrorScopeCallbackInfo info{};
     info.mode = gpu::kCallbackMode;
     info.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
                        WGPUStringView message, void* userdata, void*) {
       const auto pop = take_back<Pop>(userdata);
       Job& j = *pop->job;
-      j.scopes.errors[pop->slot] = from_scope(status, type);
-      j.scopes.messages[pop->slot] = to_string(message);
+      j.scopes.errors.at(pop->slot) = from_scope(status, type);
+      j.scopes.messages.at(pop->slot) = to_string(message);
       if (--j.scopes.remaining == 0) j.popped();
     };
     info.userdata1 = hand_off(std::make_unique<Pop>(Pop{job, i}));
@@ -194,12 +208,13 @@ struct Creation {
   Scopes<kScopes> scopes;
   std::unique_ptr<Upload> upload;
   std::string refused;  // a buffer creation returned null for, if any
-  ReadyCallback ready;
-  void* userdata;
+  ReadyCallback ready = nullptr;
+  void* userdata = nullptr;
 
   void popped() {
     if (const std::size_t i = scopes.first_failed(); i < kScopes) {
-      ready(nullptr, scopes.errors[i], scopes.messages[i].c_str(), userdata);
+      ready(nullptr, scopes.errors.at(i), scopes.messages.at(i).c_str(),
+            userdata);
     } else if (!refused.empty()) {
       ready(nullptr, UploadError::OutOfMemory, refused.c_str(), userdata);
     } else {
@@ -220,7 +235,7 @@ void map_witness(std::shared_ptr<UploadState> state, UploadCallback done,
   UploadState& s = *state;
   wgpuQueueWriteBuffer(s.queue.get(), s.witness.get(), 0,
                        s.witness_bytes.data(), s.witness_bytes.size());
-  WGPUBufferMapCallbackInfo info = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+  WGPUBufferMapCallbackInfo info{};  // every field set below, as above
   info.mode = gpu::kCallbackMode;
   info.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* userdata1,
                      void*) {
@@ -276,10 +291,11 @@ struct ChunkScopes {
     UploadState& s = *state;
     if (const std::size_t i = scopes.first_failed();
         i < kScopes && s.failed == UploadError::Ok) {
-      s.failed = scopes.errors[i];
+      s.failed = scopes.errors.at(i);
     }
-    if (--s.scopes_pending == 0 && s.finish_waiting) {
-      const auto finish = *std::exchange(s.finish_waiting, std::nullopt);
+    if (--s.scopes_pending == 0 && s.finish_waiting.has_value()) {
+      const UploadState::Finish finish = s.finish_waiting.value();
+      s.finish_waiting.reset();
       finish_now(std::move(state), finish.done, finish.userdata);
     }
   }
@@ -291,7 +307,7 @@ struct WorkDone {
 };
 
 void request_work_done(const std::shared_ptr<UploadState>& state) {
-  WGPUQueueWorkDoneCallbackInfo info = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
+  WGPUQueueWorkDoneCallbackInfo info{};  // every field set below, as above
   info.mode = gpu::kCallbackMode;
   info.callback = [](WGPUQueueWorkDoneStatus status, WGPUStringView,
                      void* userdata1, void*) {
@@ -316,14 +332,13 @@ void request_work_done(const std::shared_ptr<UploadState>& state) {
 
 Upload::Upload(const gpu::Device& device, ResidencyPlan plan,
                std::vector<Route> routes, std::uint64_t file_size,
-               std::size_t max_chunk, std::span<const FileRange> ranges)
+               std::size_t max_chunk)
     : instance_(gpu::retain(device.instance())),
       device_(gpu::retain(device.handle())),
       device_status_(device.status()),
       plan_(std::move(plan)),
       routes_(std::move(routes)),
-      ranges_(ranges.begin(), ranges.end()),
-      writer_(routes_, max_chunk, ranges_),
+      writer_(routes_, max_chunk),
       file_size_(file_size),
       pending_(std::make_shared<UploadState>()) {
   pending_->instance = gpu::retain(device.instance());
@@ -335,14 +350,12 @@ Upload::Upload(const gpu::Device& device, ResidencyPlan plan,
 
 void Upload::begin(const gpu::Device& device, const gguf::TensorIndex& index,
                    const ResidencyPlan& plan, std::uint64_t file_size,
-                   FindFormat find_format,
-                   std::span<const gguf::TensorId> confirmed_duplicates,
-                   std::size_t max_chunk, ReadyCallback ready, void* userdata,
-                   std::span<const FileRange> ranges) {
+                   FindFormat find_format, std::size_t max_chunk,
+                   ReadyCallback ready, void* userdata) {
   std::vector<Route> routes;
   ResidencyPlan carried;
-  if (const auto r = plan_routes(index, plan, file_size, find_format,
-                                 confirmed_duplicates, routes, carried, ranges);
+  if (const auto r =
+          plan_routes(index, plan, file_size, find_format, routes, carried);
       !r.ok()) {
     ready(nullptr, from_route(r.error), r.subject.c_str(), userdata);
     return;
@@ -351,8 +364,8 @@ void Upload::begin(const gpu::Device& device, const gguf::TensorIndex& index,
   // The constructor is private, so make_unique cannot reach it; the
   // pointer is owned from the expression that makes it (R.11).
   auto job = std::make_shared<Creation>();
-  job->upload.reset(new Upload(device, std::move(carried), std::move(routes),
-                               file_size, max_chunk, ranges));
+  job->upload = std::unique_ptr<Upload>(new Upload(
+      device, std::move(carried), std::move(routes), file_size, max_chunk));
   job->ready = ready;
   job->userdata = userdata;
   Upload& u = *job->upload;
@@ -373,22 +386,23 @@ void Upload::begin(const gpu::Device& device, const gguf::TensorIndex& index,
   u.buffers_.resize(u.plan_.buffers.size());
   for (std::size_t i = 0; i < u.plan_.buffers.size(); ++i) {
     const PlannedBuffer& planned = u.plan_.buffers[i];
-    if (planned.size == 0) continue;  // a confirmed duplicate's, left uncreated
     WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
     desc.usage = usage(planned.pool);
     desc.size = planned.size;
     u.buffers_[i] = gpu::Buffer(wgpuDeviceCreateBuffer(dev, &desc));
-    if (!u.buffers_[i] && job->refused.empty())
+    if (!u.buffers_[i] && job->refused.empty()) {
       job->refused = "buffer " + std::to_string(i);
+    }
   }
   WGPUBufferDescriptor witness = WGPU_BUFFER_DESCRIPTOR_INIT;
   witness.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
   witness.size = u.pending_->witness_bytes.size();
   u.pending_->witness = gpu::Buffer(wgpuDeviceCreateBuffer(dev, &witness));
-  if (!u.pending_->witness && job->refused.empty())
+  if (!u.pending_->witness && job->refused.empty()) {
     job->refused = "the witness buffer";
+  }
 
-  pop_scopes(dev, std::move(job));
+  pop_scopes(dev, job);
 }
 
 Upload::~Upload() noexcept { pending_->cancelled = true; }
@@ -430,7 +444,7 @@ void Upload::write(std::uint64_t file_offset, std::span<const std::byte> chunk,
   ++s.scopes_pending;
   auto scopes = std::make_shared<ChunkScopes>();
   scopes->state = pending_;
-  pop_scopes(device_.get(), std::move(scopes));
+  pop_scopes(device_.get(), scopes);
   const std::uint64_t chunk_number = chunks_written_++;
   request_work_done(pending_);
 
@@ -451,8 +465,9 @@ void Upload::finish(UploadCallback done, void* userdata) {
   }
   finishing_ = true;
   UploadState& s = *pending_;
-  if (s.failed == UploadError::Ok)
+  if (s.failed == UploadError::Ok) {
     s.failed = from_write(writer_.finish(file_size_));
+  }
   if (s.scopes_pending == 0) {
     finish_now(pending_, done, userdata);
   } else {

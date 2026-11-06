@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -12,51 +11,68 @@
 
 namespace frizzle::residency {
 
-// Axis D: changes with the WebGPU surface or the limits a device grants.
+// Axis D: changes with how the file's bytes reach the buffers the plan lays
+// out.
 //
-// Where every byte of the file goes. A deterministic function, with no I/O, of
-// the tensor index, the residency plan and the duplicates the page has
-// confirmed: one route for each piece of each weight, in file order, saying
-// which bytes of the file it takes and where in which buffer they land. No GPU,
-// no browser; upload carries the routes out (upload.h), and they are tested
-// without a device.
+// Where every byte of the file goes: one route for each piece of each
+// weight, saying which whole blocks of the file it takes, how they are laid
+// out on the device and where in which buffer they land. A deterministic
+// function, with no I/O and no GPU, of the tensor index, the residency plan
+// and the file's size. Upload carries the routes out (upload.h); the piece
+// writer turns them into writes (piece_writer.h).
 //
-//   - A route takes a run of whole rows, so whole blocks, as the plan's piece
-//     does, and lays them out as its format's device layout says
-//     (formats/device_layout.h). Its destination length is the piece's bound
-//     length, which that layout fills exactly.
-//   - A tensor's format is found through the lookup the caller passes: the
-//     capability table's find_format in the harness, so the formats upload
-//     routes are exactly the ones preflight passed; a table of the test's own
-//     in a test. A format it does not list is a named failure.
-//   - Every offset and length is checked against the file's size before any
-//     byte arrives, by subtraction so no sum can wrap (WASM.9, ES.103). A
-//     route that would read past the file, or write past its buffer, is a
-//     named failure, not a write.
-//   - A confirmed duplicate takes no route: its bytes go nowhere, its view
-//     reads the tensor it copies, and its buffers are never created. Which
-//     duplicates are confirmed is decided before upload, by comparing the two
-//     tensors' bytes in the cached file (web/duplicates.js); a candidate that
-//     is not confirmed is routed like any tensor, into the buffers the plan
-//     gave it.
-//     Optimization (practice): a head stored as a copy of the embedding is
-//     the same tied weight written twice. Sharing it keeps one copy on the
-//     device, as a model saved with tied weights does; the plan never counts
-//     on it (plan.h).
+// Contract
+//   - plan_routes(index, plan, file_size, find_format, routes, out): Ok with
+//     `routes`, ordered by file offset, and `out`, the plan as upload carries
+//     it out; or a RouteError naming the tensor at fault, with `routes` and
+//     `out` untouched.
+//   - A route takes a piece's run of whole rows, so whole blocks: its file
+//     range is the tensor's data offset plus first_row × row bytes, row_count
+//     × row bytes long; its destination is the piece's buffer and offset; its
+//     length is the piece's bound length, those bytes rounded up to 4, which
+//     the format's device layout fills exactly (formats/device_layout.h).
+//   - A tensor's format comes from `find_format`; the engine passes
+//     capability::find_format (runtime/engine.cpp), so the formats routed are
+//     the ones the capability table lists. A type it does not list is
+//     UnsupportedFormat, whether or not the tensor has rows. A tensor whose
+//     rows are not a whole number of 32-weight groups and that is not a
+//     scalar is RowNotSteppable (formats/format.h).
+//   - Every offset and length is checked against the file's size and the
+//     piece's buffer before any byte arrives, by subtraction so no sum can
+//     wrap. A route that would read past the file or write past its buffer,
+//     or whose bound length is not its bytes rounded up to 4, is OutOfRange,
+//     never a write.
 //
-// Guidelines, by corpus:
+// Algorithm
+//   1. For each planned tensor, in index order: look up its format; check it
+//      steps by groups or is a scalar; with no pieces, stop (no rows, nothing
+//      to write); row bytes = data length / Σ row_count; for each piece,
+//      check its file range and buffer range, then append Route{tensor, file
+//      offset, bytes / block bytes, layout, buffer, offset, length}.
+//   2. Sort the routes by file offset; move them and the carried plan out.
+//
+// Design and cost
+//   - Out parameters, untouched unless the call succeeds, as
+//     plan_residency's.
+//   - Cost, counted for Gemma 3 1B at WebGPU's default limits: 342 routes,
+//     one a piece, built once a load with a copy of the plan.
+//   - Nothing tests plan_routes alone. Every load runs it, the oracle's and
+//     replay's on the pinned model among them.
+//
+// Corpus guidance
 //   C++ Core Guidelines
-//     E.27   If you can't throw exceptions, use error codes systematically —
-//            RouteError, with the tensor at fault as its subject.
-//     ES.103 Don't overflow — ranges are checked by subtraction.
-//     F.20, F.21 prefer returning values to out parameters. Deliberately not
-//            followed: out parameters match plan_residency and the loaders,
-//            and leave the caller's objects untouched unless the call
-//            succeeds.
+//     E.27   Error codes systematically: RouteError, with the tensor at fault
+//            as its subject.
+//     ES.103 Don't overflow: ranges are checked by subtraction, products with
+//            checked arithmetic.
+//     F.20, F.21  Prefer returning values to out parameters: not followed, so
+//            that the caller's objects change only on success.
+//     Enum.7 Specify an enumeration's underlying type only when necessary:
+//            RouteError takes one byte, the smallest that holds it.
 //   C++ performance guidelines
-//     WASM.9 Stream assets and keep them compressed to their destination —
-//            every offset is validated against the file's authoritative size,
-//            with checked arithmetic, before any byte arrives.
+//     WASM.9 Validate every offset and length against the authoritative total
+//            size with checked arithmetic, treating the file as untrusted:
+//            every route against the file's size, before any byte arrives.
 
 // Finds the format a tensor type runs as, or null if it runs as none.
 using FindFormat = const formats::Format* (*)(gguf::TensorType type) noexcept;
@@ -71,16 +87,15 @@ struct Route {
   std::uint64_t length;  // the piece's bound length: its bytes, rounded up to 4
 };
 
-enum class RouteError {
+// One byte, all its values need: returned to upload, never stored or sent as
+// a number.
+enum class RouteError : std::uint8_t {
   Ok,
   // A tensor whose format the lookup does not list. The subject names it.
   UnsupportedFormat,
   // A piece that would read past the end of the file, or write past the
   // end of its buffer. The subject names the tensor.
   OutOfRange,
-  // A confirmed duplicate the plan does not mark a candidate, or an id no
-  // tensor has. The subject names it, or gives the id.
-  NotACandidate,
   // A tensor whose rows are not a whole number of unpack's 32-weight
   // groups, which no kernel can step through, and that is not a scalar
   // (format.h). The subject names it.
@@ -95,17 +110,13 @@ struct RouteResult {
 };
 
 // The routes for every weight in `plan`, ordered by file offset, and the plan
-// as upload carries it out: each confirmed duplicate's view reads the tensor
-// it copies, the buffers only it used are left uncreated (size 0), and the
-// weight and total bytes are recounted without them. `out` and `routes` are
-// left untouched unless it succeeds. A tensor the plan marks not present has
-// no route; every route lies within `ranges`, the bytes the load reads
-// (file_ranges.h), or the tensor is refused, OutOfRange. Empty: the whole
-// file.
-[[nodiscard]] RouteResult plan_routes(
-    const gguf::TensorIndex& index, const ResidencyPlan& plan,
-    std::uint64_t file_size, FindFormat find_format,
-    std::span<const gguf::TensorId> confirmed, std::vector<Route>& routes,
-    ResidencyPlan& out, std::span<const FileRange> ranges = {});
+// as upload carries it out. `out` and `routes` are left untouched unless it
+// succeeds.
+[[nodiscard]] RouteResult plan_routes(const gguf::TensorIndex& index,
+                                      const ResidencyPlan& plan,
+                                      std::uint64_t file_size,
+                                      FindFormat find_format,
+                                      std::vector<Route>& routes,
+                                      ResidencyPlan& out);
 
 }  // namespace frizzle::residency

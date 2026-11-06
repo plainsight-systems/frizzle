@@ -1,4 +1,4 @@
-"""Pinned local tool discovery shared by checks and editor formatting; no installs."""
+"""Pinned local tool discovery shared by checks and the editor's clangd; no installs."""
 import os
 from pathlib import Path
 import re
