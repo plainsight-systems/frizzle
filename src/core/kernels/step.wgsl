@@ -1,4 +1,7 @@
-// Axis D: changes with how every kernel is bound and launched.
+// Axis D: changes with the WebGPU surface or the limits a device grants.
+//
+// Contract, algorithm, cost and corpus guidance: kernels/interface.h. This
+// file defines what that header states.
 //
 // The step's parameters, binding 0 of every kernel (kernels/interface.h,
 // Step): declared here once, and composed before each kernel by the program,
@@ -20,10 +23,8 @@ struct Step {
     top_p: f32,
     min_p: f32,
     log_min_p: f32,        // ln min_p, once a turn on the CPU
-    columns: u32,          // a vision step's patch grid columns (graph/vision.h)
-    media: u32,            // 1 when a text step carries a medium
-    media_token: u32,      // then its rows' identifier (runtime/media_stage.h)
-    padding: vec2<u32>,
+    padding0: u32,         // with padding1, keeps ids at byte 64
+    padding1: vec4<u32>,
     ids: array<vec4<u32>, 128>,
 }
 

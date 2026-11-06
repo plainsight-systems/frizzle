@@ -1,3 +1,8 @@
+// Axis D: changes with the WebGPU surface or the limits a device grants.
+//
+// Contract, algorithm, cost and corpus guidance: program.h. This file
+// defines what that header states.
+
 #include "core/kernels/program.h"
 
 #include <algorithm>
@@ -121,8 +126,9 @@ WGPUStringView view_of(std::string_view s) {
 
 ProgramError from_scope(WGPUPopErrorScopeStatus status, WGPUErrorType type,
                         ProgramError failure) {
-  if (status == WGPUPopErrorScopeStatus_CallbackCancelled)
+  if (status == WGPUPopErrorScopeStatus_CallbackCancelled) {
     return ProgramError::Cancelled;
+  }
   if (status != WGPUPopErrorScopeStatus_Success) return failure;
   return type == WGPUErrorType_NoError ? ProgramError::Ok : failure;
 }
@@ -146,6 +152,10 @@ constexpr std::array<WGPUErrorFilter, 2> kStepScopes = {
 // Room for WebGPU's message on a failed step; a longer one is cut there. Dawn's
 // validation messages run to a few hundred bytes.
 constexpr std::size_t kStepMessageCapacity = 1024;
+#if FRIZZLE_DIAGNOSTICS_ENABLED
+// WebGPU resolves each timestamp query to one 64-bit word.
+constexpr std::uint64_t kTimestampBytes = sizeof(std::uint64_t);
+#endif
 
 template <std::size_t N>
 void push_scopes(WGPUDevice device,
@@ -162,8 +172,9 @@ void pop_scopes(WGPUDevice device, std::size_t count,
     ProgramError failure;
   };
   for (std::size_t i = 0; i < count; ++i) {
-    WGPUPopErrorScopeCallbackInfo info =
-        WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+    // Value-initialized, every field set below: the _INIT macro casts 0 to
+    // the callback mode, which is no mode at all.
+    WGPUPopErrorScopeCallbackInfo info{};
     info.mode = gpu::kCallbackMode;
     info.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
                        WGPUStringView message, void* userdata, void*) {
@@ -201,13 +212,13 @@ struct Build : std::enable_shared_from_this<Build> {
   bool bound = false;       // section two has run
   ProgramError error = ProgramError::Ok;
   std::string message;
-  BuildCallback done;
-  void* userdata;
+  BuildCallback done = nullptr;
+  void* userdata = nullptr;
 
   // Every failure's message is kept, not only the first: a shader that
   // fails to compile fails its pipeline too, and the pipeline's message,
   // which may land first, only says the module was invalid.
-  void settled(ProgramError e, std::string m) {
+  void settled(ProgramError e, const std::string& m) {
     if (e != ProgramError::Ok) {
       if (error == ProgramError::Ok) error = e;
       if (!m.empty()) message += (message.empty() ? "" : "\n") + m;
@@ -265,7 +276,7 @@ void Build::bind() {
          Geometry{launches[i].rows, launches[i].invocations_per_row,
                   launches[i].rows_per_tile, launches[i].key_split,
                   launches[i].window, launches[i].tokens,
-                  launches[i].partial_rows, launches[i].row_divisor},
+                  launches[i].partial_rows},
          launches[i].workgroup_size});
   }
   std::vector<Geometry> geometries;
@@ -287,16 +298,13 @@ void Build::next() {
 }
 
 // A pipeline's override constants, in name order, the program's own among
-// them: workgroup_size always, last_token for a launch of the last token,
-// row_divisor for a launch over the step's tokens divided (interface.h).
+// them: workgroup_size always, last_token for a launch of the last token.
 using Constants = std::vector<std::pair<std::string_view, double>>;
 
 Constants constants_of(const Launch& launch) {
   Constants c;
   c.emplace_back("workgroup_size", launch.workgroup_size);
   if (launch.rows == Rows::LastToken) c.emplace_back("last_token", 1.0);
-  if (launch.row_divisor != 1)
-    c.emplace_back("row_divisor", launch.row_divisor);
   for (const Override& o : launch.overrides) c.emplace_back(o.name, o.value);
   std::sort(c.begin(), c.end());
   return c;
@@ -323,8 +331,9 @@ std::string with_constants_used(
   const std::size_t body = source.find('{', at);
   if (body == std::string::npos) return source;
   std::string uses;
-  for (const auto& [name, value] : constants)
+  for (const auto& [name, value] : constants) {
     uses += "\n    _ = " + std::string(name) + ";";
+  }
   source.insert(body + 1, uses);
   return source;
 }
@@ -420,21 +429,12 @@ void Program::build(const residency::Upload& upload,
            at + "split by key chunks with no window", userdata);
       return;
     }
-    if (launch.row_divisor == 0 ||
-        (launch.row_divisor != 1 && (launch.rows == Rows::LastToken ||
-                                     launch.key_split != KeySplit::None))) {
-      done(nullptr, ProgramError::Build,
-           at + "a row divisor of 0, or one over the last token or key chunks",
-           userdata);
-      return;
-    }
     for (std::size_t o = 0; o < launch.overrides.size(); ++o) {
       const std::string_view name = launch.overrides[o].name;
-      const bool repeated = std::any_of(
-          launch.overrides.begin(), launch.overrides.begin() + o,
+      const bool repeated = std::ranges::any_of(
+          std::span<const Override>(launch.overrides).first(o),
           [&](const Override& earlier) { return earlier.name == name; });
-      if (name == "workgroup_size" || name == "last_token" ||
-          name == "row_divisor" || repeated) {
+      if (name == "workgroup_size" || name == "last_token" || repeated) {
         done(nullptr, ProgramError::Build,
              at + "override " + std::string(name) +
                  (repeated ? " given twice" : " is the program's to set"),
@@ -472,15 +472,16 @@ void Program::build(const residency::Upload& upload,
   WGPULimits limits = WGPU_LIMITS_INIT;
   wgpuDeviceGetLimits(device, &limits);
   state->max_workgroups = limits.maxComputeWorkgroupsPerDimension;
-  for (State::Outstanding& o : state->steps)
+  for (State::Outstanding& o : state->steps) {
     o.message.reserve(kStepMessageCapacity);
+  }
   if (readback) {
     WGPUBuffer buffer = upload.buffer(readback->buffer);
     if (buffer == nullptr || readback->size == 0 ||
         readback->size > kMaxReadback || readback->size % 4 != 0) {
       done(nullptr, ProgramError::Build,
            "the readback range is not a buffer upload created, a whole number "
-           "of words up to 4 KiB",
+           "of words up to 16 bytes",
            userdata);
       return;
     }
@@ -515,8 +516,9 @@ void Program::build(const residency::Upload& upload,
     WGPUBufferDescriptor slot_desc = WGPU_BUFFER_DESCRIPTOR_INIT;
     slot_desc.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
     slot_desc.size = state->readback->size;
-    for (gpu::Buffer& slot : state->slots)
+    for (gpu::Buffer& slot : state->slots) {
       slot = gpu::Buffer(wgpuDeviceCreateBuffer(device, &slot_desc));
+    }
   }
 
   // Optimization (browser): every launch's constants in one write (WASM.2).
@@ -580,8 +582,8 @@ void Program::build(const residency::Upload& upload,
     pipeline_desc.compute.constantCount = entries.size();
     pipeline_desc.compute.constants = entries.data();
 
-    WGPUCreateComputePipelineAsyncCallbackInfo info =
-        WGPU_CREATE_COMPUTE_PIPELINE_ASYNC_CALLBACK_INFO_INIT;
+    // Value-initialized, every field set below, as above.
+    WGPUCreateComputePipelineAsyncCallbackInfo info{};
     info.mode = gpu::kCallbackMode;
     info.callback = [](WGPUCreatePipelineAsyncStatus status,
                        WGPUComputePipeline pipeline, WGPUStringView message,
@@ -614,7 +616,7 @@ namespace {
 void report(Program::State& s) {
   const std::shared_ptr<Program::State> keep = s.in_flight;
   while (const std::optional<std::uint64_t> number = s.order.next()) {
-    Program::State::Outstanding& o = s.steps[*number % Order::kOutstanding];
+    Program::State::Outstanding& o = s.steps.at(*number % Order::kOutstanding);
     if (s.order.idle()) s.in_flight.reset();
     const bool lost = s.device_status != nullptr && s.device_status->lost;
     const ProgramError error = s.cancelled ? ProgramError::Cancelled
@@ -622,7 +624,7 @@ void report(Program::State& s) {
                                    ? ProgramError::DeviceLost
                                    : o.error;
     const std::span<const std::byte> bytes =
-        error == ProgramError::Ok && o.reads_back
+        error == ProgramError::Ok && o.reads_back && s.readback.has_value()
             ? std::span<const std::byte>(o.bytes.data(), s.readback->size)
             : std::span<const std::byte>{};
 #if FRIZZLE_DIAGNOSTICS_ENABLED
@@ -633,8 +635,9 @@ void report(Program::State& s) {
         times.begin_ns = o.stamps[0];
         times.end_ns = o.stamps[1];
         o.launch_times.clear();
-        for (std::size_t i = 0; i < o.timed.size(); ++i)
+        for (std::size_t i = 0; i < o.timed.size(); ++i) {
           o.launch_times.emplace_back(o.timed[i], o.stamps[2 + i]);
+        }
         times.launches = o.launch_times;
       }
       o.profile_done(error, o.message, bytes, times, o.userdata);
@@ -671,8 +674,7 @@ namespace {
 // run_profiled()'s — its first `limit` launches, timed when `profiled`.
 void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
                 const Step& step, std::uint32_t limit, bool profiled,
-                std::span<const RunInput> inputs,
-                std::span<const RunCopy> copies, StepCallback done,
+                std::span<const RunInput> inputs, StepCallback done,
 #if FRIZZLE_DIAGNOSTICS_ENABLED
                 Program::ProfileCallback profile_done,
 #endif
@@ -684,10 +686,17 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
          userdata);
     return;
   }
+  // Step holds kPrefillBlock identifiers (interface.h): a longer step would
+  // write past it.
+  if (step.tokens > residency::kPrefillBlock) {
+    done(ProgramError::Step, "a step of more than kPrefillBlock tokens", {},
+         userdata);
+    return;
+  }
   WGPUDevice device = s.device.get();
   const std::uint64_t number = s.order.run();
-  State::Outstanding& o = s.steps[number % Order::kOutstanding];
-  WGPUBuffer slot = s.slots[number % Order::kOutstanding].get();
+  State::Outstanding& o = s.steps.at(number % Order::kOutstanding);
+  WGPUBuffer slot = s.slots.at(number % Order::kOutstanding).get();
   o.number = number;
   o.pending = kStepScopes.size();
   o.error = ProgramError::Ok;
@@ -706,7 +715,7 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
   o.timed.clear();
   o.stamps.clear();
   State::Timer* timer =
-      profiled ? &s.timers[number % Order::kOutstanding] : nullptr;
+      profiled ? &s.timers.at(number % Order::kOutstanding) : nullptr;
 #else
   (void)profiled;
 #endif
@@ -716,10 +725,7 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
   push_scopes(device, kStepScopes);
   // Optimization (browser): the step's head and only the identifier words
   // it uses, in one write (interface.h).
-  // A step of more rows than identifiers — a vision step's patches — has
-  // none, and writes its head alone.
-  const bool identifiers =
-      step.fed != 1 && step.tokens <= residency::kPrefillBlock;
+  const bool identifiers = step.fed != 1;
   const std::size_t bytes =
       kStepHead + (identifiers ? 16 * ((std::size_t{step.tokens} + 3) / 4) : 0);
   wgpuQueueWriteBuffer(s.queue.get(), s.step.get(), 0, &step, bytes);
@@ -728,38 +734,14 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
   // arithmetic may wrap (interface.h): refused, before any launch.
   bool fits = std::uint64_t{step.position} + step.tokens <= kMaxPositions;
   if (!fits) o.message.assign("a step past position 2^24");
-  // Inputs and copies within their ranges, whole words, or the step fails
-  // before anything is written or run.
+  // Inputs within their ranges, whole words, or the step fails before
+  // anything is written or run.
   for (const RunInput& in : inputs) {
     if (!fits) break;
     if (in.bytes.size() > in.to.size || in.bytes.size() % 4 != 0) {
       fits = false;
       o.message.assign(
           "an input larger than its buffer's range, or not whole words");
-    }
-  }
-  for (const RunCopy& c : copies) {
-    if (!fits) break;
-    const Binding& from = c.link->from();
-    const Binding& to = c.link->to();
-    if (c.bytes % 4 != 0 || c.from_offset % 4 != 0 || c.to_offset % 4 != 0 ||
-        c.from_offset > from.size || c.bytes > from.size - c.from_offset ||
-        c.to_offset > to.size || c.bytes > to.size - c.to_offset) {
-      fits = false;
-      o.message.assign("a copy outside its link's ranges, or not whole words");
-      break;
-    }
-    // Before the pass, into this program's upload; after it, out of it (I.5).
-    const bool before = c.at == CopyAt::BeforePass;
-    const Binding& own = before ? to : from;
-    const WGPUBuffer buffer = before ? c.link->target() : c.link->source();
-    if (static_cast<std::size_t>(own.buffer) >=
-            s.upload->plan().buffers.size() ||
-        s.upload->buffer(own.buffer) != buffer) {
-      fits = false;
-      o.message.assign(
-          before ? "a copy before the pass into another program's upload"
-                 : "a copy after the pass out of another program's upload");
     }
   }
   if (fits) {
@@ -772,16 +754,6 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
   if (fits) {
     const gpu::CommandEncoder encoder(
         wgpuDeviceCreateCommandEncoder(device, nullptr));
-    const auto encode_copies = [&](CopyAt at) {
-      for (const RunCopy& c : copies) {
-        if (c.bytes == 0 || c.at != at) continue;
-        wgpuCommandEncoderCopyBufferToBuffer(
-            encoder.get(), c.link->source(),
-            c.link->from().offset + c.from_offset, c.link->target(),
-            c.link->to().offset + c.to_offset, c.bytes);
-      }
-    };
-    encode_copies(CopyAt::BeforePass);
     {
 #if FRIZZLE_DIAGNOSTICS_ENABLED
       WGPUComputePassDescriptor pass_desc = WGPU_COMPUTE_PASS_DESCRIPTOR_INIT;
@@ -834,14 +806,13 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
       }
       wgpuComputePassEncoderEnd(pass.get());
     }
-    encode_copies(CopyAt::AfterPass);
 #if FRIZZLE_DIAGNOSTICS_ENABLED
     if (fits && timer != nullptr) {
       wgpuCommandEncoderResolveQuerySet(encoder.get(), timer->queries.get(), 0,
                                         o.queries, timer->resolve.get(), 0);
-      wgpuCommandEncoderCopyBufferToBuffer(encoder.get(), timer->resolve.get(),
-                                           0, timer->readback.get(), 0,
-                                           std::uint64_t{o.queries} * 8);
+      wgpuCommandEncoderCopyBufferToBuffer(
+          encoder.get(), timer->resolve.get(), 0, timer->readback.get(), 0,
+          std::uint64_t{o.queries} * kTimestampBytes);
     }
 #endif
     // The readback copied after the pass, into this step's own slot.
@@ -866,7 +837,8 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
                        void* userdata1, void* userdata2) {
       auto& state = *static_cast<State*>(userdata1);
       auto& step = *static_cast<State::Outstanding*>(userdata2);
-      WGPUBuffer mapped = state.slots[&step - state.steps.data()].get();
+      WGPUBuffer mapped =
+          state.slots.at(step.number % Order::kOutstanding).get();
       ProgramError e = ProgramError::Ok;
       if (status == WGPUMapAsyncStatus_Success) {
         const void* range =
@@ -909,13 +881,14 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
       auto& state = *static_cast<State*>(userdata1);
       auto& step = *static_cast<State::Outstanding*>(userdata2);
       WGPUBuffer mapped =
-          state.timers[&step - state.steps.data()].readback.get();
+          state.timers.at(step.number % Order::kOutstanding).readback.get();
       ProgramError e = ProgramError::Ok;
       if (status == WGPUMapAsyncStatus_Success) {
-        const auto* words =
+        const std::span<const std::uint64_t> words(
             static_cast<const std::uint64_t*>(wgpuBufferGetConstMappedRange(
-                mapped, 0, std::size_t{step.queries} * 8));
-        step.stamps.assign(words, words + step.queries);
+                mapped, 0, std::size_t{step.queries} * kTimestampBytes)),
+            step.queries);
+        step.stamps.assign(words.begin(), words.end());
         wgpuBufferUnmap(mapped);
       } else {
         e = status == WGPUMapAsyncStatus_CallbackCancelled
@@ -927,20 +900,22 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
     info.userdata1 = &s;
     info.userdata2 = &o;
     wgpuBufferMapAsync(timer->readback.get(), WGPUMapMode_Read, 0,
-                       std::uint64_t{o.queries} * 8, info);
+                       std::uint64_t{o.queries} * kTimestampBytes, info);
   }
 #endif
   if (!fits) {
     // A step past kMaxPositions, or too large for one dispatch's
     // workgroups: refused, not truncated.
     o.error = ProgramError::Step;
-    if (o.message.empty())
+    if (o.message.empty()) {
       o.message.assign(
           "a launch needs more workgroups than one dispatch allows");
+    }
   }
   for (std::size_t i = 0; i < kStepScopes.size(); ++i) {
-    WGPUPopErrorScopeCallbackInfo info =
-        WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+    // Value-initialized, every field set below: the _INIT macro casts 0 to
+    // the callback mode, which is no mode at all.
+    WGPUPopErrorScopeCallbackInfo info{};
     info.mode = gpu::kCallbackMode;
     info.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type,
                        WGPUStringView message, void* userdata1,
@@ -966,7 +941,7 @@ void Program::run(const Step& step, StepCallback done, void* userdata) {
   }
 #endif
   begin_step(s, state_, step, static_cast<std::uint32_t>(s.launches.size()),
-             false, {}, {}, done,
+             false, {}, done,
 #if FRIZZLE_DIAGNOSTICS_ENABLED
              nullptr,
 #endif
@@ -974,8 +949,7 @@ void Program::run(const Step& step, StepCallback done, void* userdata) {
 }
 
 void Program::run(const Step& step, std::span<const RunInput> inputs,
-                  std::span<const RunCopy> copies, StepCallback done,
-                  void* userdata) {
+                  StepCallback done, void* userdata) {
   State& s = *state_;
 #if FRIZZLE_DIAGNOSTICS_ENABLED
   if (s.profiled_outstanding > 0) {
@@ -984,19 +958,12 @@ void Program::run(const Step& step, std::span<const RunInput> inputs,
   }
 #endif
   begin_step(s, state_, step, static_cast<std::uint32_t>(s.launches.size()),
-             false, inputs, copies, done,
+             false, inputs, done,
 #if FRIZZLE_DIAGNOSTICS_ENABLED
              nullptr,
 #endif
              userdata);
 }
-
-ProgramLink::ProgramLink(const residency::Upload& source, Binding from,
-                         const residency::Upload& target, Binding to)
-    : source_(source.buffer(from.buffer)),
-      target_(target.buffer(to.buffer)),
-      from_(from),
-      to_(to) {}
 
 #if FRIZZLE_DIAGNOSTICS_ENABLED
 std::uint32_t Program::launch_count() const noexcept {
@@ -1035,12 +1002,15 @@ void Program::run_profiled(const Step& step, std::uint32_t launches,
         2 +
         (s.inside_passes ? static_cast<std::uint32_t>(s.launches.size()) : 0);
     for (State::Timer& t : s.timers) {
-      WGPUQuerySetDescriptor q = WGPU_QUERY_SET_DESCRIPTOR_INIT;
+      // Value-initialized, every field set below: the _INIT macro casts 0
+      // to the query type, which is no type at all.
+      WGPUQuerySetDescriptor q{};
+      q.label = WGPU_STRING_VIEW_INIT;
       q.type = WGPUQueryType_Timestamp;
       q.count = s.query_count;
       t.queries.reset(wgpuDeviceCreateQuerySet(s.device.get(), &q));
       WGPUBufferDescriptor b = WGPU_BUFFER_DESCRIPTOR_INIT;
-      b.size = std::uint64_t{s.query_count} * 8;
+      b.size = std::uint64_t{s.query_count} * kTimestampBytes;
       b.usage = WGPUBufferUsage_QueryResolve | WGPUBufferUsage_CopySrc;
       t.resolve.reset(wgpuDeviceCreateBuffer(s.device.get(), &b));
       b.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
@@ -1057,7 +1027,11 @@ void Program::run_profiled(const Step& step, std::uint32_t launches,
     refuse("a third step while two are outstanding");
     return;
   }
-  begin_step(s, state_, step, launches, true, {}, {}, nullptr, done, userdata);
+  if (step.tokens > residency::kPrefillBlock) {
+    refuse("a step of more than kPrefillBlock tokens");
+    return;
+  }
+  begin_step(s, state_, step, launches, true, {}, nullptr, done, userdata);
 }
 #endif
 

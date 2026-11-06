@@ -134,6 +134,8 @@ std::string_view name(graph::GraphError error) noexcept {
       return "ok";
     case graph::GraphError::UngroupedFeedForward:
       return "a layer's gate and up are not one group";
+    case graph::GraphError::UngroupedQueryKeyValue:
+      return "a layer's Q, K and V are not one group";
     case graph::GraphError::UnsupportedShape:
       return "a layer's shape is outside the kernels";
   }

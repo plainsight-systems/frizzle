@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "core/kernels/interface.h"
-#include "core/model/model_description.h"
 #include "core/residency/plan.h"
 #include "core/residency/weight_view.h"
 
@@ -13,598 +12,364 @@ namespace frizzle::kernels {
 
 // Axis E: changes with a new or optimized kernel.
 //
-// The matrix products: each layer's Q, K and V projection, output
-// projection, gate and up projection with the activation, and down
-// projection, and the output head (docs/architecture/kernel-fusions.md).
-// For a weight W of N rows of K — a GGUF matrix lists K first, so row o is
-// output o's K weights, contiguous — and input rows x of K floats:
+// The matrix products of Gemma 3 1B's graph: in each of the 26 layers, Q, K
+// and V as one product, the output projection, gate and up as one product
+// with GELU applied, and the down projection; and the output head, the token
+// embedding the file ties to it, over the step's last row (graph/graph.h).
+// For a weight W of N rows of K weights (a GGUF matrix lists K first, so row
+// o is output o's K weights, contiguous) and input rows x of K floats:
 //
 //   y[t][o] = Σ_k W[o][k] × x[t][k]
 //
-// The weight stays in its file's format and is decoded in the kernel's load
-// path through the format's unpack, 32 weights at a time (format.h); no
-// weight is written out expanded (GDSA.18).
+// The products, counted from the pinned file (formats/device_layout.h,
+// residency/plan.h):
 //
-// Two forms, one per regime, each its own launch; a step runs one (the
-// launch contract's token range, below), prefill in one of three tile widths,
-// and a prefill product with too few tiles for the GPU split along K
-// (below), its own launch and a combine's.
-// The head is the exception: it covers the step's last token alone, in
-// both regimes, so its one launch is the decode form, run in every step.
-// Both forms add each output's products in one order, fixed by K alone
-// (GDSA.2). A row's K / 32 groups are cut into 32 ranges at fixed
-// boundaries — range r is groups floor(r × G / 32) up to floor((r + 1) × G /
-// 32), G = K / 32 — and
+//   product      rows N               K      format             epilogue
+//   Q, K, V      1,024 + 256 + 256    1,152  Q4_0               QKV
+//   output       1,152                1,024  Q4_0               Write
+//   gate, up     6,912 + 6,912        1,152  Q4_0               GatedActivation
+//   down         1,152                6,912  Q4_0; Q4_1 in      Write
+//                                            layers 0 to 2
+//   head         262,144, 3 pieces    1,152  Q8_0               Write
 //
-//   y = ((0 + s_0) + s_1) + … + s_31,  s_r = (((0 + w_a x_a) + w_b x_b) + …)
+// Contract
+//   - matmul_launches(matmul, gate, range_sums): the launches that compute
+//     one product (kernels/interface.h, Launch), and nothing else: no GPU
+//     object, no I/O. A pure function of its arguments; the weight views
+//     are read during the call and not kept.
+//   - What the launches write, once each step has run: Write, row t of the
+//     step's output o at out[t × out_width + o], out_width the weight's N
+//     (a piece writes its own rows, from its first row); the decode form
+//     writes row 0 alone, which for the head is the last row's logits. QKV,
+//     output row j of Q, K or V at its own buffer's t × width + j, width its
+//     rows: the rope kernel's query, key and value. GatedActivation,
+//     activation[t × 6,912 + j] = gelu_tanh(gate_j) × up_j, never gate or
+//     up themselves. Each output is written once a step, by one invocation.
+//   - Launches, in order: for each piece of a one-member weight, or once for
+//     a fused group, a decode launch in one-token steps, then for each tile
+//     width of 8, 16 and 32 tokens a tiled launch, a split launch, or both,
+//     and, when the product splits, the split's combine. For each width the
+//     tiled and split launches' token ranges are disjoint and cover the
+//     width's steps, so every step runs exactly one form of each product.
+//     With rows LastToken (the head) the decode launch alone, in every step
+//     that asks for logits, over the step's last row.
+//   - Preconditions, stated, not checked: weights[0] is a planned view
+//     whose format the capability table lists; K = dimensions[0] is a whole
+//     number of 32-weight groups (formats/format.h). A fused group, members
+//     3 (Q, K, V) or 2 (gate, up), is a PlannedGroup's (residency/plan.h):
+//     each member one piece, all in one buffer within one binding's span,
+//     sharing the first member's format and K; gate and up have equal rows.
+//     The outputs hold kPrefillBlock rows of their widths; the input rows of
+//     K floats; gate.denominator > 0. A broken precondition gives launches
+//     that read or write the wrong words, which WebGPU keeps within each
+//     bound range; nothing reports it.
+//   - split_tokens and range_sum_floats: pure, noexcept; the graph sizes
+//     `range_sums` with range_sum_floats under the same gate the launches
+//     take, so the two cannot disagree (graph/graph.cpp, layer_range_sums).
+//     A step splits only while its range sums fit the buffer passed in;
+//     past that it runs tiled, the same bits.
+//   - Numerical: each output is its K products added in one order fixed by
+//     K alone (Algorithm, 1), in f32 with fma; the weights decode exactly as
+//     format.h states. Within γ(2K) × Σ_k |W[o][k] x[k]| of the same sum in
+//     f64 over the decoded weights, γ(n) = nu / (1 − nu), u = 2⁻²⁴: the bound
+//     for a K-term dot product in which every multiply-add rounds at most
+//     twice, since WGSL lets fma round twice. K is at most 6,912, the down
+//     projection's, so γ(2K) is about 8.2 × 10⁻⁴. The GELU's e^x truncates
+//     its series within about 2⁻²² (Algorithm, 5).
+//   - Determinism (GDSA.2): run to run, and batch-invariant by design: a
+//     token's outputs are the same bits decoded alone, in any tile width,
+//     or split, since every form adds in the order of Algorithm 1, never one
+//     the step chooses. Equal bits across forms rest on the target's
+//     compiler fusing the explicit fmas alike in every pipeline, which WGSL
+//     does not promise. Not bit for bit across GPUs or with other
+//     implementations, whose orders differ.
 //
-// each range's sum s_r taken from zero over its weights in order, and the
-// ranges added to a total that starts at zero, in order: 32 adds. Each
-// multiply-add is an explicit fma in both forms. Written as acc + w × x,
-// the target's compiler contracted it in one pipeline and not the other,
-// and the decode and prefill bits differed; an explicit fma it fuses in
-// both. The gated activation likewise takes its e^x from explicit
-// arithmetic, every multiply-add an fma: the built-in exp gave different
-// bits in the two pipelines. WGSL lets fma() round twice and lets each
-// pipeline reassociate, so equal bits are what the target's compiler gives,
-// which the GPU test checks, not what WGSL promises.
+// Algorithm
+//   1. The order of addition. A row's G = K / 32 groups are cut into 32
+//      ranges at fixed boundaries: range r is groups floor(r × G / 32) up to
+//      floor((r + 1) × G / 32). Gemma 3 1B's: K 1,024, one group a range;
+//      K 1,152, 28 ranges of one group and 4 of two; K 6,912, 24 of seven
+//      and 8 of six. Then
+//        s_r = fma(w, x, … fma(w_a, x_a, 0))   over range r's weights, k in
+//                                              order, from zero
+//        y   = ((0 + s_0) + s_1) + … + s_31    32 adds, in order, from zero
+//      Every multiply-add is an explicit fma and every add one f32 add; those
+//      are the rounding points.
+//   2. Decode form, one row: the step's only row, or its last for the head.
+//      A workgroup of 64 invocations is two sets of 32; each set takes
+//      set_rows rows, and invocation r of a set takes range r of each. For
+//      each group of its range it loads the input's 32 matching floats into
+//      registers once, unpacks the group of each of its rows (format's
+//      unpack, 32 weights at a time) and adds the products into that row's
+//      range sum. The workgroup's range sums meet in workgroup memory, 8
+//      rows × 32 floats; after one barrier invocations 0 to 2 × set_rows − 1
+//      each add one row's 32 in order and write it. set_rows: 4 for the
+//      gated product (2 gate rows and the same 2 up rows, so invocations 0
+//      to 3 each hold a gate row and its up row), 1,728 workgroups; and for
+//      a product of more than 4,088 rows, as each of the head's pieces is,
+//      32,769 workgroups in all. Otherwise 1: for Q, K, V (768
+//      workgroups), the output and the down projection (576 each).
+//   3. Prefill tiled form, a step of 2 to 512 tokens. A workgroup takes a
+//      tile of τ tokens × 64 outputs, τ the narrowest of 8, 16 and 32 that
+//      holds the step (8 for 2 to 8 tokens, 16 for 9 to 16), else 32. Its 4τ
+//      invocations each own 4 consecutive tokens × 4 outputs: invocation t
+//      takes token quad t / 16 and row slots l, l + 16, l + 32, l + 48 for
+//      l = t mod 16. For each range r, and each group g of it:
+//        a. barrier; stage group g of the tile's 64 rows, decoded, into
+//           workgroup memory, zeros for rows past the product, and the τ
+//           tokens' 32 inputs for g, zeros past the step; each invocation
+//           writes whole vec4s; barrier;
+//        b. for each of the group's 8 k-quads, read 4 vec4s of weights and 4
+//           of inputs, transpose the weights in registers, and add 16 vec4
+//           fmas, k in order, into the 4 tokens' range sums (vec4s over the
+//           4 outputs).
+//      At the range's end each of the 4 totals adds its range sum,
+//      componentwise, and the range sums restart at zero: the order of 1.
+//      An invocation whose token quad lies wholly past the step stages and
+//      passes both barriers but skips b. Workgroups are numbered token tile
+//      first, then output tile. A gated tile's 64 slots are 32 gate rows and
+//      the same 32 up rows: slot 16j + c holds gate row 2c + j for j 0 and
+//      1, and up row 2c + j − 2 for j 2 and 3, so the invocation that
+//      finishes a gate output holds its up output too.
+//   4. Prefill split form, a step up to split_tokens tokens. Each tiled
+//      workgroup becomes 32, one a range: workgroup (token tile, output
+//      tile, r), numbered in that order, runs 3a and 3b for range r alone
+//      and writes each output's range sum to `range_sums` at
+//      (r × tokens + t) × rows + o, o the product's row. A combine launch
+//      then gives each output of each token one invocation, which adds its
+//      32 range sums in order to a total from zero and writes it as the
+//      epilogue says: the same range sums and the same 32 adds as 1, so the
+//      same bits.
+//   5. GELU, gated product only: z = √(2/π) × fma(0.044715 g², g, g);
+//      e = e^x for x = −2|z|, clamped at −100, computed as k = round(x log2
+//      e), r = x − k ln 2 with ln 2 in two parts so r is nearly exact, e^r
+//      by its Taylor series to r⁶ in Horner form (within about 2⁻²² for |r|
+//      <= ln 2 / 2), times 2^k by ldexp; tanh(z) = sign(z) × (1 − e) × (1 /
+//      (1 + e)); gelu = fma(g / 2, tanh, g / 2), times up. No intermediate
+//      overflows, which matters because WGSL may assume no infinities.
+//   6. Launches (matmul.cpp). Binding 1, 48 bytes: for each member, its
+//      first word in the weight binding, its blocks (for unpack), its first
+//      output row (for a gated member, 0: its first row within its own
+//      weight) and its rows. Overrides: `columns` (K) and `out_width` on
+//      every launch; `set_rows` on decode; `tile_tokens` on tiled and split;
+//      `x_tile_vec4s`, 8 × the tile's tokens or the widest tile's, on every
+//      launch (matmul.wgsl). Bindings: 2 the weights, a piece or the span of
+//      a fused group, members read from their own first words, the file's
+//      tensors between them bound and never read; 3 the input; then the
+//      outputs, one or query, key and value. The split launch binds 2 the
+//      weights, 3 the input, 4 `range_sums`; the combine binds 2
+//      `range_sums`, read-only, then the outputs from 3. The split's steps
+//      are min(split_tokens, the floats `range_sums` holds ÷ (rows × 32)).
 //
-//   - Decode, one token: a matrix times a vector, bound by reading each
-//     weight once. A workgroup of 64 invocations is two sets of 32, each
-//     set taking 4 rows; invocation r of a set takes range r of its 4 rows.
-//     For each group of its range it loads the input's 32 matching floats
-//     into registers once and multiplies them by the 4 rows' unpacked
-//     groups, so the input is read once a set, not once a row, as
-//     llama.cpp's Metal kernel reuses it across rows. The workgroup's 8
-//     rows' range sums meet in workgroup memory, and invocations 0 to 7
-//     each add one row's in order — for the gated activation, invocations
-//     0 to 3 one gate row and its up row each: one barrier, then 32 adds,
-//     or 64, in parallel rather than one invocation's 128 a set. Qwen3's
-//     1,024-wide rows are 32 groups, one a range, so a set's invocations
-//     read 32 adjacent blocks of each
-//     of the format's streams: for Q4_0's codes, 512 bytes in 512 (GPU.2).
-//     A wider row's ranges are 2 to 8 groups, so invocation r reads block
-//     r × n + i at its i-th step: 512 bytes spread over n × 512 — 3 times
-//     for Qwen3's 3,072-wide down projection, 8 for Llama 3.2's 8,192 —
-//     each line's rest read by the same invocation's next n − 1 steps, from
-//     the GPU's caches. The bytes from device memory are the weights, once.
-//     A product whose workgroups of 8 rows would number under 512 gives
-//     each set fewer rows: the most, of 4, 3, 2 and 1, that still makes 512
-//     workgroups of 2 sets, or 1 when none does — the Write and QKV
-//     epilogues, by an override constant, `set_rows`. Qwen3's output and
-//     down projections, 1,024 rows, take 1, 512 workgroups, not 128; Llama
-//     3.2's QKV, 3,072 rows, takes 3, and its output and down, 2,048, take
-//     2, 512 workgroups each; Gemma 3's QKV, 1,536, and output and down,
-//     1,152, take 1, 768 and 576. Each row is still summed by 32
-//     invocations, a range each, in the same order. The gated product keeps
-//     its 4, which its epilogue needs in one set; the listed ones run 768
-//     workgroups or more.
-//   - Prefill, two to 512 tokens: a tiled matrix product. A workgroup takes
-//     a tile of τ tokens × 64 outputs, τ 8, 16 or 32, and steps along K 32
-//     at a time, a group a step. Its 4τ invocations — 32, 64 or 128, under
-//     WebGPU's default limit of 256 — each own a micro-tile of 4 consecutive
-//     tokens × 4 outputs: invocation t token quad t / 16 and outputs —
-//     row slots — l + 16j for its lane l = t % 16. So every tile's
-//     invocations run one inner loop, its bounds WGSL constants rather than
-//     the tile's override: for each of the step's 8 k-quads, 4 vec4 reads of
-//     its outputs' weights and 4 of its tokens' inputs, the weights
-//     transposed in registers so each k's 4 weights are one vec4, then 16
-//     vec4 fmas, k in order, into each token's 4 range sums — 64
-//     multiply-adds from 8 reads of workgroup memory. Each
-//     token's range sums and totals are named vec4s, 8 of them, 32
-//     accumulators: the 4 × 4 micro-tile llama.cpp's and MLC's WebGPU
-//     kernels hold, never an array indexed by loop counters, which the
-//     compiler may keep in memory rather than registers (GPU.3). At a
-//     range's last group each total adds its range sum, componentwise, and
-//     the range sum restarts from zero, so each output's order of addition
-//     is decode's.
-//     Before each step's products the tile is staged in workgroup memory as
-//     the decode and the input give it, along K, each invocation writing
-//     whole vec4s: a write to one component of a vector in workgroup memory
-//     may write all four, so two invocations never share one (SIMD.2). Row
-//     slot s's group, decoded, is its 8 k-quads at vec4 9s, a vec4 of
-//     padding a slot so the 16 slots a read takes spread over the banks;
-//     token i's 32 inputs are its 8 at vec4 8i. The invocations stride over
-//     both jobs together — 64 row decodes and 8τ input vec4s, each read
-//     coalesced along its row — then a barrier, the products, a barrier.
-//     Within a read of the products the 16 lanes of a token quad take 16
-//     slots 9 vec4s apart: over 32 banks of a word, 8 vec4s a cycle, lanes
-//     l and l + 8 share a bank phase, so the read takes two cycles, the
-//     floor for 16 16-byte loads; a 32-lane SIMD-group's two token quads
-//     read two vec4s, each broadcast (GPU.5). Workgroup memory:
-//     9 KiB of weights and τ / 8 KiB of inputs, 10, 11 or 13 KiB.
-//     Workgroups are numbered token tile first, so the token tiles reading
-//     one weight tile are dispatched together and may find it in the GPU's
-//     caches (costs, below).
-//     Shorter steps take narrower tiles of the same 64 outputs, 16 tokens or
-//     8, with fewer invocations of the same micro-tile (GDSA.6): a
-//     step takes the narrowest tile that holds it whole, 8 for 2 to 8 tokens
-//     and 16 for 9 to 16, and the 32-token tile from 17. Each token tile
-//     reads and decodes the whole weight, so the rule first keeps a step to
-//     the fewest weight passes — one up to 32 tokens — and among those takes
-//     the narrowest. A workgroup with a tile of τ tokens, for each group of
-//     32 along K, does 2,048τ multiply-adds and 256τ vec4 reads of
-//     workgroup memory, loads 32τ input floats, decodes 64 weight blocks and
-//     passes two barriers: a narrower tile holding the step does fewer
-//     multiply-adds, reads and loads, and the same decodes and barriers.
-//     A step's last token tile holds its remainder: an invocation whose token
-//     quad lies wholly past the step stages and passes both barriers, as
-//     every invocation must, but skips the products, so a tile runs the
-//     products of its live quads alone. The target issues a 32-lane
-//     SIMD-group's work together, two token quads, so a step's products run
-//     to the next 8 tokens — at most 7 padded a step: at 33 tokens the
-//     second tile's first SIMD-group of its four; at 2 tokens the 8-token
-//     tile's one, the guard skipping nothing. Guarding each token's chain
-//     of fmas instead would cut that to the next quad, in a step's last
-//     tile alone, for a branch a token on every k-quad of every tile, the
-//     full tiles' included; not taken. Past 32 tokens
-//     the 32-token tile keeps a step to the fewest weight passes, decodes
-//     and barriers, and the guard its multiply-adds to the step's. Tile
-//     width and the guard change no output's order of addition, so every
-//     tile's bits are the others' and decode's.
-//   - Prefill split along K, for a product whose tiles are few beside its
-//     length along K. A tile's workgroup walks all G = K / 32 groups in
-//     turn, so a product of few tiles runs few workgroups each a long
-//     chain: EmbeddingGemma 2's down projection, 512 outputs of 2,048, is 8
-//     tiles of 64 groups at any step up to 32 tokens, on a GPU of 40 cores,
-//     and took 162 µs at every step from 21 tokens to 128, where its
-//     arithmetic at 128 tokens is 19 µs at the target's peak (costs, below).
-//     Split, each of the tiled form's workgroups becomes kRanges, 32, one a
-//     range: workgroup (tile, r) walks range r's groups alone, exactly as
-//     the tiled form walks them — the same staging, products and guard, its
-//     range sum from zero — and writes each output's range sum to the
-//     working buffer `range_sums` rather than adding it to a total. Then a
-//     combine launch, an invocation an output of each token, adds its 32
-//     range sums to a total from zero, in order, and applies the epilogue.
-//     So each output's order of addition is decode's and the tiled form's —
-//     the same range sums, each from zero, the same 32 adds in the same
-//     order — and its bits are theirs.
-//     The range sums lie range first: range r of token t's output o at
-//     (r × tokens + t) × rows + o, for the step's tokens and the product's
-//     rows. A split workgroup's 16 lanes write one range's sums for 16
-//     adjacent outputs, 64 contiguous bytes, and a combine's adjacent
-//     invocations, adjacent outputs, read each range contiguously (GPU.2);
-//     laid out output first, at (t × rows + o) × 32 + r, both strided by 128
-//     bytes, and the split ran up to 1.8 times as long at the same shapes.
-//     Which steps split, by the workgroups the tiled form would run, W =
-//     output tiles × token tiles: when W is at most 2G, its chain long
-//     beside its parallel work, and at most 64, which bounds the range sums
-//     (costs, below). That is the gate, SplitGate (CDSA.21): two named
-//     values, measured, passed in by the graph, not read from ambient state,
-//     so a test forces either form. The ratio is fitted to every listed
-//     model's product shapes timed alone in Chrome on the target, at steps
-//     of 8 to 256 tokens, 124 points (costs, below): with a cap of 128 its
-//     choices came to 1.2% more time than the faster form at every point
-//     would, against 46% more for the tiled form alone, and a ratio of 1.5
-//     to 2.0%. The cap is fitted to whole encodes, since a launch
-//     timed alone keeps its range sums in the GPU's caches and one in a step
-//     does not: under a cap of 128, EmbeddingGemma 2's down and global
-//     output projections split at 418 and 500 tokens, 27 to 33 MB of range
-//     sums each way a launch, and the encodes ran 1.0 to 1.4 ms slower than
-//     never splitting; under 64 they tie never splitting there, within 0.5%,
-//     and match 128 at every shorter step but 336 tokens, where 128 was 2%
-//     faster (docs/research/2026-10-11-chrome-encode-benchmark.md). The gate
-//     depends on the
-//     step only through its token tiles, so for each product it is a token
-//     range: every step up to split_tokens(), a whole number of the 32-token
-//     tile, or none; the split and tiled launches each take their part of
-//     every tile width's range, as the launch contract asks.
-//     Its epilogues are Write, QKV and GatedByInput: the output and down
-//     projections, every listed model's Q, K and V but EmbeddingGemma 2's
-//     global layers', and Gemma 4's per-layer gate and projection. The gated
-//     activation is not split: its combine would need a gate row's total and
-//     its up row's; measured as one product of its rows, it was slower split
-//     at every listed model's shape past 8 tokens, and faster at 8 only for
-//     Qwen3's and EmbeddingGemma 2's, by 1.48 and 1.35 times — not worth a
-//     third combine. split_tokens() is none for it by rule.
+// Design and cost
+//   - One order of addition for every form, fixed by K, so a token's
+//     products do not depend on the step that holds them (GDSA.2). Explicit
+//     fma: written as acc + w × x, the target's compiler contracted it in
+//     one pipeline and not the other, and decode and prefill bits differed.
+//     Explicit e^x for the same reason: the built-in exp gave different
+//     bits in the two pipelines.
+//   - Weights stay in their file's format and are decoded in the load path
+//     (GDSA.18); none is written out expanded.
+//   - Decode reads every weight once from device memory, counted: Q, K, V
+//     995,328 bytes, output 663,552, gate and up 8,957,952, down 4,478,976
+//     (Q4_1, 4,976,640): 393,984,000 across 26 layers; the head 320,864,256,
+//     45% of the step's 714,848,256 bytes (682 MiB), about 1.8 ms at the
+//     M3 Max's published 400 GB/s, the floor for a decode step's products
+//     (counted bytes over a published figure, not measured in Frizzle).
+//     Arithmetic, 2 operations a weight, is far below it.
+//   - Decode input reads, counted: each set reads its whole input row once,
+//     at most 27 KiB, small enough for the GPU's caches to hold: a layer's
+//     Q, K, V 6.75 MiB, output 4.5, gate and up 15.2, down 30.4;
+//     the head 288 MiB. Whether they cost time is not measured in Frizzle.
+//     Input values are reused across rows only where set_rows exceeds 1,
+//     the gated product and the head.
+//   - Optimization: a decode product that would make fewer than 512
+//     workgroups at 4 rows a set takes 1 row a set (Algorithm, 2):
+//     Q, K and V at 4 would be 192 workgroups, the output and down 144.
+//     The reason is an estimate, not measured in Frizzle: products of about
+//     128 workgroups read their weights at about 107 to 180 GB/s on the
+//     target, those of 512 or more at about 260 to 383 (GPU.3). The cost is
+//     the input reads above.
+//   - Coalescing (GPU.2): decode's 32 invocations of a set read the 32
+//     ranges of a row; where a range is one group (K 1,024) they read 32
+//     adjacent blocks of each stream, for Q4_0's codes 512 bytes in 512.
+//     Where ranges are 6 or 7 groups (K 6,912) invocation r reads about
+//     block 6.75r + i at its i-th step, the rest of each line by its own
+//     later steps, from the GPU's caches.
+//   - Prefill (GPU.5, GDSA.16): each decoded weight in workgroup memory
+//     serves the tile's τ tokens and each input 64 outputs; a k-quad is 64
+//     fmas from 8 vec4 reads of workgroup memory, whole vec4s along K
+//     (SIMD.2). Workgroup memory: 9 KiB of weights (64 slots of 8 vec4s and
+//     a vec4 of padding, so the 16 slots one read takes spread across the
+//     banks) and τ / 8 KiB of inputs: 10, 11 or 13 KiB, under WebGPU's
+//     default 16. Decode's range sums take 1 KiB.
+//   - Optimization: an invocation's 32 accumulators, 4 range sums and 4
+//     totals of 4 outputs each, are named vec4s and its loops' bounds
+//     constants, never arrays indexed by loop counters, which a compiler may
+//     keep in memory rather than registers (GPU.3). A form with 64
+//     accumulators in such arrays ran each launch of a 32-token step about
+//     14 to 17 times as long as a 16-token step's (an estimate, not measured
+//     in Frizzle). The totals beside the range sums are what batch invariance
+//     costs: a kernel free to add in its own order would keep the 16 totals
+//     alone.
+//   - Tile width (GDSA.6): each token tile reads and decodes the whole
+//     weight, so the narrowest tile that holds the step keeps it to one
+//     weight pass up to 32 tokens and does the fewest multiply-adds among
+//     those. A 32-lane SIMD-group on the target issues two token quads
+//     together, so a step's products run to the next 8 tokens, at most 7
+//     padded a step (GPU.4): guarding each token's chain instead would add a
+//     branch a token on every k-quad of every tile. Neither changes an
+//     output's order of addition.
+//   - Optimization (browser): a tiled workgroup works out each invocation's
+//     place in its tile (lane, live token quad, row slots' members and rows)
+//     once, not once a range: recomputed each range, the tiled form ran 2 to
+//     3% slower in Chrome (an estimate, not measured in Frizzle).
+//   - Optimization: the split along K, for the three products whose tiles
+//     are few beside their length along K. A tiled workgroup walks all G groups
+//     in turn, so at a step of up to 32 tokens, one token tile, Q, K and V run
+//     24 workgroups of 36 groups each, the output 18 of 32, and the down
+//     projection 18 of 216 (432 barriers each): fewer workgroups than the
+//     target has GPU cores (30 or 40 on an M3 Max). Split, they run 768, 576
+//     and 576 workgroups of 1 or 2, 1, and 6 or 7 groups. At 21 tokens, Q, K
+//     and V took about 95 µs tiled and 40 split, the down projection about 504
+//     and 96: estimates, not measured in Frizzle, each launch timed alone in
+//     Chrome 151 on an M3 Max. Because the split falls on the 32 ranges the
+//     order already fixes, it changes no output's bits (GDSA.2). Its cost is
+//     writing each range sum out and back, 128 bytes each way an output a
+//     token (GDSA.16's caveat: the combine must see all 32), laid out range
+//     first so both passes are coalesced (GPU.2): at 21 tokens 4.1 MB each
+//     way for Q, K and V and 3.1 MB for the output or down; at the split's
+//     top, 12 MiB at 64 tokens and 13.5 MiB at 96. And one combine launch a
+//     product, 3 a layer.
+//   - The gate, SplitGate (CDSA.21): the tiled form's workgroups W = output
+//     tiles × 32-token tiles split when W ≤ 2G and W ≤ 64. So a product's
+//     split steps are a token range, a whole number of 32-token tiles:
+//     Q, K and V split up to 64 tokens, the output and down projection up
+//     to 96; gate and up never (split_tokens is 1 for them by rule: their
+//     combine would need a gate total and its up total). The ratio and the
+//     cap were fitted to timings taken outside Frizzle, over product shapes
+//     not all Gemma 3 1B's, the cap to bound the range sums at 16 MiB (64
+//     tiles of 64 outputs × 32 tokens × 32 floats); whether 2 and 64 are
+//     the best values for Gemma 3 1B's three products is not measured in
+//     Frizzle. The gate is passed in, not read from ambient state (I.1).
+//   - The working buffer `range_sums` is the most range_sum_floats over the
+//     products a layer runs (graph/graph.cpp): 13.5 MiB, set by the output
+//     and down projections at 96 tokens.
+//   - Optimization: Q, K and V as one product and gate and up as one, one
+//     binding spanning the members, so upload writes the file as it lies: 2
+//     products a layer where there would be 5, 78 launches fewer a step,
+//     about 117 µs at interface.h's measured 1.5 µs a launch (GPU.6).
+//   - Optimization: GELU is the gate-and-up product's epilogue, so gate and
+//     up are never written: per token and layer, 27 KiB written where
+//     separate kernels would move 135 KiB (gate and up written, read back,
+//     the activation written) (GDSA.6), and no up working buffer, 13.5 MiB
+//     at kPrefillBlock rows.
+//   - Prefill at 512 tokens, counted: 698 × 10⁶ layer weights × 512 tokens,
+//     715 × 10⁹ operations, about 51 ms at the M3 Max's roughly 14 f32
+//     TFLOPS (an estimate, not measured in Frizzle) if the tiles ran at
+//     peak; the head adds one token's. Each weight is decoded once a token
+//     tile, 16 times: 6.3 GB of weight loads, from device memory between
+//     394 MB, if a weight tile stays in the GPU's caches while its 16 token
+//     tiles run, and 6.3 GB, about 16 ms at 400 GB/s, if none does; WebGPU
+//     promises neither the order workgroups run in nor what the caches keep,
+//     which is why they are numbered token tile first. Each input float is
+//     loaded once an output tile: 22.3 GB from the GPU's caches. Workgroups:
+//     Q, K, V 384; output 288; gate and up 3,456; down 288.
+//   - Launches a step, counted (interface.h: about 1.5 µs each, measured):
+//     a decode step 4 a layer and 3 for the head, 107, about 160 µs; a
+//     prefill step of 2 to 64 tokens 7 a layer, 65 to 96 tokens 6, longer
+//     4; and 3 for the head when the step asks for logits. At load, 22
+//     launches a layer and 3 for the head are built, each its own bind group.
+//   - WebGPU's limits: no f32 matrix-multiply units across browsers, so
+//     every multiply-add runs on the shader cores; subgroup operations are
+//     optional, so decode's range sums meet in workgroup memory; workgroup
+//     memory is 16 KiB at the defaults the harness keeps
+//     (gpu/device_requirements.h), so a tile is 32 × 64.
+//   - Levers not taken: an order each form chooses for itself (fewer
+//     accumulators, at the cost of a token's bits depending on its step);
+//     inputs staged at f16 (the optional shader-f16 feature, and inputs
+//     rounded to f16 would no longer be the f32 that decode reads); a fixed
+//     order in fewer levels, 8 range sums rather than 32 (a quarter of the
+//     split's bytes, every token's bits changing once).
+//   - Verification. No test checks this kernel alone: the ported kernel
+//     families' arithmetic is left to the oracle (tests/README.md). The
+//     oracle decodes one token a step, so it covers the decode form and
+//     the head, within its tolerance, and no prefill form. The replay
+//     scenario runs the tiled and split forms through the engine's prefill
+//     and compares replies, not values: a prefill error too small to change
+//     a sampled token passes it. Untested: the tiled, split and combine
+//     forms' values; batch invariance; the split's bits against the tiled
+//     form's; the gate's boundaries (64 and 65, 96 and 97 tokens); the
+//     launches' geometry and token ranges.
 //
-// Epilogues — what a product writes — are variants, override constants:
-//   - write: y to one buffer: the output projection and down projection
-//     into the plan's `output`, which the next norm adds (norm.h); the head
-//     into `logits`, for the step's last token only.
-//   - QKV: the layer's Q, K and V weights as one product of their stacked
-//     rows, one binding spanning the three, each read from its own place in
-//     it (residency, below): outputs 0 .. H_q × d − 1 into `query`, the next
-//     H_kv × d into `key`, the rest into `value` — the rope kernel's inputs.
-//   - gated by input: one weight's product through the activation, times a
-//     working buffer's value at the token's row and the output's column —
-//     activation(W x)[t][o] × u[t × stride + column + o] — Gemma 4's
-//     per-layer gate, GELU of the product times the layer's per-layer input
-//     (graph/encoder.h), so the activation is never written and read back
-//     to be multiplied. u binds after the output, read-only — its own
-//     declaration of binding 5, which QKV writes; the stride and first
-//     column ride in the constants, which grow to 64 bytes for every
-//     launch, one slot as they were. Both forms, as every epilogue has;
-//     decode and prefill compute it alike, so a token's bits are the same
-//     either way.
-//   - gated activation: the layer's gate and up weights as one product,
-//     likewise, rows gate then up; a decode set's 4 rows are 2 gate rows
-//     and the same 2 of up, a prefill tile's 64 outputs 32 and the same 32,
-//     staged so lane c's slots hold gate rows 2c and 2c + 1 and the same up
-//     rows, so the invocation that finishes an output holds both values, and
-//     writes activation(gate) × up — SiLU for Qwen3 and Llama 3.2, GELU's tanh
-//     form for Gemma 3, as the model description states — never gate or up
-//     themselves. The down projection reads it.
-//
-//   Three options of a product, for an audio encoder's (graph/audio.h),
-//   each an override constant beside the epilogue, so a product without
-//   them builds the pipeline it builds now:
-//     - clipped: the input clamped to [in_min, in_max] as it is staged —
-//       decode's registers, the tiled and split forms' workgroup tile —
-//       and each output clamped to [out_min, out_max] before anything else
-//       the epilogue does: clamp(W clamp(x)), llama.cpp's build_mm for a
-//       clippable linear, ggml_clamp either side of ggml_mul_mat. The
-//       bounds are four F32 scalars beside the weight in the file, which
-//       the plan keeps with the weight in one buffer within one binding
-//       (residency/plan.h's product span). So the weights binding is the
-//       span, as a fused group's is, and each workgroup reads the bounds
-//       from it once — 4 words at the first words the constants give,
-//       bitcast to f32 — with no binding of their own and nothing read on
-//       the host. A clamp is exact, so it adds no rounding; the staging's
-//       clamp is 2 compares a float staged.
-//     - biased: Write adds b[o] after the clamp, b an F32 row in the same
-//       span, its first word in the constants — the audio encoder's output
-//       projection, the one product here with a bias.
-//     - activated: Write applies the activation to each output last — the
-//       ungated feed-forward's up projection through SiLU, its e^x as the
-//       gated epilogue takes it, explicit arithmetic.
-//     A product with any of them does not split along K: the combine reads
-//     no weights, so the bounds and the bias, which lie in the weights'
-//     binding, are not its to read. The decode form does all three as Write
-//     does. The fused QKV epilogue takes none of them: an audio encoder's Q,
-//     K and V each have bounds of their own.
-//     Optimization not taken: a short clip's clamped products split along K.
-//     A clip of 75 rows, 3 s, runs a 1,024-wide product as 48 workgroups,
-//     where the text encoder's split took 70 tokens from 15.6 ms to 11.0;
-//     binding the weights to the combine, a third binding of every combine,
-//     would buy it back. A 20 s clip's 500 rows make 256 workgroups a
-//     product, and a recording is cut into equal clips, so most are long.
-//   And one form of the gated activation, for a Conformer's GLU: its two
-//   members the two halves of one weight — each member the whole weight,
-//   whose format's streams are laid out across all its rows
-//   (device_layout.h), so a half is not a range of words but a first row:
-//   a gated product's member constant z is that row, 0 for a gate and an up
-//   that are weights of their own — gate the rows W to 2W − 1 and up the
-//   rows 0 to W − 1, the activation a sigmoid:
-//   σ(b) × a, the GLU of the convolution module's first pointwise
-//   projection, written W wide. It takes `clipped`, both totals clamped to
-//   the weight's output bounds before the sigmoid and the product, as
-//   llama.cpp clamps the 2W outputs before its GLU; a gated product of two
-//   weights still takes none. The gated activation is never split, so the
-//   split form is unchanged.
-//     Constants: `clip: vec4<u32>`, the bounds' first words — in_min,
-//     in_max, out_min, out_max — and `bias: vec4<u32>`, the bias's first
-//     word then padding: 96 bytes for every launch, as gate_input's slot is
-//     every launch's.
-//
-//   - Pieces. A weight larger than one binding is split by rows
-//     (residency/plan.h): one launch a piece, each covering its rows. The
-//     head of Llama 3.2 is 2 launches, Gemma 3's 3. Every listed Q, K, V,
-//     gate and up weight is one piece.
-//   - Formats. Each format a weight uses is a pipeline: Q4_0 for most,
-//     Q4_1 for a few layers' down projections, Q6_K and Q8_0 for heads.
-//   - Each form and epilogue is an entry point of one module, binding only
-//     the outputs it writes; `columns` (K), a write's `out_width` and the
-//     activation are override constants, so indices fold when the pipeline
-//     is built.
-//   - Constants (binding 1): struct Matmul { members: array<vec4<u32>, 3>,
-//     gate_input: vec4<u32>, clip: vec4<u32>, bias: vec4<u32> } — for each
-//     member of the product, or its one piece: its first word within the
-//     binding, its blocks, for unpack, and its first output row and row
-//     count; GatedByInput's stride and first column; the options' bounds'
-//     and bias's first words. 96 bytes.
-//   - Bindings: 2 the weights (`weights`, unpack's): one piece, or the range
-//     spanning a fused group's members; 3 the input; then the outputs,
-//     written — one, or query, key and value; then, for GatedByInput, its
-//     input u, read-only. Five at most. The split form's one entry point,
-//     split_ranges — it writes range sums alone, so every epilogue it takes
-//     shares it — binds the weights, the input and, at 4, `range_sums`,
-//     written; the combine's,
-//     combine_write, combine_qkv and combine_gated_input, read no weights,
-//     so their bindings, each its own declaration, start at 2: `range_sums`,
-//     read-only; then the outputs from 3, one or query, key and value; and
-//     for GatedByInput u at 4, read-only. The module still composes the
-//     format's unpack, which the combine never calls. The split's range sums
-//     lie range first, as the split form above lays them out, o the product's
-//     row.
-//
-// What it asks of the other contracts:
-//   - residency/plan.h, for the three options above: a product span — a
-//     weight, its four bounds and its bias, as the description names them,
-//     in one buffer within one binding, recorded with the span — as a fused
-//     group is recorded, the members' formats free to differ.
-//   - kernels/interface.h: a launch may run in a range of token counts
-//     only — a regime's, Decode a step of one token and Prefill one of more
-//     (regime_for, tokens_of), or part of one, as the three prefill tiles
-//     take — and is not dispatched outside it; Geometry gains the range.
-//   - residency/plan.h: a layer's Q, K and V, and its gate and up, each
-//     lie in one buffer, within one binding's span from the first to the
-//     last — the plan opens a new buffer for a group that would not fit the
-//     open one. Each stays the weight it is, in file order, with its own
-//     view, and upload and its routes are unchanged: a fused launch binds the
-//     span, the tensors the file puts between its members included and
-//     never read. In the listed files a span is at most 18.9 MB, Llama
-//     3.2's gate and up; its QKV span, 5.9 MB, holds its 2.4 MB output
-//     projection unread between them; both are far under a binding's 128
-//     MiB. A group whose members differ in format or width, or whose span
-//     exceeds a binding, is launched as separate products, an epilogue each.
-//   - formats/format.h: unpack takes its piece's first word within the
-//     binding — fn unpack(base: u32, blocks_in_piece: u32, group: u32) —
-//     0 for a binding of one piece, as every caller's is today.
-//   - residency/plan.h: the gate working buffer holds the activation, and
-//     the up buffer is gone: 6 MiB fewer for Qwen3.
-//   - model/model_description.h: the feed-forward activation; and describe
-//     refuses attention and final logit softcapping, which no kernel
-//     applies, rather than run a file that declares them without it.
-//   - graph/graph.h and graph/encoder.h: the gate, passed to every product's
-//     launches, and the working buffer `range_sums`, the most range_sum_floats
-//     of their products under the same gate, at least one float, in each
-//     working set.
-//   - residency/plan.h: nothing; a working buffer as any other, its bytes
-//     counted against the budget.
-//   - kernels/interface.h: nothing; the split launch tiles its rows as the
-//     tiled form does, 32 times the workgroups, and the combine is a launch
-//     over rows, each in its token range.
-//
-// Determinism (GDSA.2): run to run, and batch-invariant on the target — a
-// token's outputs are the same bits decoded alone or prefilled in a step of
-// any size, since both forms add its products in the order above, fixed by
-// K and never by the step, and the GPU test holds the target's compiler to
-// contracting the two alike; WGSL does not promise it, so another browser's
-// compiler could differ in the low bits, which that test would show. Norm,
-// rope and attention are batch-invariant too, so a token's whole pass is. Not
-// bit for bit with llama.cpp, whose matrix-vector and matrix kernels add in
-// orders of their own.
-
-// Accuracy: each output within γ(2K) × Σ_k |W[o][k] × x[k]| of the same
-// sum in f64 over the decoded weights, γ(n) = n u / (1 − n u) and u = 2⁻²⁴:
-// the standard bound for a sum of K products whose multiplies and adds
-// round separately, which a fused multiply-add only tightens — WGSL leaves
-// contraction to the compiler. K is at most 8,192, Llama 3.2's down
-// projection, so γ(2K) is at most 2⁻¹⁰ / (1 − 2⁻¹⁰), about 2⁻¹⁰. The weights
-// decode as format.h states. As the norm's, a bound the GPU test checks on the
-// target.
-//
-// What it costs, counted, for Qwen3.
-//   - Decode. Weights read once: a layer's QKV 2.36 MB, output 1.18 MB,
-//     gate and up 3.54 MB, down 1.77 MB at Q4_0 or 1.97 MB at Q4_1 — about
-//     8.9 MB, 248 MB across 28 layers, 3 of whose down projections are Q4_1
-//     — and the head's 127.6 MB: 376 MB, 0.94 ms at 400 GB/s, the weights'
-//     share of interface.h's 380 MB file. Arithmetic, 2 × 0.6 × 10⁹ operations,
-//     is far below it. Workgroups: QKV 512, output 512, gate and up 768, down
-//     512, head 18,992. Each set of 32 invocations reads its whole input once,
-//     from the GPU's caches, two a workgroup: 30 MiB a layer — QKV 4, output 8,
-//     gate and up 6, down 12 — and 148 MiB for the head, against device
-//     memory's 8.9 MB and 127.6 MB of weights, each input being at most 12 KiB
-//     for Qwen3. Each workgroup's range sums, 256 or 64, pass through at most
-//     1 KiB of workgroup memory. Launches: 4 a layer and
-//     the head's one, 113 a step, about 170 µs at 1.5 µs.
-//   - Prefill, 512 tokens. 15.7 × 10⁶ weights a layer, 440 × 10⁶ across
-//     the layers, each multiplied by 512 tokens: 450 × 10⁹ operations,
-//     about 32 ms at the M3 Max's roughly 14 f32 TFLOPS (third-party
-//     figure) if the tile ran at peak; the head adds one token's. How near
-//     peak it runs is the tile's: 8 multiply-adds a vec4 read of workgroup
-//     memory, and 2 barriers a step of 32 along K — 64 for Qwen3's
-//     1,024-wide inputs — and the registers an invocation holds: 32
-//     accumulators, the range sum and total of its 16 outputs that batch
-//     invariance asks, and a k-quad's 32 operand floats, about 64 values,
-//     all at constant indices; a kernel free
-//     to add in its own order would keep the 16 totals alone, and more
-//     registers can mean fewer resident workgroups (GPU.3). Each input
-//     float is loaded once an output tile: MACs / 64 loads, 14 GB of f32
-//     from the GPU's caches for a 512-token step, beside the weights'
-//     3.97 GB below. Each weight is
-//     decoded once a token tile, 16 times for 512 tokens: 3.97 GB of weight
-//     loads. From device memory that is between 248 MB, if a weight tile
-//     stays in the GPU's caches while its 16 token tiles run, and the whole
-//     3.97 GB, about 10 ms at 400 GB/s, if none does. Workgroups are
-//     numbered token tile first so that tiles reading one weight tile are
-//     dispatched together; WebGPU promises neither the order they run in
-//     nor what the caches keep, so where in that range a step falls is the
-//     target's, to be measured. Workgroups: QKV 1,024 of the tile.
-//   - Prefill split along K. The arithmetic, the weights' decodes and the
-//     staging are the tiled form's, spread over 32 times its workgroups, so
-//     each walks G / 32 groups, not G. Beside them: the range sums, 32
-//     floats an output a token, written once and read once — 128 B each
-//     way an output a token: 1.4 MB each way for EmbeddingGemma 2's down
-//     projection at 21 tokens, from the GPU's caches at best; and the
-//     combine's launch, an invocation an output a token, 32 adds each, at
-//     about 1.5 µs a launch. A product needs split_tokens() × its rows × 32
-//     floats at its last split step (range_sum_floats below), and the cap
-//     bounds that: W ≤ 64 is at most 64 tiles of 64 outputs × 32 tokens, 16
-//     MiB. The working buffer is the most the model's products need — 16
-//     MiB for EmbeddingGemma 2, Qwen3 and Llama 3.2, 13.5 for Gemma 3; half
-//     a MiB for a test's model of width 32. On a phone's 512 MiB
-//     (web/platform_policy.js) Qwen3's 16 is about 146 of its tokens of
-//     context. Launches: a split product adds its combine's, in
-//     the steps it splits.
-//     Measured in Chrome 151 on the target, a page timing each product's
-//     launch alone, 200 back to back in one submission, the median of 5
-//     after a warm-up, at each listed model's shapes in its own format —
-//     Q8_0 for EmbeddingGemma 2's, Q4_0 for the others' (DIAGNOSTIC: the
-//     shapes alone, not a model's step; the page was in a background
-//     window, which slows its timers, not the GPU's queue) — the tiled form
-//     against the split, at 21 tokens: EmbeddingGemma 2's down 163 µs
-//     against 28, its sliding output 90 and 22, its per-layer projection 51
-//     and 19, its sliding QKV 52 and 40; Qwen3's down 232 and 49, its output
-//     159 and 38, its QKV 93 and 75; Llama 3.2's QKV 173 and 83, its down
-//     683 and 178; Gemma 3's QKV 95 and 40, its down 504 and 96. Every split
-//     output, at all 144 points, was bit for bit the tiled form's.
-// Optimization (practice): a prefill product of few tiles split along K
-// into 32 workgroups a tile, a range each, its range sums combined in a
-// second launch — split-K, as cuBLAS and CUTLASS split a GEMM whose output
-// tiles cannot fill the GPU (GPU.3). Here the split falls on the 32 ranges
-// the order of addition already fixes, so the combine adds them as decode
-// does and no output's bits change (GDSA.2), at the cost of writing each
-// range sum out and back (GDSA.6, GDSA.16's caveat: an intermediate the
-// combine must see whole), laid out range first so both passes are
-// coalesced (GPU.2). The gate is measured (CDSA.21, Per.6): for
-// EmbeddingGemma 2 at 21 tokens it takes the down, output, per-layer and
-// sliding QKV products, whose tiled times above, summed over its 24 layers,
-// came to about 9.8 ms of a 21-token encode's 14.3 in Chrome and their split
-// times to about 2.9, launches timed alone; measured whole, the encode went
-// from 14.3 ms to 7.0, and a 70-token one from 16.0 to 11.0
-// (docs/research/2026-10-11-chrome-encode-benchmark.md).
-// Optimization (browser): a tiled workgroup works out its invocations' place
-// in the tile — lane, live token quad, the two row slots' members and rows —
-// once, not once a range: recomputed each of the 32 ranges, as a range of
-// Qwen3's 1,024-wide rows is one group, the tiled form ran 2 to 3% slower in
-// Chrome's compiled shaders at every encode measured, and 0.3% natively.
-// Optimization (practice): weights decoded in the load path, never
-// expanded (GDSA.18) — llama.cpp's mul_mv and mul_mm do the same.
-// Optimization (practice): Q, K and V as one product and gate and up as
-// one, so a layer runs 2 products where it would run 5 — vLLM's
-// QKVParallelLinear and MergedColumnParallelLinear, which concatenate the
-// weights at load; here one binding spans them, so upload writes the file
-// as it lies — 84 launches a step for Qwen3, about 126 µs (GPU.6).
-// Optimization (practice): the activation is the gate-and-up product's
-// epilogue, so gate and up are never written and read back, nor read by a
-// launch of its own: 48 KiB a token and a layer saved of the 60 KiB
-// separate kernels would move (GDSA.6).
-// Optimization (practice): decode reuses each input value it loads for 4
-// rows, and prefill each decoded weight for its tile's 32 tokens, or 16 or
-// 8, and each input for 64 outputs (GPU.2, GPU.5).
-// Optimization (practice): a decode product too small to make 512
-// workgroups of 8 rows takes fewer rows a set, the most that reaches 512,
-// as llama.cpp's WebGPU mat-vec gives a row 64 invocations and ONNX
-// Runtime's 16, where 4 rows a set gives it 8: in the profile
-// (docs/research/2026-10-07-forward-pass-profile.md) Qwen3's products of
-// 128 workgroups read their weights at 107 to 180 GB/s, those of 512 and
-// 768 at 260 to 340, and the head's 18,992 at 349 to 383 (GPU.3). Its cost
-// is each set reading its input for fewer rows, from the GPU's caches: for
-// Qwen3, 15 MiB more a layer; no product past 512 is split further.
-// Optimization (practice): a prefill invocation's micro-tile is 4 tokens ×
-// 4 outputs, its accumulators named vec4s and its loops' bounds constants,
-// as llama.cpp's, MLC's and ONNX Runtime's WebGPU kernels keep 16 to 32
-// accumulators an invocation, unrolled or constant-indexed: the 32-token
-// tile's 4 × 8 micro-tile, 64 accumulators in arrays indexed by loop
-// counters, took each launch of a 32-token step 13.7 to 17.2 times as long
-// as the 16-token tile's 2 × 8 took a 16-token step's, for twice the
-// tokens (docs/research/2026-10-07-forward-pass-profile.md) (GPU.3).
-// Optimization (practice): the staged tiles are read as whole vec4s along
-// K, 8 for a k-quad's 64 multiply-adds, where 4 tokens and 4 outputs read
-// as scalars would be 32 (SIMD.2, GPU.5).
-// Optimization (practice): one order of addition for both forms, fixed by
-// K, so a token's projections do not depend on its step — the fixed split
-// Thinking Machines' batch-invariant kernels use (GDSA.2).
-//
-// Where WebGPU limits it, and what each limit costs here:
-//   - WebGPU has no matrix-multiply units for f32 — Chrome's subgroup
-//     matrices are an experiment, not cross-browser — so prefill's
-//     multiply-adds run on the shader cores, one at a time an invocation.
-//   - Workgroup memory is 16 KiB at the defaults the harness keeps for
-//     cross-browser compatibility: a 32 × 64 tile, where native kernels
-//     take 64 × 64 to 128 × 128 and reuse each loaded value two to four
-//     times more.
-//   - Subgroup operations are optional, for the same reason: decode's 32
-//     range sums a row meet in workgroup memory, one barrier and 32 adds by
-//     one invocation, where llama.cpp's Metal kernel sums a row across a
-//     SIMD-group.
-//
-// Levers not taken:
-//   - Attention's combine folded into the output projection's load: every
-//     one of its 128 decode workgroups needs the whole input, so each would
-//     fold every split itself — 16 MiB of partials read a layer at 4,096
-//     tokens, against the combine's 128 KiB once and one 1.5 µs launch.
-//   - An order of addition each form chooses for itself: prefill's 32
-//     extra accumulators an invocation saved, decode's ranges free to
-//     interleave, at the cost of a token's bits depending on its step.
-//   - Larger tiles from a raised workgroup-memory limit: the harness asks
-//     for WebGPU's defaults alone.
-//   - 32-output tiles, llama.cpp's and MLC's 32 × 32: each input float is
-//     loaded once 32 outputs, not 64 — 28 GB from the GPU's caches for a
-//     512-token Qwen3 step against 14. They stage inputs at f16, halving
-//     that; here that needs the optional shader-f16 feature, and inputs
-//     rounded to f16 would no longer be the f32 decode reads, so a token's
-//     bits would depend on its step.
-//   - f16 accumulators, ONNX Runtime's default: the same feature, and
-//     llama.cpp moved to f32 after f16 sums gave NaNs on Qwen models.
-//   - For short steps, decode's form over several tokens at once, a
-//     workgroup's rows read once for 4 or 8 tokens, as llama.cpp's Metal
-//     mul_mv_ext: measured beside the split (costs, above's page), it was
-//     bit for bit the same and as fast or faster up to about 8 tokens, and
-//     slower past them at every shape — each token re-reads its input from
-//     the GPU's caches, 4 bytes a multiply-add, where the tile reuses it for
-//     64 outputs — so one form more for steps the split already serves.
-//   - A fixed order of addition in fewer levels, so a split keeps 8 partial
-//     sums an output rather than 32: a quarter of the range sums' bytes, at
-//     the cost of every token's bits, decode's included, changing once —
-//     and the split's measured gains do not wait on it.
-//
-// Verification the implementation is held to, on the GPU against f64 over
-// the format's CPU-decoded weights: each form, each epilogue, each listed
-// format, at each listed model's widths; decode with 4, 3, 2 and 1 rows a
-// set, at the row counts where each begins; prefill steps of 2 and 8 tokens,
-// in the 8-token tile of 32 invocations, 9 and 16, in the 16-token of 64,
-// and 17, 33 and 64, in the 32-token of 128 — every token quad and output
-// quad of each; a weight
-// split into pieces; QKV outputs landing in their buffers; the activation
-// for SiLU and GELU; and a token's outputs the same bits decoded alone and
-// prefilled in each of those steps, at tokens on each tile's edges, at widths
-// whose ranges are one group, several, and of unequal sizes (Gemma 3's
-// 1,152 and 6,912). The split form: each of its epilogues, Write, QKV and
-// GatedByInput, at steps of 2, 21, 32 and 33 tokens, each output's bits the
-// tiled form's, at each listed format and at widths whose ranges are one
-// group, several, unequal, and mostly none — K of 64, 2 groups, 30 ranges
-// empty — and a weight in pieces, each piece split. On the CPU: each launch's
-// geometry, token range, bindings and variant, and the range boundaries; the
-// gate at both sides and on its boundary — a gate that never splits and one
-// that always does give the same launches' ranges, complementary, covering
-// every step from 2 to kPrefillBlock once — and split_tokens at each listed
-// model's products, as above; a step whose range sums would not fit the buffer
-// left tiled; and the graphs' working sets holding `range_sums` at their
-// products' most. The options: clipped, biased and activated each in the
-// decode, tiled and split forms, against f64 with bounds that bind — inputs and
-// outputs past both ends — and with bounds that never do, whose bits equal the
-// product without the option; the bounds read from a span whose weight lies
-// between them, as the audio encoder's file lays them out.
-//
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     C.12   Don't make data members const or references in a copyable
-//            type — MatmulLaunch holds values and a pointer.
-//     F.20   Prefer return values to out parameters.
-//     I.4    Make interfaces precisely and strongly typed — the epilogue is
-//            an enumeration.
-//     ES.45  Avoid magic constants — the micro-tile's 4 × 4 and the tiles'
-//            widths are named, and the gate's ratio of 2 and cap of 64.
-//     I.5    State preconditions — split_tokens' and matmul_launches'.
-//     F.8    Prefer pure functions — split_tokens and range_sum_floats, so
-//            the launches and the working set cannot disagree on a size.
-//     Per.6  Don't make claims about performance without measurements — the
-//            gate's two values and the split's gains, measured.
+//     F.8    Prefer pure functions: matmul_launches, split_tokens and
+//            range_sum_floats compute from their arguments alone.
+//     F.20   Prefer return values to out parameters: the launches are
+//            returned.
+//     I.1    Make interfaces explicit: the gate is a parameter the graph
+//            passes, never a global.
+//     I.5    State preconditions: matmul_launches' and split_tokens',
+//            stated in comments and not checked.
+//     I.24   Avoid adjacent parameters that can be invoked by the same
+//            arguments in either order: split_tokens and range_sum_floats
+//            take a ProductShape, its rows and columns named.
+//     R.3    A raw pointer is non-owning: MatmulLaunch's weight views, read
+//            during the call.
+//     Enum.2 Use enumerations for sets of related named constants: Epilogue.
+//     Enum.7 Specify the underlying type only when necessary: Epilogue is one
+//            byte; it chooses entry points on the CPU and is never written
+//            to a GPU buffer, a file or a message.
+//     ES.45  Avoid magic constants: the tiles, the micro-tile, the ranges,
+//            the decode workgroup target and x_tile's vec4s a token are
+//            named (matmul.cpp).
+//     ES.42  Keep use of pointers simple: a launch's members, weights and
+//            outputs are read with at(), at load, never in a step.
+//     SL.con.3 Avoid bounds errors: those reads are bounds-checked.
+//     Per.6  Don't claim performance without measurements: every time not
+//            measured in Frizzle is labelled an estimate.
 //   C++ performance guidelines
-//     GDSA.18 Store numbers as block-scaled codes decoded in the load path.
-//     GDSA.6 Count passes over global memory — the bytes above, and the
-//            activation never written.
-//     GDSA.2 Declare each floating-point reduction's determinism level —
-//            batch-invariant: one order, fixed by K, never by the step.
-//     GPU.2  Shape data for coalesced lane access — decode's rows.
-//     GPU.5  Use workgroup memory where reuse pays — prefill's tiles.
-//     GDSA.16 Stream through on-chip tiles — prefill steps along K through
-//            workgroup memory, each output written once.
-//     GPU.6  Batch tiny GPU work — fused weights, fewer launches.
-//     GPU.3  Treat occupancy as latency-hiding budget — 32 accumulators an
-//            invocation, named, not 64 in arrays.
-//     SIMD.2 Lay out data so vector loads are linear — whole vec4s along K.
-//     CDSA.21 Put a measured, named, injectable threshold on every algorithm
-//            switch — SplitGate, both sides tested, and the gated split not
-//            built since no input reaches it.
-//     GDSA.16 Stream through on-chip tiles — and its caveat: the range sums
-//            are written out because the combine must see all 32.
+//     GDSA.2  Declare each reduction's determinism level: run to run and
+//             batch-invariant, the order fixed by K, never by the step; the
+//             test it asks for, a token alone against the same token in
+//             steps of several sizes, bit for bit, is not run.
+//     GDSA.18 Block-scaled codes decoded in the load path: unpack in
+//             registers, no weight expanded.
+//     GDSA.6  Count passes over global memory: the bytes above; the
+//             activation epilogue; the narrowest tile holding a step.
+//     GDSA.16 Stream through on-chip tiles: prefill walks K through
+//             workgroup memory, each output written once; its caveat is the
+//             split's range sums, written because the combine needs all 32.
+//     GPU.2   Coalesced lane access: decode's ranges, the range sums laid
+//             out range first.
+//     GPU.3   Occupancy as a latency budget: named accumulators; enough
+//             decode workgroups.
+//     GPU.4   Coherent SIMD-group control flow: the guard is per token quad,
+//             uniform across a quad's 16 lanes.
+//     GPU.5   Workgroup memory where reuse pays: each staged weight and
+//             input is read by many invocations; padded slots.
+//     GPU.6   Batch tiny GPU work: fused weights and the fused activation.
+//     SIMD.2  Linear vector loads: whole vec4s along K.
+//     CDSA.21 A measured, named, injectable threshold: SplitGate is named
+//             and passed in; its values were measured outside Frizzle, and
+//             neither side is tested here.
+//     GDSA.4  No wait on another workgroup without a forward-progress
+//             guarantee: the split's combine is a launch of its own.
 
-// What a product writes.
-enum class Epilogue {
+// What a product writes (Contract). One byte: it chooses entry points on the
+// CPU and is never written to a GPU buffer, a file or a message.
+enum class Epilogue : std::uint8_t {
   Write,
   QKV,
   GatedActivation,
-  GatedByInput,
 };
 
 // One matrix product of the graph.
 struct MatmulLaunch {
   // The weight, or a fused group's members in output order: Q, K, V, or
-  // gate, up. Never null; members are one piece each, in one buffer.
+  // gate, up. The first `members` are never null; a fused group's members
+  // are one piece each, in one buffer. Read during the call, not kept.
   std::array<const residency::WeightView*, 3> weights;
   std::uint32_t members;         // 1, 2 or 3
   residency::BufferRange input;  // rows of K floats
@@ -612,70 +377,54 @@ struct MatmulLaunch {
   // activation, in outputs[0].
   std::array<residency::BufferRange, 3> outputs;
   Epilogue epilogue;
-  model::FeedForwardActivation
-      activation;  // GatedActivation's and GatedByInput's
-  Rows rows;       // LastToken for the head
-  // GatedByInput's input u, read-only: output o of token t multiplies
-  // u[t × gate_input_stride + gate_input_column + o].
-  residency::BufferRange gate_input = {};
-  std::uint32_t gate_input_stride = 0;
-  std::uint32_t gate_input_column = 0;
-  // The options (above), for a Write or a GatedActivation of one weight.
-  // `span` is the weight's product span (residency/plan.h), the binding the
-  // bounds and the bias are read from, and set exactly when one of them is.
-  const residency::BufferRange* span = nullptr;
-  // Clipped: the input's least and most, then the output's; all or none.
-  std::array<const residency::WeightView*, 4> bounds{};
-  // Biased Write: its bias, F32, one an output row.
-  const residency::WeightView* bias = nullptr;
-  // Write: each output through `activation`.
-  bool activated = false;
-  // GatedActivation over weights[0] alone: its first half of rows is up,
-  // its second half the gate (a Conformer's GLU, σ(gate) × up).
-  bool halves = false;
+  Rows rows;  // LastToken for the head
 };
 
 // When a prefill product splits along K: the tiled form's workgroups W at
 // most `numerator` / `denominator` of its groups along K, and at most
-// `max_workgroups`. The graph passes it; kSplitGate is the measured value.
+// `max_workgroups`. The graph passes it; kSplitGate is the value it passes.
 struct SplitGate {
   std::uint32_t numerator;
   std::uint32_t denominator;
   std::uint32_t max_workgroups;
 };
 
-// Measured in Chrome 151 on the target (M3 Max, Metal): the ratio over every
-// listed model's product shapes timed alone, the cap over whole encodes
-// (above).
+// Fitted to timings taken in Chrome 151 on an M3 Max, outside Frizzle: an
+// estimate, not measured in Frizzle (Design and cost, the gate). For Gemma 3
+// 1B, Q, K and V split up to 64 tokens, the output and down projections up
+// to 96.
 inline constexpr SplitGate kSplitGate{2, 1, 64};
+
+// A product's weight as the gate sees it: `rows` outputs of `columns`
+// weights each (N and K above), named so the two cannot be swapped.
+struct ProductShape {
+  std::uint64_t rows = 0;
+  std::uint64_t columns = 0;
+};
 
 // The most tokens a step may hold for the product to split — a whole number
 // of 32-token tiles, at most kPrefillBlock — or 1 when it never splits, as a
-// gated activation never does. Preconditions: columns is a whole number of
-// 32-weight groups; rows > 0; gate.denominator > 0.
-[[nodiscard]] std::uint32_t split_tokens(Epilogue epilogue, std::uint64_t rows,
-                                         std::uint64_t columns,
+// gated activation never does. Preconditions: shape.columns is a whole number
+// of 32-weight groups; shape.rows > 0; gate.denominator > 0.
+[[nodiscard]] std::uint32_t split_tokens(Epilogue epilogue, ProductShape shape,
                                          SplitGate gate) noexcept;
 
 // The floats `range_sums` must hold for the product to split every step the
 // gate takes: split_tokens × rows × 32, or 0 when it never splits. A graph
 // plans the most of its products'. Preconditions: split_tokens'.
 [[nodiscard]] std::uint64_t range_sum_floats(Epilogue epilogue,
-                                             std::uint64_t rows,
-                                             std::uint64_t columns,
+                                             ProductShape shape,
                                              SplitGate gate) noexcept;
 
 // The product's launches: for each piece of the weight, a decode launch,
 // and for each tile width a tiled launch and, where `gate` splits the
 // product, a split launch, each in its part of the width's token range, and
 // the split's combine; or for the head, the decode form alone, in every
-// step. `range_sums` is the working buffer of that name, bound when the
-// product splits: a step splits only while its range sums fit it, so a
-// weight in pieces, whose pieces' fewer rows the gate may split further than
-// the graph planned for, runs those steps tiled, the same bits. Preconditions:
-// K is a whole number of 32-weight groups; a fused group's members lie in
-// one buffer within a binding's span, and their rows are the epilogue's;
-// gate.denominator > 0.
+// step that asks for logits. `range_sums` is the working buffer of that
+// name, bound when the product splits: a step splits only while its range
+// sums fit it, so a weight in pieces, whose pieces' fewer rows the gate may
+// split further than the graph planned for, runs those steps tiled, the same
+// bits. Preconditions: the header's Contract.
 [[nodiscard]] std::vector<Launch> matmul_launches(
     const MatmulLaunch& matmul, SplitGate gate,
     residency::BufferRange range_sums);

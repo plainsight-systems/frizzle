@@ -1,59 +1,46 @@
-// The matrix products (kernels/matmul/matmul.h): y[t][o] = Σ_k W[o][k] ×
-// x[t][k], the weight decoded in the load path by its format's unpack.
+// Axis E: changes with a new or optimized kernel.
 //
-// Both forms add an output's products in one order, fixed by K alone: a
-// row's G = K / 32 groups cut into 32 ranges at fixed boundaries, each
-// range summed from zero in order with mac, and the ranges added to a total
-// that starts at zero, in order. Decode gives each range to an invocation;
-// prefill walks them in turn, keeping each output's range sum and total.
+// Contract, algorithm, cost and corpus guidance: matmul.h. This file
+// defines what that header states.
 //
-// Entry points, one a form and epilogue, each binding only what it writes:
-//   decode_write, decode_qkv, decode_gated, decode_gated_input,
-//   prefill_write, prefill_qkv, prefill_gated, prefill_gated_input;
-//   split_ranges, the split form's for every epilogue it takes, and its
-//   combine's: combine_write, combine_qkv, combine_gated_input.
+// The matrix products: y[t][o] = Σ_k W[o][k] × x[t][k], the weight decoded
+// in the load path by its format's unpack. Every form adds an output's
+// products in one order, fixed by K alone (matmul.h, Algorithm 1): decode
+// gives each of a row's 32 ranges to an invocation; the tiled form walks
+// them in turn, keeping each output's range sum and total; the split form
+// gives each range a workgroup, and its combine adds the 32 in order.
 //
-// A product's rows are its members' rows in order — a weight piece, or a
-// fused group's Q, K, V or gate, up — each member read from its own first
+// Entry points, one a form and epilogue, each binding only what it uses:
+//   decode_write, decode_qkv, decode_gated,
+//   prefill_write, prefill_qkv, prefill_gated;
+//   split_ranges, the split form's for Write and QKV alike, and its
+//   combine's: combine_write, combine_qkv.
+//
+// A product's rows are its members' rows in order (a weight piece, or a
+// fused group's Q, K, V or gate, up), each member read from its own first
 // word in the binding.
 //
-// unpack is the weight format's (format.h); exp, tanh-free activations and
-// workgroupBarrier as below are WGSL built-ins.
+// unpack is the weight format's (format.h) and `step` the step's parameters
+// (kernels/step.wgsl); every other function called here and not defined
+// here is a WGSL built-in.
 
 // Each member: x its first word in the binding, y its blocks, z its first
 // output row, w its rows. For a gated product, z is instead the member's
-// first row within its weight: 0 for a gate and an up that are weights of
-// their own, the second half's first row for a GLU's gate over one weight's
-// halves (matmul.h).
+// first row within its weight: 0, for a gate and an up that are weights of
+// their own (matmul.cpp).
 struct Matmul {
     members: array<vec4<u32>, 3>,
-    // GatedByInput's input u: x its row stride, y its first column, in
-    // floats; 0 for every other epilogue.
-    gate_input: vec4<u32>,
-    // A clipped product's bounds, each one F32 word of the weights binding:
-    // x the input's least, y its most, z the output's least, w its most.
-    clip: vec4<u32>,
-    // A biased Write's bias: x its first word in the weights binding.
-    bias: vec4<u32>,
 }
 
-// The program sets workgroup_size and last_token; the launcher the rest.
-// The defaults are Qwen3's QKV, so a tool reading this file alone can size
-// what uses them.
+// The program sets workgroup_size and last_token; the launcher the rest
+// (matmul.cpp), every one a launch's entry point reads. The defaults only
+// let a tool reading this file alone size what uses them.
 override workgroup_size: u32 = 64;
 override last_token: bool = false;
 override columns: u32 = 1024;        // K
 override out_width: u32 = 1024;      // a write's output row width
-override activation: u32 = 0;       // 0 SiLU, 1 GELU in its tanh form, 2 the sigmoid
-// A product's options (matmul.h): its input and outputs clamped to the
-// bounds `clip` names; a Write's bias added; a Write's outputs through the
-// activation. None splits along K, so the combine, which binds no weights,
-// never needs the bounds or the bias.
-override clipped: bool = false;
-override biased: bool = false;
-override activated: bool = false;
 override tile_tokens: u32 = 32;     // a prefill tile's tokens: 8, 16 or 32
-override set_rows: u32 = 4;         // a decode set's rows, Write and QKV: 1 to 4
+override set_rows: u32 = 4;         // a decode set's rows, Write and QKV: 1 or 4
 
 const kRanges = 32u;
 
@@ -63,9 +50,6 @@ const kRanges = 32u;
 @group(0) @binding(4) var<storage, read_write> out0: array<f32>;
 @group(0) @binding(5) var<storage, read_write> out1: array<f32>;
 @group(0) @binding(6) var<storage, read_write> out2: array<f32>;
-// GatedByInput's u, read-only: its own declaration of binding 5, which the
-// QKV entry points write as out1, as two entry points may share a binding.
-@group(0) @binding(5) var<storage, read> gate_input: array<f32>;
 
 // Decode: each of 8 row slots' 32 range sums.
 var<workgroup> partials: array<f32, 256>;
@@ -74,22 +58,13 @@ var<workgroup> partials: array<f32, 256>;
 // of a vector in workgroup memory may write all four, so invocations never
 // share a vector: token i's k-quad v at x_tile[8i + v], row slot s's at
 // w_tile[9s + v], each slot's row padded a vec4 so the 16 slots a read
-// takes, s = oq + 16j, fall in distinct banks.
+// takes, s = lane + 16j, fall in distinct banks.
 // Workaround (browser): WebKit fails a pipeline whose workgroup array is
 // sized by an expression of overrides, or by an override left at its
 // default, so x_tile's length, 8 × tile_tokens, is its own override, set by
 // the launcher (matmul.cpp) on every launch: with tile_tokens for prefill,
 // and the largest tile's for decode, which never touches x_tile.
 override x_tile_vec4s: u32 = 256u;
-// The program's: the launch's rows are the step's tokens over this — 1 but
-// for a product after a vision encoder's pooling, whose rows are its
-// patches over k² (kernels/interface.h, Geometry).
-override row_divisor: u32 = 1u;
-
-// The rows this launch covers: the step's tokens, divided.
-fn step_rows() -> u32 {
-    return step.tokens / row_divisor;
-}
 var<workgroup> x_tile: array<vec4<f32>, x_tile_vec4s>;
 var<workgroup> w_tile: array<vec4<f32>, 576>;
 
@@ -107,28 +82,6 @@ fn mac(acc: f32, w: f32, x: f32) -> f32 {
 
 fn groups() -> u32 {
     return columns / 32u;
-}
-
-// An F32 word of the weights binding: a bound or a bias.
-fn word_f32(w: u32) -> f32 {
-    return bitcast<f32>(weights[w]);
-}
-
-// The input as the product reads it: clamped to its bounds where clipped.
-// A clamp is exact, so it adds no rounding.
-fn clamp_input(x: vec4<f32>) -> vec4<f32> {
-    if (!clipped) {
-        return x;
-    }
-    return clamp(x, vec4<f32>(word_f32(matmul.clip.x)), vec4<f32>(word_f32(matmul.clip.y)));
-}
-
-// A total clamped to the output's bounds where clipped.
-fn clamp_output(v: f32) -> f32 {
-    if (!clipped) {
-        return v;
-    }
-    return clamp(v, word_f32(matmul.clip.z), word_f32(matmul.clip.w));
 }
 
 // Range r's first group; range r is groups range_lo(r) .. range_lo(r + 1).
@@ -157,15 +110,15 @@ fn weights_of(m: u32, row: u32, g: u32) -> array<vec4<f32>, 8> {
 }
 
 fn token_of_decode() -> u32 {
-    return select(0u, step_rows() - 1u, last_token);
+    return select(0u, step.tokens - 1u, last_token);
 }
 
 // e^x for x <= 0, as explicit arithmetic rather than the built-in exp,
 // which the target's compiler evaluated differently in the decode and
-// prefill pipelines: x = k ln 2 + r, ln 2 in two parts (Cody and Waite), so
-// r is near exact; e^r by its Taylor series to r⁶ in Horner's form, within
-// 2⁻²² for |r| <= ln 2 / 2; then 2^k exactly by ldexp. Every multiply-add
-// is an fma.
+// prefill pipelines: x = k ln 2 + r, ln 2 in two parts, a high part exact
+// in few bits and the rest, so r is near exact; e^r by its Taylor series to
+// r⁶ in Horner's form, within 2⁻²² for |r| <= ln 2 / 2; then 2^k exactly by
+// ldexp. Every multiply-add is an fma.
 fn exp_nonpositive(x: f32) -> f32 {
     let xc = max(x, -100.0);
     let k = floor(fma(xc, 1.4426950408889634, 0.5));
@@ -181,22 +134,11 @@ fn exp_nonpositive(x: f32) -> f32 {
     return ldexp(p, i32(k));
 }
 
-// SiLU, x × sigmoid(x), and GELU's tanh form, each from e^x of a
-// non-positive x, so no intermediate overflows: WGSL may assume no
-// infinities. Every multiply-add is an explicit fma and each quotient one
-// reciprocal, leaving the compiler nothing to contract differently in the
-// two pipelines.
+// GELU's tanh form, from e^x of a non-positive x, so no intermediate
+// overflows: WGSL may assume no infinities. Every multiply-add is an
+// explicit fma and each quotient one reciprocal, leaving the compiler
+// nothing to contract differently in the two pipelines.
 fn activate(g: f32) -> f32 {
-    if (activation == 0u) {
-        let e = exp_nonpositive(-abs(g));
-        let r = 1.0 / (1.0 + e);
-        return g * select(e * r, r, g >= 0.0);
-    }
-    if (activation == 2u) {
-        let e = exp_nonpositive(-abs(g));
-        let r = 1.0 / (1.0 + e);
-        return select(e * r, r, g >= 0.0);
-    }
     let z = 0.7978845608028654 * fma(0.044715 * g * g, g, g);
     let e = exp_nonpositive(-2.0 * abs(z));
     let t = sign(z) * ((1.0 - e) * (1.0 / (1.0 + e)));
@@ -215,7 +157,7 @@ fn decode_ranges(lane: u32, slots: u32, members: vec4<u32>, rows: vec4<u32>, liv
     for (var g = range_lo(lane); g < range_lo(lane + 1u); g++) {
         var x: array<vec4<f32>, 8>;
         for (var v = 0u; v < 8u; v++) {
-            x[v] = clamp_input(input[token * (columns / 4u) + g * 8u + v]);
+            x[v] = input[token * (columns / 4u) + g * 8u + v];
         }
         for (var j = 0u; j < slots; j++) {
             if (live[j]) {
@@ -269,20 +211,6 @@ fn row_slot(t: u32) -> u32 {
     return (t / set_rows) * 4u + t % set_rows;
 }
 
-// A Write's output o from its total: clamped, biased and activated as the
-// product's options ask, in that order — llama.cpp's clamp after the
-// product, its bias added after, the feed-forward's activation last.
-fn finish(total: f32, o: u32) -> f32 {
-    var y = clamp_output(total);
-    if (biased) {
-        y = y + word_f32(matmul.bias.x + o);
-    }
-    if (activated) {
-        y = activate(y);
-    }
-    return y;
-}
-
 @compute @workgroup_size(workgroup_size)
 fn decode_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t: u32) {
     decode_rows(wg.x, t);
@@ -290,7 +218,7 @@ fn decode_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         let at = locate(wg.x * 2u * set_rows + t);
         if (at.z == 1u) {
             let o = matmul.members[at.x].z + at.y;
-            out0[o] = finish(slot_total(row_slot(t)), o);
+            out0[o] = slot_total(row_slot(t));
         }
     }
 }
@@ -335,27 +263,9 @@ fn decode_gated(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         let k = t % 2u;
         let row = wg.x * 4u + s * 2u + k;
         if (row < width) {
-            let gate = clamp_output(slot_total(s * 4u + k));
-            let up = clamp_output(slot_total(s * 4u + 2u + k));
+            let gate = slot_total(s * 4u + k);
+            let up = slot_total(s * 4u + 2u + k);
             out0[row] = activate(gate) * up;
-        }
-    }
-}
-
-// GatedByInput: an output row's total through the activation, times the
-// input u at the token's row and the output's column.
-fn gated_by_input(total: f32, token: u32, o: u32) -> f32 {
-    return activate(total) * gate_input[token * matmul.gate_input.x + matmul.gate_input.y + o];
-}
-
-@compute @workgroup_size(workgroup_size)
-fn decode_gated_input(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t: u32) {
-    decode_rows(wg.x, t);
-    if (t < 2u * set_rows) {
-        let at = locate(wg.x * 2u * set_rows + t);
-        if (at.z == 1u) {
-            let o = matmul.members[at.x].z + at.y;
-            out0[o] = gated_by_input(slot_total(row_slot(t)), token_of_decode(), o);
         }
     }
 }
@@ -397,7 +307,7 @@ fn tile_place(token_tile: u32, out_tile: u32, t: u32, gated: bool) -> TilePlace 
     let slot1 = t + workgroup_size;
     // A quad wholly past the step stages and passes the barriers, and skips
     // the products.
-    return TilePlace(token_tile, t % kOutputLanes, token_tile * tile_tokens + tq * kMicro < step_rows(), t, slot1,
+    return TilePlace(token_tile, t % kOutputLanes, token_tile * tile_tokens + tq * kMicro < step.tokens, t, slot1,
                      slot_row(out_tile, t, gated), slot_row(out_tile, min(slot1, kTileRows - 1u), gated),
                      tq * kMicro * 8u);
 }
@@ -433,8 +343,8 @@ fn tile_range(at: TilePlace, t: u32, r: u32) -> array<vec4<f32>, 4> {
         for (var q = t; q < 8u * tile_tokens; q += workgroup_size) {
             let token = token_tile * tile_tokens + q / 8u;
             var x = vec4<f32>(0.0);
-            if (token < step_rows()) {
-                x = clamp_input(input[token * (columns / 4u) + g * 8u + q % 8u]);
+            if (token < step.tokens) {
+                x = input[token * (columns / 4u) + g * 8u + q % 8u];
             }
             x_tile[q] = x;
         }
@@ -478,7 +388,7 @@ fn tile_range(at: TilePlace, t: u32, r: u32) -> array<vec4<f32>, 4> {
 // sums added to its total in order, a total from zero, exactly as decode adds
 // them.
 fn prefill_tile(wg: u32, t: u32, gated: bool) -> array<vec4<f32>, 4> {
-    let token_tiles = (step_rows() + tile_tokens - 1u) / tile_tokens;
+    let token_tiles = (step.tokens + tile_tokens - 1u) / tile_tokens;
     let at = tile_place(wg % token_tiles, wg / token_tiles, t, gated);
     var y0 = vec4<f32>(0.0);
     var y1 = vec4<f32>(0.0);
@@ -508,12 +418,12 @@ fn stage_row(slot: u32, at: vec3<u32>, g: u32) {
 
 // The first of invocation t's 4 tokens in the step.
 fn first_token(wg: u32, t: u32) -> u32 {
-    let token_tiles = (step_rows() + tile_tokens - 1u) / tile_tokens;
+    let token_tiles = (step.tokens + tile_tokens - 1u) / tile_tokens;
     return (wg % token_tiles) * tile_tokens + (t / kOutputLanes) * kMicro;
 }
 
 fn out_tile_of(wg: u32) -> u32 {
-    return wg / ((step_rows() + tile_tokens - 1u) / tile_tokens);
+    return wg / ((step.tokens + tile_tokens - 1u) / tile_tokens);
 }
 
 @compute @workgroup_size(workgroup_size)
@@ -524,9 +434,9 @@ fn prefill_write(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation
         let at = slot_row(out_tile_of(wg.x), t % kOutputLanes + kOutputLanes * j, false);
         for (var i = 0u; i < kMicro; i++) {
             let token = first + i;
-            if (token < step_rows() && at.z == 1u) {
+            if (token < step.tokens && at.z == 1u) {
                 let o = matmul.members[at.x].z + at.y;
-                out0[token * out_width + o] = finish(totals[i][j], o);
+                out0[token * out_width + o] = totals[i][j];
             }
         }
     }
@@ -541,7 +451,7 @@ fn prefill_qkv(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_i
         let width = matmul.members[at.x].w;
         for (var i = 0u; i < kMicro; i++) {
             let token = first + i;
-            if (token < step_rows() && at.z == 1u) {
+            if (token < step.tokens && at.z == 1u) {
                 let value = totals[i][j];
                 if (at.x == 0u) {
                     out0[token * width + at.y] = value;
@@ -566,24 +476,8 @@ fn prefill_gated(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation
         let row = out_tile_of(wg.x) * (kTileRows / 2u) + (t % kOutputLanes) * 2u + j;
         for (var i = 0u; i < kMicro; i++) {
             let token = first + i;
-            if (token < step_rows() && row < width) {
-                out0[token * width + row] = activate(clamp_output(totals[i][j])) * clamp_output(totals[i][j + 2u]);
-            }
-        }
-    }
-}
-
-@compute @workgroup_size(workgroup_size)
-fn prefill_gated_input(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t: u32) {
-    let totals = prefill_tile(wg.x, t, false);
-    let first = first_token(wg.x, t);
-    for (var j = 0u; j < kMicro; j++) {
-        let at = slot_row(out_tile_of(wg.x), t % kOutputLanes + kOutputLanes * j, false);
-        for (var i = 0u; i < kMicro; i++) {
-            let token = first + i;
-            if (token < step_rows() && at.z == 1u) {
-                let o = matmul.members[at.x].z + at.y;
-                out0[token * out_width + o] = gated_by_input(totals[i][j], token, o);
+            if (token < step.tokens && row < width) {
+                out0[token * width + row] = activate(totals[i][j]) * totals[i][j + 2u];
             }
         }
     }
@@ -599,7 +493,7 @@ fn product_rows() -> u32 {
 // Where range r's sum of the product's row p for `token` lies in
 // `range_sums`: range first, so a range's sums for adjacent rows are adjacent.
 fn range_sum_at(r: u32, token: u32, p: u32) -> u32 {
-    return (r * step_rows() + token) * product_rows() + p;
+    return (r * step.tokens + token) * product_rows() + p;
 }
 
 // The tiled form's workgroup (token tile, output tile) for range r alone,
@@ -608,7 +502,7 @@ fn range_sum_at(r: u32, token: u32, p: u32) -> u32 {
 @compute @workgroup_size(workgroup_size)
 fn split_ranges(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t: u32) {
     let rows = product_rows();
-    let token_tiles = (step_rows() + tile_tokens - 1u) / tile_tokens;
+    let token_tiles = (step.tokens + tile_tokens - 1u) / tile_tokens;
     let out_tiles = (rows + kTileRows - 1u) / kTileRows;
     let token_tile = wg.x % token_tiles;
     let out_tile = (wg.x / token_tiles) % out_tiles;
@@ -619,7 +513,7 @@ fn split_ranges(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         let p = out_tile * kTileRows + t % kOutputLanes + kOutputLanes * j;
         for (var i = 0u; i < kMicro; i++) {
             let token = first + i;
-            if (token < step_rows() && p < rows) {
+            if (token < step.tokens && p < rows) {
                 out0[range_sum_at(r, token, p)] = sums[i][j];
             }
         }
@@ -627,13 +521,10 @@ fn split_ranges(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
 }
 
 // The combine's bindings, its own declarations, since it reads no weights:
-// 2 `range_sums`, read-only; 3 its first output; 4 its second, or
-// GatedByInput's u, read-only; 5 its third. No entry point uses both of two
-// declarations of one binding.
+// 2 `range_sums`, read-only; 3 its first output; 4 its second; 5 its third.
 @group(0) @binding(2) var<storage, read> range_sums: array<f32>;
 @group(0) @binding(3) var<storage, read_write> combined0: array<f32>;
 @group(0) @binding(4) var<storage, read_write> combined1: array<f32>;
-@group(0) @binding(4) var<storage, read> combined_u: array<f32>;
 @group(0) @binding(5) var<storage, read_write> combined2: array<f32>;
 
 // The total of the product's row p for `token`: its 32 range sums added to a
@@ -650,7 +541,7 @@ fn combined(token: u32, p: u32) -> f32 {
 @compute @workgroup_size(workgroup_size)
 fn combine_write(@builtin(global_invocation_id) id: vec3<u32>) {
     let rows = product_rows();
-    if (id.x >= step_rows() * rows) {
+    if (id.x >= step.tokens * rows) {
         return;
     }
     let token = id.x / rows;
@@ -662,7 +553,7 @@ fn combine_write(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(workgroup_size)
 fn combine_qkv(@builtin(global_invocation_id) id: vec3<u32>) {
     let rows = product_rows();
-    if (id.x >= step_rows() * rows) {
+    if (id.x >= step.tokens * rows) {
         return;
     }
     let token = id.x / rows;
@@ -677,19 +568,4 @@ fn combine_qkv(@builtin(global_invocation_id) id: vec3<u32>) {
     } else {
         combined2[token * width + at.y] = value;
     }
-}
-
-// As gated_by_input, with u read through the combine's own binding.
-@compute @workgroup_size(workgroup_size)
-fn combine_gated_input(@builtin(global_invocation_id) id: vec3<u32>) {
-    let rows = product_rows();
-    if (id.x >= step_rows() * rows) {
-        return;
-    }
-    let token = id.x / rows;
-    let p = id.x % rows;
-    let at = locate(p);
-    let o = matmul.members[at.x].z + at.y;
-    let u = combined_u[token * matmul.gate_input.x + matmul.gate_input.y + o];
-    combined0[token * out_width + o] = activate(combined(token, p)) * u;
 }

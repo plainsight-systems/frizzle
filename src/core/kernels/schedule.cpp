@@ -1,3 +1,8 @@
+// Axis D: changes with the WebGPU surface or the limits a device grants.
+//
+// Contract, algorithm, cost and corpus guidance: schedule.h. This file
+// defines what that header states.
+
 #include "core/kernels/schedule.h"
 
 #include <algorithm>
@@ -5,16 +10,13 @@
 namespace frizzle::kernels {
 
 Schedules::Schedules(std::span<const Geometry> launches) {
-  // Every token count where some launch starts or stops running.
-  // A launch's range is in its rows, the step's tokens over its divisor:
-  // in tokens, from least × d to (most + 1) × d − 1.
+  // Every token count where some launch starts or stops running: from its
+  // least to its most + 1.
   bounds_.push_back(1);
   for (const Geometry& g : launches) {
-    const std::uint64_t d = g.row_divisor;
-    const std::uint64_t least = std::uint64_t{g.tokens.least} * d;
-    const std::uint64_t past = (std::uint64_t{g.tokens.most} + 1) * d;
-    if (least > 1 && least <= UINT32_MAX)
-      bounds_.push_back(static_cast<std::uint32_t>(least));
+    const std::uint32_t least = g.tokens.least;
+    const std::uint64_t past = std::uint64_t{g.tokens.most} + 1;
+    if (least > 1) bounds_.push_back(least);
     if (past <= UINT32_MAX) bounds_.push_back(static_cast<std::uint32_t>(past));
   }
   std::sort(bounds_.begin(), bounds_.end());
@@ -27,8 +29,7 @@ Schedules::Schedules(std::span<const Geometry> launches) {
     const std::uint32_t tokens = bounds_[i];
     for (std::uint32_t k = 0; k < launches.size(); ++k) {
       const Geometry& g = launches[k];
-      const std::uint32_t rows = tokens / g.row_divisor;
-      if (rows < g.tokens.least || rows > g.tokens.most) continue;
+      if (tokens < g.tokens.least || tokens > g.tokens.most) continue;
       if (g.rows != Rows::LastToken) lists_[2 * i].push_back(k);
       lists_[2 * i + 1].push_back(k);
     }

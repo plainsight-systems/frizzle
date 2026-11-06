@@ -193,7 +193,7 @@ class Harness {
       bool done = false;
     } ran;
     program_->run(
-        step, inputs, {},
+        step, inputs,
         [](frz::kernels::ProgramError error, std::string_view message,
            std::span<const std::byte> /*readback*/, void* userdata) {
           auto& r = *static_cast<Ran*>(userdata);

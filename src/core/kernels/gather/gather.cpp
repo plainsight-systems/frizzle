@@ -1,5 +1,11 @@
+// Axis E: changes with a new or optimized kernel.
+//
+// Contract, algorithm, cost and corpus guidance: gather.h. This file
+// defines what that header states.
+
 #include "core/kernels/gather/gather.h"
 
+#include <cstddef>
 #include <cstring>
 
 #include "core/capability/capability.h"
@@ -9,16 +15,16 @@
 namespace frizzle::kernels {
 namespace {
 
-// Binding 1, as gather.wgsl's Gather lays it out.
+// Binding 1, as gather.wgsl's Gather lays it out: five 4-byte words.
+constexpr std::size_t kConstantsBytes = 20;
 struct Constants {
   std::uint32_t first_row;
   std::uint32_t row_count;
   std::uint32_t groups_per_row;
   std::uint32_t blocks_in_piece;
   float scale;
-  std::uint32_t positions = 0;
 };
-static_assert(sizeof(Constants) == 24);
+static_assert(sizeof(Constants) == kConstantsBytes);
 
 constexpr std::uint32_t kWorkgroupSize = 64;
 
@@ -63,35 +69,6 @@ std::vector<Launch> gather_launches(const residency::WeightView& table,
     });
   }
   return launches;
-}
-
-Launch position_launch(const residency::WeightView& table,
-                       std::uint32_t positions,
-                       const residency::BufferRange& output) {
-  const std::uint64_t width = table.shape().dimensions[0];
-  const auto groups_per_row =
-      static_cast<std::uint32_t>(width / formats::kUnpackGroup);
-  const residency::WeightPiece& piece = table.pieces().front();
-  const Constants constants{
-      0,
-      2 * positions,
-      groups_per_row,
-      static_cast<std::uint32_t>(
-          std::uint64_t{2} * positions * width /
-          gguf::format_layout(table.format())->block_elements),
-      1.0f,
-      positions};
-  Launch launch{
-      shaders::gather,
-      capability::find_format(table.format()),
-      bytes_of(constants),
-      {Binding{piece.buffer, piece.offset, piece.length},
-       Binding{output.buffer, output.offset, output.length}},
-      groups_per_row,
-      kWorkgroupSize,
-  };
-  launch.entry_point = "positions";
-  return launch;
 }
 
 }  // namespace frizzle::kernels

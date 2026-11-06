@@ -12,9 +12,9 @@ namespace frizzle::kernels {
 // Axis E: changes with a new or optimized kernel.
 //
 // RMSNorm, with the residual add before it fused in (docs/architecture/
-// logical-overview.md, "Inside one layer"). One kernel for the attention,
-// feed-forward and final norms of every architecture here, and for both
-// regimes: a row's norm needs only that row.
+// logical-overview.md, "Inside one layer"). One kernel for Gemma 3 1B's
+// attention, feed-forward and final norms, and for both regimes: a row's norm
+// needs only that row.
 //
 // For each row it covers:
 //   1. Where the launch adds: y, the last block's output, is added into X,
@@ -31,13 +31,12 @@ namespace frizzle::kernels {
 //
 //   - One workgroup of 256 invocations per row. Invocation i takes the row's
 //     vec4s i, i + 256, …, holding them in registers, so X is read from
-//     memory once; rows up to 4,096 wide, at most 4 vec4s an invocation,
-//     cover every listed model (Llama 3.2 1B's 2,048 is the widest). The
-//     width is an override constant, so each invocation's loops run
-//     ceil(W / 1,024) times, fixed when the pipeline is built — once for
-//     Qwen3, twice for Llama 3.2 and Gemma 3 — and the bounds check folds
-//     away where 1,024 divides the width. A model has one width, so this
-//     adds no pipelines.
+//     memory once; rows up to 4,096 wide, at most 4 vec4s an invocation;
+//     Gemma 3 1B's are 1,152, 288 vec4s. The width is an override constant,
+//     so each invocation's loops run ceil(W / 1,024) times, fixed when the
+//     pipeline is built — twice for Gemma 3 1B — and the bounds check can
+//     fold away only where 1,024 divides the width, which 1,152 is not. A
+//     model has one width, so this adds no pipelines.
 //   - The sum of squares is reduced in workgroup memory, in a fixed tree:
 //     each invocation's own vec4s in order, then halving across the
 //     workgroup, 8 levels. No atomics (GDSA.5). A barrier where one
@@ -51,70 +50,50 @@ namespace frizzle::kernels {
 //     from it, are the same whether the token was prefilled or decoded. Not
 //     bit for bit with other implementations or across GPUs, which sum in
 //     other orders.
-//   - Accuracy, for finite rows whose squares stay finite in f32 — every
-//     activation the listed models produce: each output within 2⁻¹⁸ of the
-//     same computation in f64, measured against the largest output of its
-//     row. That is the margin a 4,096-wide row's sum leaves (16 sequential
-//     adds an invocation, then 8 tree levels, each a rounding of at most
-//     2⁻²⁴), with the inverse square root's 2 units and the multiplies; WGSL
-//     lets the compiler reassociate and does not fix the rounding direction,
-//     so it is a margin the GPU test checks on the target, not a proof.
-//     Against the row, not the element: adding y into X can cancel, and an
-//     element near zero carries its row's error. A row whose squares
-//     overflow f32 — about 10¹⁹ — is outside it; no listed model's
-//     activations come near.
+//   - Accuracy, for finite rows whose squares stay finite in f32: each
+//     output within 2⁻¹⁸ of the same computation in f64, measured against
+//     the largest output of its row. That is the margin a 4,096-wide row's sum
+//     leaves (16 sequential adds an invocation, then 8 tree levels, each a
+//     rounding of at most 2⁻²⁴), with the inverse square root's 2 units and the
+//     multiplies; WGSL lets the compiler reassociate and does not fix the
+//     rounding direction, so it is a design margin, not a proof, and no test
+//     checks it. Against the row, not the element: adding y into X can cancel,
+//     and an element near zero carries its row's error. A row whose squares
+//     overflow f32 — elements of about 10¹⁹ — is outside it; how near
+//     Gemma 3 1B's activations come is not measured here.
 //   - Variants are override constants, so one source serves all of them:
 //     `add`, and `post_norm` (which requires `add`); `width` is one too.
-//     An encoder's (graph/encoder.h) take three more, each changing one
-//     launch's form and none of the decoder's:
-//       `scaled` (requires `add`): X multiplied by a scalar after the add
-//         and before the reduction — Gemma 4's layer output scale, applied
-//         to the whole residual stream once a layer's last block is added;
-//       `normalize` (default true): false writes X after the add and
-//         nothing else — the add before the per-layer gate, which reads X;
-//       `rows_per_token` (default 1): a launch covers tokens ×
-//         rows_per_token rows of `width`, workgroup w the row w — the
-//         per-layer inputs, 24 rows of 512 a token, each normalized on its
-//         own. Not with a launch over the last token.
-//     An audio encoder's (graph/audio.h) take three more, each changing one
-//     launch's form and none of the others':
-//       `post_scale` (requires `post_norm`): y, through its post-norm, times
-//         the constants' post_scale before the add — the half-step
-//         feed-forward's residual weight, 0.5: X + c × postnorm(y). 1
-//         elsewhere, and not applied.
-//       `renorm` (requires `add`): after the add, X replaced by its own
-//         norm with the layer's output gain, written back as X, and then,
-//         where the launch normalizes, normalized again with its gain into
-//         `normed` — a Conformer layer's closing norm and the next layer's
-//         first in one launch. A third reduction where the post-norm makes
-//         two; the barrier between each and the next, as between the
-//         post-norm's and X's.
-//       `unit_gain`: g = 1, its binding bound to the input in its place —
-//         the multimodal embedder's RMS norm without a gain, at a width of
-//         1,536, which no other norm here has; the width's override covers
-//         it, two vec4s an invocation, the second guarded.
-//     Every binding is declared in every variant, so a launch that does not
-//     add still binds the output buffer and, without a post-norm, a scale or
-//     a re-norm, binds its gain in their places — with a unit gain, the
-//     output buffer in the gain's: all read-only, so none aliases a buffer
-//     the kernel writes.
-//   - Capture (capture/capture.h; slice 4, step 5). A launch may write two
-//     vectors into the capture store, in the step that ends the prompt
-//     (step.logits 1 and step.fed 0) and for the step's last row only:
+//   - post_scale is not a variant but a constant (binding 1): wherever the
+//     launch has a post-norm, y through its post-norm is multiplied by it at
+//     run time before the add, X + c × postnorm(y). Gemma 3's graph always
+//     passes 1, NormLaunch's default, so the multiply changes no value. It
+//     is kept for the bits. Measured (Dawn native, this machine, the
+//     oracle's fixed tokens): without it, the oracle's worst deviation moved
+//     from 0.044009 to 0.0402013 nats, the tokens unchanged. Inferred: the
+//     multiply keeps the shader compiler from fusing the post-norm's gain
+//     multiply into the residual add, so the rounding differs without it.
+//     It is kept so the output stays bit for bit with the recorded
+//     baseline. No test locks it.
+//   - Every binding is declared in every variant, so a launch that does not
+//     add still binds the output buffer and, without a post-norm, binds its
+//     gain in the post-norm's place: both read-only, so neither aliases a
+//     buffer the kernel writes.
+//   - Capture (capture/capture.h). A launch may write two vectors into the
+//     capture store, in the step that ends the prompt (step.logits 1 and
+//     step.fed 0) and for the step's last row only:
 //       - with `capture_residual`, X as the layer's later steps read it:
-//         after the add, the scale and the re-norm where the launch makes
-//         them, before it normalizes; where the launch does not add, X as
-//         it was read, so layer 0's attention norm captures the embedding.
+//         after the add where the launch makes it, before it normalizes;
+//         where the launch does not add, X as it was read, so layer 0's
+//         attention norm captures the embedding.
 //         Into the residual slot.
 //       - with `capture_added` (requires `add`), y exactly as it was added
-//         into X: after the post-norm and post_scale where the launch makes
-//         them. Into the added slot. So, where the launch neither scales nor
-//         re-norms, X before plus the captured y, one f32 add an element
-//         (correctly rounded in WGSL), is X written, bit for bit. WGSL does
-//         not say a compiler may not fuse the post-norm's last multiply
-//         into the add, which would break it: the identity is what the
-//         target gives, which the GPU test checks, as attention's equal
-//         bits are, not a promise.
+//         into X: after the post-norm and its multiply by post_scale where
+//         the launch has a post-norm. Into the added slot. So X before plus
+//         the captured y, one f32 add an element (correctly rounded in
+//         WGSL), is X written, bit for bit. WGSL does not say a compiler may
+//         not fuse the last multiply before the add into the add, which would
+//         break it: the identity is what the target gives, which the capture
+//         test checks, as attention's equal bits are, not a promise.
 //     Writing changes nothing the launch computes: X and normed are the same
 //     bits whether the step captures or not. No other step and no other row
 //     writes to the store. Which launch writes which layer's slots is the
@@ -134,32 +113,32 @@ namespace frizzle::kernels {
 //       struct Norm { epsilon: f32, post_scale: f32, residual_slot: u32,
 //                     added_slot: u32 }
 //     Bindings: 2 the gain, 3 the post-norm's gain, 4 the block's output y,
-//     read-only; 5 the hidden buffer X; 6 the normed buffer; 7 the scale,
-//     one f32, read-only; 8 the re-norm's gain, read-only; 9 the capture
-//     store, read-write. Eight storage bindings: WebGPU's default limit a
-//     stage, reached exactly; a ninth would need the limit raised, which
-//     the harness asks for no adapter to do (gpu/device_requirements.h).
+//     read-only; 5 the hidden buffer X; 6 the normed buffer; 7 the capture
+//     store, read-write. Six storage bindings, under WebGPU's default limit
+//     of eight a stage (gpu/device_requirements.h).
 //   - Gains are F32 and one piece: a norm's weight is one row of the hidden
 //     width, far under a binding (format.h's F32).
 //   - It reads the plan's `output` working buffer: a block's last matmul
 //     writes its result there, kPrefillBlock rows of the hidden width, and
 //     the norm after it adds it into X (residency/plan.h).
 //
-// What it costs, counted. Launches: two a layer and the final norm — 57 a
-// pass for Qwen3 0.6B, about 86 µs of dispatch at 1.5 µs (interface.h).
-// Bytes, a row, for Qwen3's 1,024 width: X read and written, y read, the
-// gain read, normed written — 4 KiB each, 20 KiB; Gemma 3's post-norm adds
-// its gain, 4.5 KiB at its 1,152, 27 KiB a row in all; the first layer's
-// attention norm, which does not add, 12 KiB. One norm launch over a 512-row
-// prefill step moves about 10 MiB, about 25 µs at 400 GB/s. A pass's 57 —
-// one without the add, 55 with it over every row, the final norm's one row —
-// move W × (1,112 T + 20) bytes for T rows and width W: about 556 MiB, 1.46
-// ms, at T = 512, of which the gains, read again by every row but 4 KiB
-// each, are 112 MiB; at decode, 1.1 MiB, under 3 µs, far below the
-// launches' 86 µs. A row's latency is its reductions', not its
-// bytes: one tree of 8 levels, or for Gemma 3's post-norm two dependent ones
-// — y's scale is needed before X can be added to and reduced — 16 levels and
-// two inverse square roots.
+// What it costs, counted, for Gemma 3 1B, width W = 1,152, 4.5 KiB a row.
+// Launches: two a layer and the final norm — 53 a pass, about 80 µs of
+// dispatch at about 1.5 µs each, an estimate, not measured in Frizzle
+// (interface.h). Bytes, a row: a launch that adds, with Gemma 3's post-norm,
+// reads X, y, the gain and the post-norm's gain and writes X and normed —
+// 6 × 4.5 KiB, 27 KiB; the first layer's attention norm, which does not add,
+// reads X and the gain and writes normed, 13.5 KiB. One norm launch over a
+// 512-row prefill step moves 13.5 MiB. A pass's 53 — one without the add, 51
+// with it over every row, the final norm's one row — move 4W × (309 T + 6)
+// bytes for T rows: about 695 MiB at T = 512, of which the gains, read again
+// by every row but 4.5 KiB each, are about 232 MiB; at decode, 1.4 MiB. At
+// 400 GB/s, the M3 Max's memory bandwidth, those are about 35 µs, 1.8 ms
+// and 3.6 µs, estimates, not measured; a decode step's bytes are far below
+// its launches' 80 µs. A row's latency is its reductions', not its bytes:
+// with Gemma 3's post-norm, two dependent trees of 8 levels — y's scale is
+// needed before X can be added to and reduced — 16 levels and two inverse
+// square roots; one tree for the first layer's attention norm.
 // Optimization (practice): the residual add and the gain ride in the norm's
 // launch, rather than in launches of their own (GPU.6).
 // Optimization (practice): the width fixed at pipeline creation, not read
@@ -182,27 +161,19 @@ namespace frizzle::kernels {
 // Within those limits the reduction is a tree without subgroups: sequential
 // addressing, so active invocations stay contiguous; each invocation's own
 // vec4s summed before the tree; several vec4s an invocation for rows wider
-// than 1,024. The last levels, run without barriers within a subgroup, are
-// the subgroup sum above. And one
-// workgroup a row, one vec4 an invocation for Qwen3: a 4 KiB row split
-// across workgroups would need a second launch or atomics to combine its
-// sums, slower for a decode step's one row, not faster.
+// than 1,024. The last levels, within one subgroup, still take a barrier
+// each, where a subgroup sum would take none. And one workgroup a row, two
+// vec4s an invocation for Gemma 3 1B: a 4.5 KiB row split across workgroups
+// would need a second launch or atomics to combine its sums, slower for a
+// decode step's one row, not faster.
 //
-// Verification the implementation is held to, on the GPU against an f64
-// reference: every variant, at the widths of the listed models; rows of
-// large and of tiny magnitude; a step of many rows and of one, each row's
-// result identical in both; and the final norm touching only the last row.
-// The capture alone has a test of its own, in the kernels suite
-// (tests/README.md): the vectors it writes and where, and that X and normed
-// are unchanged by it; the norm's arithmetic stays the oracle's to check.
-
-// The encoder's variants, likewise, at EmbeddingGemma 2's width of 512: a
-// scaled add, X then normalized; an add alone, normed untouched; and 2 rows a
-// token over 2 tokens, each row normalized on its own, with an ε of its own.
-// The audio encoder's, at its width of 1,024 and the unit gain's 1,536: a
-// post-norm at a scale of 0.5; a re-norm then a norm, and a re-norm alone,
-// X written as the re-norm left it; a unit gain, normed equal to the f64
-// RMS norm without one.
+// Tests: the norm's arithmetic has no test of its own; the oracle covers it
+// end to end on the pinned model (tests/README.md). The capture alone has a
+// test, in the kernels suite: the vectors it writes and where, and that X
+// and normed are unchanged by it. No unit test checks the accuracy margin
+// above, a row's independence of its step (replay's exact-replay checks
+// cover that end to end), or the final norm touching only the last row
+// apart from its capture; no test at all locks the multiply by post_scale.
 //
 // Guidelines, by corpus:
 //   C++ performance guidelines
@@ -220,26 +191,25 @@ namespace frizzle::kernels {
 //            are not: an invocation writes its vec4's four words, a slot
 //            being word-aligned only, so adjacent lanes are 16 bytes
 //            apart. One row once a run, 4.5 KiB; not worth a shuffle.
+//     GPU.8  Make barriers describe real hazards — none after the last
+//            reduction, where nothing writes the partial sums again.
 //   C++ Core Guidelines
 //     C.12   Don't make data members const or references in a copyable
 //            type — the gains are pointers.
-//     GPU.8  Make barriers describe real hazards — none after the last
-//            reduction, where nothing writes the partial sums again.
 //     I.7    State postconditions — the capture's: X before plus the
 //            captured y is X written; X and normed unchanged by it.
 
 // The capture store and the slots one norm writes (the header's Capture):
 // each slot's first word, or none. A slot is the norm's width long.
 struct NormCapture {
-  residency::BufferRange store;           // bound always: binding 9
+  residency::BufferRange store;           // bound always: binding 7
   std::optional<std::uint32_t> residual;  // X, after the add
   std::optional<std::uint32_t> added;     // y as added; requires `add`
 };
 
 // One norm of the graph.
 struct NormLaunch {
-  const residency::WeightView* gain =
-      nullptr;  // F32, one row's width; null for a unit gain
+  const residency::WeightView* gain = nullptr;  // F32, one row's width
   const residency::WeightView* post_gain =
       nullptr;       // Gemma 3's post-norm of y, or null
   bool add = false;  // add y into X first; required by a post-norm
@@ -248,30 +218,17 @@ struct NormLaunch {
   residency::BufferRange normed = {};
   float epsilon = 0.0f;
   Rows rows = Rows::EveryToken;  // LastToken for the final norm
-  // Gemma 4's layer output scale: an F32 view of one float that multiplies
-  // X after the add, or null.
-  const residency::WeightView* scale = nullptr;
-  // False: the launch adds and writes X, and nothing else.
-  bool normalize = true;
-  // Rows a token, each normalized on its own: the per-layer inputs' 24.
-  std::uint32_t rows_per_token = 1;
-  // What the post-normed y is multiplied by before the add: an audio
-  // encoder's half-step 0.5, else 1.
+  // What the post-normed y is multiplied by before the add, at run time,
+  // wherever the launch has a post-norm. Gemma 3's graph leaves it 1: the
+  // multiply is kept for the bits (above).
   float post_scale = 1.0f;
-  // A Conformer layer's closing norm's gain: X replaced by its norm with it
-  // after the add, or null. Requires `add`.
-  const residency::WeightView* renorm_gain = nullptr;
-  // A unit gain's row width, where `gain` is null; the block's output is
-  // then bound in the gain's place, so it must not be X or normed.
-  std::uint32_t width = 0;
   // What the launch writes into the capture store, if anything (above).
   NormCapture capture = {};
 };
 
-// The launch for one norm. Preconditions: the gains are F32 views of one
-// row's width, at most 4,096; a post-norm or a scale only where the launch
-// adds; a launch that does not normalize adds; rows_per_token 1 for a launch
-// over the last token; `capture.store` the plan's capture store, and each
+// The launch for one norm. Preconditions: `gain` is not null; the gains are
+// F32 views of one row's width, at most 4,096; a post-norm only where the
+// launch adds; `capture.store` the plan's capture store, and each
 // slot in it one of capture::layout()'s, of the norm's width; `added` only
 // where the launch adds.
 [[nodiscard]] Launch norm_launch(const NormLaunch& norm);

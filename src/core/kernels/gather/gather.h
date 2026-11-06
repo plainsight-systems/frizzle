@@ -10,109 +10,132 @@ namespace frizzle::kernels {
 
 // Axis E: changes with a new or optimized kernel.
 //
-// The embedding: each token of the step becomes its row of the token
-// embedding table, decoded and scaled, in the hidden working buffer. One
-// kernel for both regimes — a step's rows are independent, so prefill and
-// decode differ only in how many there are.
+// The embedding: each token of the step becomes its row of Gemma 3 1B's
+// token embedding table, decoded from Q8_0 and multiplied by the graph's
+// scale, written as f32 into the hidden working buffer, where the first
+// layer's attention norm reads it. One kernel for both regimes: a step's rows
+// are independent, so prefill and decode differ only in how many there are.
 //
-//   - Rows: row i of the hidden buffer is token i of the step, hidden-width
-//     floats, 4-byte f32 (residency/plan.h).
-//   - One invocation per 32-weight group of a row: it reads the step's
-//     identifier for its row — or, in a fed step, the draw's token and not
-//     the identifier — decodes its group through the table's format's
-//     unpack (format.h), multiplies each weight by the launch's scale, and
-//     writes the group's 32 floats. A row is hidden-width / 32 invocations;
-//     every listed model's width is a whole number of groups, which routes
-//     already requires of any tensor kernels read (format.h, steps_by_groups).
-//   - The scale is the graph's: 1 for most architectures; Gemma 3 scales its
-//     embedding by the square root of the hidden width, as llama.cpp's
-//     build_inp_embd(tok_embd, sqrtf(n_embd)) does, in f32. With a scale of
-//     1 every weight is its unpack's, bit for bit within format.h's
-//     contract. With another, a weight is within 2 units in the last place
-//     of llama.cpp's decode-then-scale: the GPU's compiler may fold the
-//     scale into the block's own, multiplying the code by d × scale rather
-//     than the decoded weight by scale — on Metal every weight was exactly
-//     that — and each order rounds twice.
-//   - A table split by rows (residency/plan.h) is one launch per piece, each
-//     binding only its piece. Every launch covers every row of the step; an
-//     invocation whose token lies in another piece returns once it has read
-//     the identifier. Each row is written by exactly one launch, since the
-//     pieces partition the table and every identifier is below the
-//     vocabulary (interface.h). Qwen3 0.6B's table, Q6_K, 127.6 MB, is one
-//     piece; Llama 3.2 1B's, Q6_K, 215.5 MB, two; Gemma 3 1B's, Q8_0,
-//     320.9 MB, three, at the default 128 MiB binding.
-//   - Constants (binding 1), as WGSL lays them out:
+// Contract
+//   - gather_launches(table, hidden, sampled, scale): the launches, one for
+//     each piece of `table` in piece order, that together write rows 0 ..
+//     tokens − 1 of `hidden`, row i the table's row for token i of the step,
+//     each weight multiplied by `scale`. Rows from `tokens` on are not
+//     written. Pure: no GPU object; the program carries the launches out
+//     (kernels/interface.h).
+//   - Inputs. `table` is the token embedding as the plan placed it:
+//     262,144 rows of 1,152 weights in Q8_0, 320,864,256 bytes, cut by rows
+//     into three pieces of at most 109,655 rows, the last 42,834, at the
+//     default 128 MiB binding (residency/plan.h). `hidden` is the plan's
+//     hidden buffer, kPrefillBlock (512) rows of 1,152 f32. `sampled` is the
+//     draw's record, whose first word is the token the last step drew
+//     (sampler/sampler.h). `scale` is the graph's: the square root of the
+//     embedding width, sqrt(1,152) ≈ 33.94, formed in f32
+//     (arch/gemma3/gemma3.cpp).
+//   - Preconditions: the table's format is one the capability table lists,
+//     whose unpack the launch composes (routes refused any other); a row is
+//     a whole number of 32-weight groups (1,152 is 36); every identifier in
+//     the step is below the vocabulary, which the runtime checks before it
+//     writes a step (kernels/interface.h): the kernel cannot tell an
+//     identifier past the table from one in another piece. A drawn token is
+//     below the vocabulary by construction.
+//   - Postconditions: every row 0 .. tokens − 1 is written by exactly one
+//     launch, the one whose piece holds its token, since the pieces
+//     partition the table's rows. A `fed` step (kernels/interface.h) writes
+//     one row, from the draw's token, and reads no identifier.
+//   - Ownership: each launch names the plan's buffers by index, offset and
+//     size (Binding) and the embedded WGSL by view; the plan and the program
+//     own the buffers, which outlive the launches.
+//   - Failure: none at run time. A broken precondition is not detected here:
+//     a format the capability table does not list leaves the launch without
+//     an unpack, its WGSL does not compile, and the program's build fails
+//     (kernels/program.h).
+//   - Numerics: a Q8_0 weight is q × d, q an 8-bit code and d the block's
+//     f16 scale; their product is exact in f32 (at most 8 significant bits
+//     times 11). Multiplying by `scale` rounds once to nearest. WGSL leaves
+//     reassociation to the backend (formats/format.h), and one that computed
+//     q × (d × scale) would round twice; either way a weight is within 2
+//     units in the last place of the exact product. The f16 scale decodes as
+//     the format's contract states (formats/format.h).
+//
+// Algorithm, for invocation x of a launch over the piece holding rows
+// first_row .. first_row + row_count − 1:
+//   1. row = x / 36, group = x mod 36: 36 invocations a row, one for each
+//      32-weight group. If row >= tokens, return: the last workgroup's tail,
+//      since 36 × tokens need not be a multiple of 64.
+//   2. token = the first word of `sampled` in a fed step, else the step's
+//      identifier for the row, ids[row / 4][row mod 4] (kernels/step.wgsl).
+//   3. If token is outside the piece, return: another launch writes the row.
+//   4. Decode group (token − first_row) × 36 + group of the piece with the
+//      format's unpack. For Q8_0 that reads the block's 8 code words and the
+//      word holding its f16 scale; the piece holds every block's codes, then
+//      every block's scales, two to a word (formats/q8_0/q8_0.h), which is
+//      why the launch passes the piece's block count, row_count × 36.
+//   5. Multiply each of the 32 weights by `scale`, and write them, 8 vec4s,
+//      at vec4 (row × 36 + group) × 8 of `hidden`.
+//   Launch constants (binding 1), as WGSL lays them out, 20 bytes:
 //       struct Gather { first_row: u32, row_count: u32, groups_per_row: u32,
 //                       blocks_in_piece: u32, scale: f32 }
-//     Bindings 2, 3 and 4: the piece of the table, the hidden buffer, and
-//     the draw's record, read-only.
-//   - A step that is `fed` (kernels/interface.h) embeds, as its one row, the
-//     token the last step drew, the first word of the draw's record
-//     (sampler/sampler.h), in place of the step's identifier: the next decode
-//     step starts without the token having left the GPU. A drawn token is
-//     below the vocabulary by construction.
-//   - Workgroups of 64 invocations.
-//   - A text step that carries a medium, `media` 1, has its media rows carry
-//     the step's `media_token`, the medium's placeholder
-//     (kernels/interface.h): they are a media encoder's rows,
-//     copied into hidden by its steps, ahead of the text step on the queue
-//     (runtime/media_stage.h), so an invocation whose identifier is that
-//     token returns without writing; a step with `media` 0 skips nothing,
-//     whatever its tokens, and a fed step's token is never compared.
-//     The placeholder is never a row's token otherwise: the embedder
-//     replaces it in every text. A video's frames are several runs of such
-//     rows, between `<|image>` and `<image|>` tokens gather does write.
-//   - The position form, entry point `positions`, a vision encoder's learned
-//     positions (graph/vision.h): no identifier is read; patch row r at
-//     column x = r mod columns and row y = r / columns of the step's grid
-//     writes, a 32-weight group an invocation, the table's row x plus its
-//     row positions + y — the column table then the row table, one F32
-//     tensor of W × positions × 2 — into the launch's output, two groups
-//     read and one written. llama.cpp adds the column's row into the patch,
-//     then the row's; here the two are summed, then added by the next norm
-//     (graph/vision.h), a difference of rounding. Constants gain
-//     `positions`; bindings 2 the table, 3 the output.
+//   Bindings 2, 3 and 4: the piece of the table, read-only; `hidden`,
+//   written; the draw's record, read-only. Workgroups of 64 invocations.
 //
-// What it costs, counted. Launches: one a piece, a step — 1 for Qwen3, 2 for
-// Llama 3.2, 3 for Gemma 3 — at about 1.5 µs of GPU time each (interface.h).
-// Bytes, a row: unpack's reads for every group of it — for Qwen3's repacked
-// Q6_K, 8 words a group, 32 groups, 1 KiB, against 840 bytes stored — and 4
-// bytes a weight written: 4 KiB. A 512-row prefill step reads 512 KiB and
-// writes 2 MiB; a decode step reads 1 KiB and writes 4 KiB, so decode's
-// embedding costs about its one launch's 1.5 µs. Each invocation also reads its
-// row's token, 4 bytes — logically 128 bytes a row a launch for Qwen3, 256 for
-// Llama 3.2 and 144 for Gemma 3, every group of a row reading the same word;
-// how many of those reach device memory is the GPU's, and WebGPU states
-// nothing of it. Loaded once a workgroup instead, the token would need a
-// workgroup variable and a barrier in a kernel that has none, every
-// invocation waiting at it each step, to spare loads of one word. No row of
-// the table that the step does not name is read.
-// Optimization (practice): an invocation writes its group's 128 bytes
-// contiguously and adjacent invocations take adjacent groups, so a
-// workgroup's writes are one contiguous run (GPU.2).
+// Design and cost
+//   - One invocation a group, with no workgroup memory and no barrier: a
+//     group's 32 weights share one scale, so an invocation decodes them from
+//     its own block and needs nothing from another.
+//   - A table split by rows is one launch a piece, each binding only its
+//     piece, because every format's unpack reads the one binding named
+//     `weights` (formats/format.h). Every launch covers every row of the
+//     step, and an invocation whose token lies in another piece returns once
+//     it has read the identifier.
+//   - Launches, counted: three a step, one a piece, at about 1.5 µs of GPU
+//     time each, measured in Frizzle (kernels/interface.h): about 4.5 µs a
+//     step. Workgroups a launch: ceil(36 × tokens / 64), 1 for a decode step
+//     and 288 for a 512-row prefill step.
+//   - Bytes, counted: a row's 36 groups read 1,152 code bytes and 72 bytes of
+//     scales, its 1,224 bytes as stored, and write 1,152 × 4 = 4,608 bytes.
+//     As loads, each invocation reads 9 words, 36 bytes, the scale word
+//     shared by two groups. A 512-row prefill step reads 612 KiB of the table
+//     and writes 2.25 MiB; a decode step reads 1,224 bytes and writes 4.5
+//     KiB, so its cost is its three launches. No row of the table the step
+//     does not name is read.
+//   - Each invocation of each launch also reads its row's identifier, 4
+//     bytes: 144 bytes a row a launch as loads, every group of the row
+//     reading the same word. How many of those reach device memory is the
+//     GPU's; WebGPU states nothing of it. Loading it once a workgroup would
+//     need workgroup memory and a barrier that every invocation waits at,
+//     to spare loads of one word.
+//   - Access pattern (GPU.2): adjacent invocations take adjacent groups, so
+//     a workgroup's writes, taken together, are one contiguous run of
+//     hidden and its code reads one contiguous run of the piece. Within one
+//     store instruction, though, adjacent lanes are 128 bytes apart, each
+//     writing vec4 v of its own group, and within one load 32 bytes apart.
+//     Not measured.
+//   - Lever not taken: one launch binding every piece and choosing by
+//     identifier would save two launches, about 3 µs a step, and would need
+//     an unpack for each binding where every format's reads the one named
+//     `weights`.
+//   - Tests: none of this kernel alone. The ported kernel families get no
+//     unit tests of their arithmetic by decision (tests/README.md); the
+//     oracle, frizzle_oracle, checks the gather end to end, as part of
+//     Gemma 3 1B's logits against the frozen reference
+//     (tests/fixtures/reference/). So the piece boundaries, the fed path and
+//     the 2-unit bound above are locked by no test of their own.
 //
-// Verification the implementation is held to, on the GPU against the
-// format's CPU reference (tests/support): every row of a step, for each
-// listed format, bit for bit within format.h's contract; a table forced into
-// several pieces, with identifiers on either side of each boundary; and a
-// scale other than 1, within the 2 units above.
-//
-// Pieces are not bound together. One launch could bind every piece and pick
-// one by identifier, saving about 1.5 µs a step for Llama 3.2 and 3 µs for
-// Gemma 3, about a tenth to a third of a percent of a decode step; it would
-// need an unpack for each binding, where every format's unpack reads the one
-// binding named `weights` (format.h).
-//
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     F.20   Prefer return values to out parameters — the launches are
+//     F.20   Prefer return values to out parameters: the launches are
 //            returned.
+//     I.5    State preconditions: the declaration's, and the identifiers'
+//            bound, which the runtime checks and the kernel cannot.
 //   C++ performance guidelines
-//     GDSA.18 Decode block-scaled codes in the load path — the table stays in
-//            its format; only the rows named are decoded, into registers,
-//            then written once as f32.
-//     GPU.2  Shape data for coalesced lane access — the write pattern above.
-//     GPU.6  Batch tiny GPU work — one launch a piece, counted above.
+//     GDSA.18 Decode block-scaled codes in the load path: the table stays in
+//            Q8_0; only the rows named are decoded, in registers, and written
+//            once as f32.
+//     GPU.2  Shape data for coalesced lane access: the pattern above,
+//            contiguous across a workgroup, 128 bytes apart within a store.
+//     GPU.6  Batch tiny GPU work: three launches a step, counted, and the
+//            lever not taken.
 
 // The launches that embed a step's tokens: one for each piece of `table`,
 // in order, writing rows of `hidden`, each weight multiplied by `scale`. The
@@ -124,15 +147,5 @@ namespace frizzle::kernels {
 [[nodiscard]] std::vector<Launch> gather_launches(
     const residency::WeightView& table, const residency::BufferRange& hidden,
     const residency::BufferRange& sampled, float scale);
-
-// The position form's one launch: each patch row of a vision step, at column
-// x and row y of the step's grid, its column row x plus its row row y of
-// `table`, F32 of W × `positions` × 2 in one piece, written to `output`.
-// Preconditions: `table` is one piece, as a vision encoder's 62.9 MB table
-// is under the default binding; W a whole number of 32-weight groups; the
-// step's `columns` set, and its rows at most columns × positions.
-[[nodiscard]] Launch position_launch(const residency::WeightView& table,
-                                     std::uint32_t positions,
-                                     const residency::BufferRange& output);
 
 }  // namespace frizzle::kernels

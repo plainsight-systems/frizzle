@@ -12,35 +12,59 @@ namespace frizzle::kernels {
 //
 // The launches a step can dispatch, planned once at build from every
 // launch's geometry, so a step walks those alone rather than every launch
-// of the graph. A launch's token range and its last-token rows are fixed by
-// its description; only a key split depends on the step's position. So the
-// token counts 1 .. kPrefillBlock fall into intervals bounded by every
-// launch's least and most + 1, and within one interval, with or without
-// logits, the same launches can run: each interval holds two lists of
-// launch indices, in the graph's order. A step finds its interval by binary
-// search over the bounds and walks its list, and workgroups_for still
-// decides each launch's workgroups — 0 for a combine the step does not
-// split.
+// of the graph. The program builds it and asks it once a step
+// (kernels/program.h); workgroups_for still decides each listed launch's
+// workgroups (kernels/interface.h).
 //
-//   - Invariant: for every step, the list holds every launch workgroups_for
-//     gives workgroups, in order, and only launches whose token range and
-//     rows allow the step.
-//   - What it costs, for Qwen3 0.6B's 595 launches (graph/graph.h): 4
-//     intervals — 1, 2 to 8, 9 to 16, 17 to 512 — each 2 lists, of 253 and
-//     259 indices: 2,048 indices, 8 KiB, and the bounds, built once at build
-//     from all 673 range ends before duplicates go. A step searches 4 bounds
-//     and walks 253 to 259 launches, where it would walk 595; the calls out
-//     of the module are unchanged.
-// Optimization (practice): the launches a step can run planned once, by
-// token count and logits, and reused by every step (GDSA.17).
+// Contract
+//   - Schedules(launches): plans from every launch's geometry, in the
+//     graph's order. Pure: no GPU object, no failure.
+//   - of(tokens, logits): the indices, ascending, of every launch whose
+//     token range holds `tokens` and, where `logits` is false, that does
+//     not cover the last token alone. The span is valid while the
+//     Schedules lives.
+//   - Invariant: for every step, the list holds every launch
+//     workgroups_for gives workgroups, in order, and only launches whose
+//     token range and rows allow the step. A listed launch may still get
+//     none: a combine in a step that does not split its key chunks, the one
+//     thing that depends on the step's position.
+//   - Precondition of of(): tokens >= 1. Not checked: below the first
+//     bound there is no interval.
 //
-// Guidelines, by corpus:
+// Algorithm
+//   1. Bounds: 1, every launch's least token count above 1, and every
+//      launch's most + 1 that fits in 32 bits; sorted, duplicates removed.
+//      Between two bounds, every launch runs at all of the interval or at
+//      none of it.
+//   2. For each interval, at its least token count: the list without
+//      logits, of the launches whose range holds it and that do not cover
+//      the last token alone; and the list with logits, of every launch
+//      whose range holds it. Interval i's lists sit at 2i and 2i + 1.
+//   3. of(): the interval is the last bound not above `tokens`, found by
+//      binary search; return its list for `logits`.
+//
+// Design and cost
+//   - Counted: at most 2 × launches + 1 bounds, two lists an interval, each
+//     at most the launches; built once, at build. A step searches the
+//     bounds and walks its list, where it would walk every launch; the
+//     calls out of the module are unchanged. The bounds are the matrix
+//     products' tile widths and the token counts where each product stops
+//     splitting along K (kernels/matmul/matmul.h); how many that makes for
+//     Gemma 3 1B is not counted here.
+//   Optimization (practice): the launches a step can run planned once, by
+//   token count and logits, and reused by every step (GDSA.17).
+//   - Nothing tests Schedules alone. Every step the kernels suite, the
+//     oracle and replay run goes through it.
+//
+// Corpus guidance
 //   C++ Core Guidelines
-//     C.2    Use class if the class has an invariant — the invariant above.
-//     F.24   Use a span to designate a half-open sequence — a list.
+//     C.2    Use class if the class has an invariant: the invariant above,
+//            established by the constructor.
+//     F.24   Use a span to designate a half-open sequence: a list.
 //   C++ performance guidelines
-//     GDSA.17 Plan once per key, reuse the plan — the key is the step's
-//            interval and whether it asks for logits.
+//     GDSA.17 Plan once per key, reuse the plan: the key is the step's
+//            interval and whether it asks for logits; the plan is rebuilt
+//            only with the program.
 
 class Schedules {
  public:
@@ -48,8 +72,7 @@ class Schedules {
   explicit Schedules(std::span<const Geometry> launches);
 
   // The launches a step of `tokens` can dispatch, in order. Precondition:
-  // tokens >= 1 — a step of tokens is at most kPrefillBlock, a vision
-  // step's patches more (interface.h).
+  // tokens >= 1.
   [[nodiscard]] std::span<const std::uint32_t> of(std::uint32_t tokens,
                                                   bool logits) const noexcept;
 

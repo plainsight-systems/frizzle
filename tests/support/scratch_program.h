@@ -175,7 +175,7 @@ class ScratchProgram {
       bool done = false;
     } ran;
     program_->run(
-        step, writes, {},
+        step, writes,
         [](kernels::ProgramError error, std::string_view message,
            std::span<const std::byte> /*readback*/, void* userdata) {
           auto& r = *static_cast<Ran*>(userdata);

@@ -1,5 +1,4 @@
-// Axis A: changes when an architecture needs a block the ones here do not
-// cover.
+// Axis A: changes with the order of work in a layer, or a new ◉ or ✎ point.
 //
 // Contract, algorithm, cost and corpus guidance: graph.h. This file defines
 // what that header states.
@@ -92,9 +91,9 @@ GraphResult check_shape(std::uint32_t layer, const model::LayerDescription& l,
                        "8 is not a multiple of " +
                            std::to_string(kRopeHeadsTile));
   }
-  if (l.tensors.at(index_of(Role::QueryNorm)).has_value() !=
-      l.tensors.at(index_of(Role::KeyNorm)).has_value()) {
-    return unsupported(layer, "QK-norm on queries or keys alone");
+  if (!l.tensors.at(index_of(Role::QueryNorm)).has_value() ||
+      !l.tensors.at(index_of(Role::KeyNorm)).has_value()) {
+    return unsupported(layer, "without QK-norm on both queries and keys");
   }
   if (width > kNormWidest) {
     return unsupported(layer, "hidden width " + std::to_string(width) +
@@ -120,8 +119,8 @@ void named(std::vector<kernels::Launch>& out, std::size_t from,
 }  // namespace
 
 // The most range sums any of a decoder layer's products needs split along K
-// (kernels/matmul/matmul.h): Q, K and V fused or each alone, the output and
-// down projections; gate and up never split.
+// (kernels/matmul/matmul.h): Q, K and V fused, the output and down
+// projections; gate and up never split.
 std::uint64_t layer_range_sums(const model::LayerDescription& l,
                                std::uint64_t width) {
   using kernels::Epilogue;
@@ -129,11 +128,10 @@ std::uint64_t layer_range_sums(const model::LayerDescription& l,
   const std::uint64_t key_value =
       std::uint64_t{l.key_value_heads} * l.head_dimension;
   const auto need = [](Epilogue e, std::uint64_t rows, std::uint64_t columns) {
-    return kernels::range_sum_floats(e, rows, columns, kernels::kSplitGate);
+    return kernels::range_sum_floats(e, {.rows = rows, .columns = columns},
+                                     kernels::kSplitGate);
   };
   return std::max({need(Epilogue::QKV, query + 2 * key_value, width),
-                   need(Epilogue::Write, query, width),
-                   need(Epilogue::Write, key_value, width),
                    need(Epilogue::Write, width, query),
                    need(Epilogue::Write, width, l.feed_forward_width)});
 }
@@ -269,7 +267,6 @@ void Builder::product(const residency::WeightView& weight,
                                    input,
                                    {output, {}, {}},
                                    kernels::Epilogue::Write,
-                                   model_->activation,
                                    rows},
                                   kernels::kSplitGate, buffers_.range_sums));
 }
@@ -286,6 +283,19 @@ GraphResult Builder::attention(std::uint32_t layer) {
   const model::LayerDescription& l = model_->layers.at(layer);
   if (GraphResult r = check_shape(layer, l, model_->embedding_width); !r.ok()) {
     return r;
+  }
+  // rope applies no frequency factors, so a model that has them is refused
+  // rather than run without them.
+  if (model_->rotary_factors.has_value()) {
+    return unsupported(layer,
+                       "frequency factors (rope_freqs.weight), which "
+                       "rope does not apply");
+  }
+  const auto& t = l.tensors;
+  if (group({t.at(index_of(Role::Query)), t.at(index_of(Role::Key)),
+             t.at(index_of(Role::Value))}) == nullptr) {
+    return {GraphError::UngroupedQueryKeyValue,
+            "layer " + std::to_string(layer)};
   }
   const Buffers& b = buffers_;
 
@@ -306,40 +316,21 @@ GraphResult Builder::attention(std::uint32_t layer) {
   out_->push_back(kernels::norm_launch(norm));
   named(*out_, at, "attention.norm", layer);
 
-  const auto& t = l.tensors;
   at = out_->size();
-  if (group({t.at(index_of(Role::Query)), t.at(index_of(Role::Key)),
-             t.at(index_of(Role::Value))}) != nullptr) {
-    append(*out_, kernels::matmul_launches(
-                      {{role(layer, Role::Query), role(layer, Role::Key),
-                        role(layer, Role::Value)},
-                       3,
-                       b.normed,
-                       {b.query, b.key, b.value},
-                       kernels::Epilogue::QKV,
-                       model_->activation,
-                       kernels::Rows::EveryToken},
-                      kernels::kSplitGate, b.range_sums));
-    named(*out_, at, "attention.qkv", layer);
-  } else {
-    product(*role(layer, Role::Query), b.normed, b.query,
-            kernels::Rows::EveryToken);
-    named(*out_, at, "attention.q", layer);
-    at = out_->size();
-    product(*role(layer, Role::Key), b.normed, b.key,
-            kernels::Rows::EveryToken);
-    named(*out_, at, "attention.k", layer);
-    at = out_->size();
-    product(*role(layer, Role::Value), b.normed, b.value,
-            kernels::Rows::EveryToken);
-    named(*out_, at, "attention.v", layer);
-  }
+  append(*out_, kernels::matmul_launches(
+                    {{role(layer, Role::Query), role(layer, Role::Key),
+                      role(layer, Role::Value)},
+                     3,
+                     b.normed,
+                     {b.query, b.key, b.value},
+                     kernels::Epilogue::QKV,
+                     kernels::Rows::EveryToken},
+                    kernels::kSplitGate, b.range_sums));
+  named(*out_, at, "attention.qkv", layer);
 
   at = out_->size();
   out_->push_back(kernels::rope_launch(
-      {l, model_->rotary_pairing, role(layer, Role::QueryNorm),
-       role(layer, Role::KeyNorm),
-       model_->rotary_factors ? &view(*model_->rotary_factors) : nullptr,
+      {l, role(layer, Role::QueryNorm), role(layer, Role::KeyNorm),
        model_->norm_epsilon, b.query, b.key, b.value, plan_->cache[layer],
        cache_format_}));
   named(*out_, at, "attention.rope", layer);
@@ -405,7 +396,6 @@ GraphResult Builder::gated_feed_forward(std::uint32_t layer) {
                      b.normed,
                      {b.activation, {}, {}},
                      kernels::Epilogue::GatedActivation,
-                     model_->activation,
                      kernels::Rows::EveryToken},
                     kernels::kSplitGate, b.range_sums));
   named(*out_, at, "ffn.gate_up", layer);

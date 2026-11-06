@@ -15,13 +15,13 @@
 
 namespace frizzle::graph {
 
-// Axis A: changes when an architecture needs a block the ones here do not
-// cover — a plain feed-forward block, LayerNorm, biases, learned positions.
+// Axis A: changes with the order of work in a layer, or a new ◉ or ✎ point.
 //
-// The blocks every architecture's graph composes (arch/architecture.h), and
-// the working buffers they bind. An architecture's graph is the order its
-// family runs them in, and what its family does that the model description
-// does not carry, such as Gemma 3's embedding scale (arch/gemma3/gemma3.cpp).
+// The blocks Gemma 3's graph composes, and the working buffers they bind.
+// The graph itself (arch/gemma3/gemma3.cpp, reached through
+// arch/architecture.h's GraphFn) is the order Gemma 3 runs them in, and what
+// it does that the model description does not carry, such as its embedding
+// scale.
 // The edit point (✎, docs/architecture/file-mapping.md) is here, in the
 // feed-forward block, and the capture points (◉): the neurons just after
 // the edit, and the residual, what each block adds and the attention
@@ -29,7 +29,7 @@ namespace frizzle::graph {
 //
 // Contract
 //   - Builder appends a step's launches to `out`, block by block, in the
-//     order an architecture's graph calls them; the program builds from them
+//     order Gemma 3's graph calls them; the program builds from them
 //     at load (kernels/program.h). Pure, as the kernel launchers are: no GPU
 //     object, no fetch.
 //   - Preconditions, as architecture.h's GraphFn states: `model` is a
@@ -43,11 +43,14 @@ namespace frizzle::graph {
 //     could not group (UngroupedFeedForward) — formats or widths that
 //     differ, a member in pieces, a span wider than a binding; their
 //     epilogue reads both in one product, and the plan holds no buffer for
-//     either alone. A layer outside the kernels' shapes (UnsupportedShape):
-//     a head dimension of 64, 128 or 256; (query heads + 2 × key-value
-//     heads) × head dimension / 8 a multiple of 64; the query heads a
-//     key-value head serves dividing 1,024 / head dimension; QK-norm on both
-//     queries and keys or neither; a hidden width of at most 4,096. A
+//     either alone. A layer whose Q, K and V the plan could not group
+//     (UngroupedQueryKeyValue), for the same reasons; the graph runs them
+//     as one product only. A layer outside the kernels' shapes
+//     (UnsupportedShape): a head dimension of 64, 128 or 256; (query heads +
+//     2 × key-value heads) × head dimension / 8 a multiple of 64; the query
+//     heads a key-value head serves dividing 1,024 / head dimension; QK-norm
+//     on both queries and keys; a hidden width of at most 4,096; no
+//     frequency factors (rope_freqs.weight), which rope does not apply. A
 //     vocabulary under the 64 candidates selection keeps.
 //   - Residual: the norm that begins a block adds the last block's result
 //     into `hidden`, so `hidden` is never written by a matrix product. The
@@ -59,10 +62,10 @@ namespace frizzle::graph {
 //     binds one buffer both read-only and writable. WebGPU orders a pass's
 //     dispatches by their buffer use, so each launch sees what the one
 //     before it wrote.
-//   - The edit launch changes only the activation's last row, and runs only
-//     in steps that score a token (edit/edit_kernel.h); with a table of no
-//     edits it writes nothing, so the graph computes what it computed
-//     without it.
+//   - The edit launch runs over every row of every step and changes only the
+//     activation's values that an edit's range holds at the row's position
+//     (edit/edit_kernel.h); with a table of no edits it writes nothing, so
+//     the graph computes what it computed without it.
 //   - The capture launch follows it in every layer: in the step that ends
 //     the prompt it copies the activation's last row, as edited, into the
 //     layer's neurons slot of `captures` (capture/capture.h).
@@ -86,8 +89,7 @@ namespace frizzle::graph {
 //     launch computes, so the graph computes what it computed without
 //     them.
 //   - Names: every launch carries its role and layer (kernels/interface.h),
-//     for a profile: "embed"; "attention.norm", "attention.qkv" — or
-//     "attention.q", ".k" and ".v" where the three are not one group —
+//     for a profile: "embed"; "attention.norm", "attention.qkv",
 //     "attention.rope", "attention.scores", "attention.combine",
 //     "attention.weights", "attention.output"; "ffn.norm", "ffn.gate_up",
 //     "ffn.edit", "ffn.capture", "ffn.down"; and "output.norm", "output.head",
@@ -111,9 +113,8 @@ namespace frizzle::graph {
 //          Captures the residual into the layer's slot, and what it added
 //          into the last layer's mlp_added slot.
 //       2. Q, K and V from `normed`: the plan's group as one product into
-//          `query`, `key` and `value`; where the plan made none, three
-//          products (kernels/matmul/matmul.h).
-//       3. QK-norm where the layer has it, RoPE, and the key and value
+//          `query`, `key` and `value` (kernels/matmul/matmul.h).
+//       3. QK-norm, RoPE, and the key and value
 //          appended to the layer's cache (kernels/rope/rope.h).
 //       4. Attention over the layer's cache into `attention`, and its
 //          combine (kernels/attention/attention.h); both capture into the
@@ -128,7 +129,8 @@ namespace frizzle::graph {
 //       8. Gate and up from `normed`, the plan's group as one product writing
 //          activation(gate) × up into `activation`.
 //       9. The edit: the run's edits for the layer, from `edit_table`,
-//          applied to `activation`'s last row (edit/edit_kernel.h).
+//          applied to each row of `activation` whose position their range
+//          holds (edit/edit_kernel.h).
 //      10. The capture: `activation`'s last row into the layer's neurons
 //          slot of `captures`, in the step that ends the prompt
 //          (capture/capture.h).
@@ -147,13 +149,13 @@ namespace frizzle::graph {
 //   position and logits select (kernels/interface.h).
 //
 // Design and cost
-//   - Composition, not a base class holding the order: a family needing a
-//     block not here adds one, and no other family's graph changes (C.129).
-//     Frizzle has one family, Gemma 3.
+//   - Composition, not a base class holding the order: Gemma 3's graph is a
+//     function that calls these blocks, reached through architecture.h's
+//     function pointer (C.129).
 //   - The edit launch is the graph's own, always present: one a layer, over
-//     the last token. Accepted cost (logical-overview.md, Edits): 26 more
-//     dispatches in each scoring step for Gemma 3 1B, about 40 µs a token
-//     at about 1.5 µs a dispatch, an estimate, not measured in Frizzle.
+//     every row, in every step. Its cost, accepted (logical-overview.md,
+//     Edits): 26 more dispatches a step for Gemma 3 1B, about 40 µs at
+//     about 1.5 µs a dispatch, an estimate, not measured in Frizzle.
 //     Rebuilding the graph for each edit set, or folding the edit into
 //     gate·up's epilogue, were the alternatives (edit/edit_kernel.h).
 //   - The capture launch is the graph's own too, always present: one a
@@ -164,20 +166,28 @@ namespace frizzle::graph {
 //     again. `captures` is one working buffer of every slot, 3.2 MiB,
 //     planned in decoder_working_set. The alternatives are in
 //     capture/capture.h.
-//   - A count for Qwen3 0.6B at Q4_0 with an F16 cache, before the edit
-//     launch; not recounted for Gemma 3: 8 dispatches a layer a step, where
-//     a launch an operation would be 17 (GPU.6); 231 a step, 259 when every
-//     layer's combine runs, 225 in a prefill step that does not end the
-//     prompt. At about 1.5 µs a dispatch (an estimate, not measured in
-//     Frizzle), 0.35 to 0.39 ms of GPU time. Pipelines, bind groups and
-//     launch constants are made once, at load (kernels/program.h).
+//   - Counted from the launchers' code for Gemma 3 1B at Q4_0 with an F16
+//     cache, not from a run: a decode step dispatches 11 launches a layer —
+//     the attention norm, the one QKV product, rope, attention, the weights
+//     launch, the output projection, the feed-forward norm, gate and up,
+//     the edit, the capture, down — and 12 where the layer's key chunks
+//     split, its combine; with the embedding's 3, one a piece of the table,
+//     and the output block's 8 — the final norm, the head's 3 pieces,
+//     selection's 3 passes, the draw — 297 a step, 323 when every layer's
+//     combine runs, as it does past position 63 (GPU.6). At about 1.5 µs a
+//     dispatch (an estimate, not measured in Frizzle), 0.45 to 0.48 ms of
+//     GPU time. A prefill step runs each product's tile and split launches
+//     for its token count instead (kernels/matmul/matmul.h), not counted
+//     here. Pipelines, bind groups and launch constants are made once, at
+//     load (kernels/program.h).
 //   - Optimization (practice): logits only for a step whose last token is
 //     sampled, the only logits the sampler reads.
-//     A prefill step that does not end the prompt skips the final norm, the
-//     head and the edit launches (GDSA.6): for Gemma 3 1B the head is the
-//     Q8_0 token embedding, about 321 MB not read.
-//   - The graph is chosen and built once, at load; a step makes no call
-//     through it (WASM.4).
+//     A prefill step that does not end the prompt skips every launch over
+//     the last token alone — the final norm, the head, selection, the draw,
+//     and the capture and weights launches (GDSA.6): for Gemma 3 1B the head
+//     is the Q8_0 token embedding, about 321 MB not read.
+//   - The graph is built at preflight and again at load, never per step;
+//     a step makes no call through it (WASM.4).
 //   - Verified in Frizzle by the llama.cpp comparison (tests/README.md,
 //     integration): Gemma 3 1B decoded a token at a time over a pinned
 //     600-token sequence, every position's top 20 within llama.cpp's own
@@ -186,24 +196,29 @@ namespace frizzle::graph {
 // Corpus guidance
 //   C++ Core Guidelines
 //     C.129  Distinguish implementation inheritance from interface
-//            inheritance: families share blocks by composition; the
-//            interface is architecture.h's function pointer.
+//            inheritance: no inheritance at all; the graph composes the
+//            blocks, and its interface is architecture.h's function
+//            pointer.
 //   C++ performance guidelines
-//     GPU.6  Batch tiny GPU work: 8 dispatches a layer in the count above;
-//            the edit's tiny launch a layer is counted above, its fused
-//            alternative named.
-//     GDSA.6 Count passes over global memory: the head's read, and the edit
-//            launches, skipped where no token is scored.
+//     GPU.6  Batch tiny GPU work: 11 dispatches a layer in the count
+//            above, the edit, capture and weights launches' tiny ones
+//            among them, the edit's fused alternative named.
+//     GDSA.6 Count passes over global memory: the head's read, and the
+//            other launches over the last token alone, skipped where no
+//            token is scored.
 //     GDSA.2 Declare each floating-point reduction's determinism level:
 //            batch-invariant end to end, as above.
-//     WASM.4 Reduce indirect dispatch in hot paths: the graph is chosen and
-//            built once, at load.
+//     WASM.4 Reduce indirect dispatch in hot paths: the graph's function
+//            pointer is called at preflight and load, never per step.
 
 enum class GraphError : std::uint8_t {
   Ok,
   // A layer's gate and up are not one group in the plan. The subject names
   // the layer.
   UngroupedFeedForward,
+  // A layer's Q, K and V are not one group in the plan. The subject names
+  // the layer.
+  UngroupedQueryKeyValue,
   // A layer's shape is outside a kernel's preconditions. The subject names
   // the layer and the value.
   UnsupportedShape,
@@ -228,8 +243,8 @@ struct GraphResult {
 // words (kernels/topk/topk.h); the draw's 16-byte record, `sampled`
 // (sampler/sampler.h); `range_sums`, one row of the most
 // kernels::range_sum_floats any of its products needs under
-// kernels::kSplitGate — Q, K and V, fused or each alone, the output and down
-// projections — at least one float: 13.5 MiB for Gemma 3; and
+// kernels::kSplitGate — Q, K and V fused, the output and down projections —
+// at least one float: 13.5 MiB for Gemma 3; and
 // `edit_table`, one row of 2 × layers + 3 × edit::kMaxEdits u32 words, the
 // run's edits (edit/edit.h), 48 KiB for Gemma 3 1B; and `captures`, one row
 // of capture::layout's words, every layer's captures at the last prompt
@@ -242,25 +257,24 @@ struct GraphResult {
 // (sampler/sampler.h): `partials_a` and `partials_b`, which its passes
 // alternate between — `partials_a` the first pass's output, kCandidates
 // (logit, token) pairs of 8 bytes for every kSelectionTile of the
-// vocabulary, 76 KB for Qwen3 and 131 KB for Gemma 3; `partials_b` the
-// second's, kCandidates for every kSelectionTile of those, 5 KB and
-// 8 KB; each later pass writes fewer than the one two before it, into the
-// same buffer — `candidates`, the kCandidates kept, 512 bytes; and
-// `sampled`, the draw's 16-byte record. Selection's last pass writes
-// `candidates` in place of a partials buffer, so for a vocabulary of
-// 16,384 or fewer — none listed — no pass writes `partials_b`, and for
-// one of 1,024 or fewer none writes `partials_a`; each is still planned,
+// vocabulary, 131 KB for Gemma 3; `partials_b` the second's, kCandidates
+// for every kSelectionTile of those, 8 KB; each later pass writes fewer than
+// the one two before it, into the same buffer — `candidates`, the kCandidates
+// kept, 512 bytes; and `sampled`, the draw's 16-byte record. Selection's last
+// pass writes `candidates` in place of a partials buffer, so for a vocabulary
+// of 16,384 or fewer — Gemma 3's is 262,144 — no pass writes `partials_b`, and
+// for one of 1,024 or fewer none writes `partials_a`; each is still planned,
 // 512 bytes at least, so every plan holds the same working buffers.
 [[nodiscard]] residency::WorkingSet decoder_working_set(
     const model::ModelDescription& model);
 
 // The most range sums any of a decoder layer's products needs split along K,
-// in floats, under kernels::kSplitGate; an encoder's layer runs the same.
+// in floats, under kernels::kSplitGate.
 [[nodiscard]] std::uint64_t layer_range_sums(
     const model::LayerDescription& layer, std::uint64_t width);
 
-// Appends a step's launches to `out`, block by block, in the order an
-// architecture's graph calls them. It holds what `output` holds between
+// Appends a step's launches to `out`, block by block, in the order Gemma 3's
+// graph calls them. It holds what `output` holds between
 // blocks (above). Preconditions, as architecture.h's GraphFn states: `model`
 // is a describe's; `plan` was made from it, as upload carried it out;
 // `cache_format` has a pack and is the format the plan sized the cache in.

@@ -28,8 +28,8 @@ namespace frizzle::kernels {
 //   s_j  = (q · k_j) × scale             for j in p − W + 1 .. p, W the window
 //   out  = Σ_j softmax(s)_j × v_j
 //
-// scale is the model's (model/model_description.h): 1 / sqrt(d) for every
-// listed model. Every key is read from the KV cache, the step's own included,
+// scale is the model's (model/model_description.h): 1 / sqrt(d), 1 / 16, for
+// Gemma 3 1B. Every key is read from the KV cache, the step's own included,
 // rounded as stored (kernels/rope/rope.h).
 //
 // The shape of the computation: an online softmax over tiles of keys. Keys and
@@ -39,10 +39,10 @@ namespace frizzle::kernels {
 //
 //   - Chunks. Keys are taken in chunks of 64 consecutive positions, chunk c
 //     holding positions 64c .. 64c + 63, fixed by position alone; a decode
-//     step at 1,024 keys runs 128 workgroups where 256-key chunks ran 32
-//     (costs, below). Each chunk's (m, l, O) is computed from an empty
-//     state, then folded into the query's result in chunk order by one merge
-//     function:
+//     step at 1,024 keys runs 16 workgroups in a full-attention layer where
+//     256-key chunks would run 4 (costs, below). Each chunk's (m, l, O) is
+//     computed from an empty state, then folded into the query's result in
+//     chunk order by one merge function:
 //       merge((m, l, O), (m_c, l_c, O_c)), m' = max(m, m_c):
 //         l' = l × 2^(m − m') + l_c × 2^(m_c − m'),  O' likewise
 //     where a factor whose exponent is 0 is exactly 1, and an empty side —
@@ -66,29 +66,26 @@ namespace frizzle::kernels {
 //     active chunk itself, with the same merge. A layer's step splits when
 //     tokens × count <= P, the partial buffers'
 //     rows: 512, the attention buffer's own size, or the trained context's
-//     chunks, ceil(C / 64), where that is more — 640 for Qwen3's 40,960 —
-//     so a decode step splits at every position any offered context reaches
-//     (kernels/interface.h, key_chunks). Folding several chunks a split
-//     instead would associate the merges differently from an unsplit step,
-//     and change its bits. A chunk holding no live key for some of a
-//     workgroup's rows writes empty partials for them, which the combine
-//     skips.
+//     chunks, ceil(C / 64), where that is more — for Gemma 3 1B's 32,768 also
+//     512, so P is 512 — so a decode step splits at every position any
+//     offered context reaches (kernels/interface.h, key_chunks). Folding
+//     several chunks a split instead would associate the merges differently
+//     from an unsplit step, and change its bits. A chunk holding no live key
+//     for some of a workgroup's rows writes empty partials for them, which the
+//     combine skips.
 //   - Tiles. A workgroup is 64 invocations and holds, in workgroup memory, a
 //     tile of M = 1,024 / d query vectors — R = M / G consecutive rows of
 //     the step, for the G query heads sharing one key-value head — at f32,
 //     4 KiB; and a tile of B = 2,048 / d keys and their values as the KV cache
-//     stores them, 4 KiB each:
-//
-//                      M query vectors   R rows × G heads   B keys a tile
-//       Qwen3, d 128          8               4 × 2              16
-//       Llama 3.2, d 64      16               4 × 4              32
-//       Gemma 3, d 256        4               1 × 4               8
+//     stores them, 4 KiB each. For Gemma 3 1B, d = 256: M = 4 query vectors,
+//     R × G = 1 row × 4 heads, B = 8 keys a tile.
 //
 //     Each key and value is read from the KV cache once for the whole group:
 //     grouped-query attention reads its shared keys once, not once a head.
-//     A step's workgroups: ceil(tokens / R) × H_kv × splits. A decode
-//     step's tile holds one row, its other query slots idle; its keys and
-//     values are read once all the same, which is what decode is bound by.
+//     A step's workgroups: ceil(tokens / R) × H_kv × splits, for Gemma 3 1B
+//     tokens × splits. A decode step's tile holds one row, its other query
+//     slots idle; its keys and values are read once all the same, which is
+//     what decode is bound by.
 //   - Per tile, four phases, a barrier before each: load the tile's keys and
 //     values, slot j mod slots (cache/kv.h), coalesced; scores, invocation
 //     (m, b) taking the dot product of query m and key b, d multiply-adds,
@@ -182,12 +179,11 @@ namespace frizzle::kernels {
 //   - residency/plan.h: two working buffers — partial values, P rows of
 //     H_q × d floats, and partial statistics, P rows of H_q × 2, P =
 //     max(512, ceil(C / 64)) for the trained context C — each a buffer of
-//     its own: 5 MiB of values for Qwen3 at 40,960, 4 MiB at 512 rows. The
-//     plan places them before it fits the context it offers, so they are
-//     sized for the trained context, the bound on any it offers: for Llama
-//     3.2, 2,048 rows, 12.4 MiB more than 512, about 1% of the context a
-//     2 GiB budget offers, where a context offered under 32,768 would need
-//     512.
+//     its own: for Gemma 3 1B, 512 rows, 2 MiB of values and 16 KiB of
+//     statistics. The plan places them before it fits the context it offers,
+//     so they are sized for the trained context, the bound on any it offers:
+//     for Gemma 3 1B's 32,768, no more than the 512 rows the attention
+//     buffer's own size sets.
 //   - kernels/interface.h: kChunkKeys is 64, and key_chunks takes the
 //     partial rows P, which the kernel receives as an override constant,
 //     `partial_rows`; tokens × count stays below 2^32, at most 512 ×
@@ -218,45 +214,53 @@ namespace frizzle::kernels {
 // largest value in the query's window: a margin the GPU test checks on the
 // target, as the norm's is, not a proof.
 //
-// What it costs, counted, for Qwen3; L the context after the step.
-//   - Decode, one token. Each key and value is read once: L × H_kv × d × 2
-//     bytes × 2, 4 KiB a token of context a layer, 112 KiB across 28
-//     layers — 448 MiB at L = 4,096, about 1.2 ms at 400 GB/s, more than the
-//     weights' 0.95 ms; attention is decode's second floor, and the larger
-//     past about 3,300 tokens. The split's partials add H_q × (d + 2) × 4
-//     bytes a chunk: 16 KiB of values written and read, and 128 bytes of
-//     statistics written and read by each of the combine's d / 4
-//     invocations a query, 4 KiB — about 20.6 KB against the chunk's 256 KiB
-//     of keys and values, 7.9%. Workgroups: 8 × ceil(L / 64), 128
-//     at 1,024 and 512 at 4,096. The combine's d / 4 invocations a query
-//     each fold its count of partials in order, a chain of that many merges:
-//     64 at 4,096, 128 at 8,192, each one exp2 — the side holding the
-//     maximum keeps factor 1 — and a vec4 multiply and multiply-add.
-//     Launches: one a layer, and the combine's a layer once L passes 64 —
-//     56 a step, 84 µs at 1.5 µs (interface.h).
+// What it costs, counted, for Gemma 3 1B; L the context after the step.
+//   - Decode, one token. Each key and value in a layer's window is read
+//     once: H_kv × d × 2 bytes × 2, 1 KiB a key a layer — L keys in each of
+//     the 4 full-attention layers; in each of the 22 window layers the
+//     window's 512, and at most 7 more where its first key falls inside an
+//     8-key tile, which is loaded whole: about 11 MiB for those once L
+//     reaches 512. At L = 4,096, about 27 MiB, about 0.07 ms at 400 GB/s;
+//     at the trained 32,768, about 139 MiB, about 0.36 ms: below the
+//     weights' 1.8 ms (matmul.h) at every context offered. The split's
+//     partials add H_q × (d + 2) × 4 bytes a chunk: 4 KiB of values written
+//     and read back, 8 KiB, and 32 bytes of statistics written and read by
+//     each of the combine's d / 4 invocations a query, 2 KiB — about
+//     10.3 KB against the chunk's 64 KiB of keys and values, 15.7%.
+//     Workgroups, a full-attention layer: ceil(L / 64), 16 at 1,024 and 64
+//     at 4,096; a window layer, at most nine. The combine's d / 4
+//     invocations a query each fold its count of partials in order, a chain
+//     of that many merges: in a full-attention layer 64 at 4,096, 128 at
+//     8,192, 512 at 32,768, each one exp2 — the side holding the maximum
+//     keeps factor 1 — and a vec4 multiply and multiply-add. Launches: one a
+//     layer, and the combine's a layer once L passes 64 — 52 a step, 78 µs
+//     at 1.5 µs (interface.h).
 //   - Prefill, 512 tokens from position 0: query-key pairs under the causal
-//     mask, T(T + 1) / 2 = 131,328 a head; 2 × d multiply-adds a pair, the
-//     score's and the weighted sum's, 4 × d operations: 1.08 × 10⁹ a layer,
-//     30 × 10⁹ a step, about 2 ms at roughly 14 f32 TFLOPS (an M3 Max, an
-//     estimate, not measured in Frizzle) if the arithmetic ran at peak. A
-//     row tile streams the keys up to its last row, half a layer's 2 MiB of
-//     keys and values on average: about 128 MiB of KV cache reads a layer. From
-//     device memory that is between the layer's 2 MiB, if the GPU's caches keep
-//     it while its row tiles run, as they can hold it, and the whole 128 MiB,
+//     mask, T(T + 1) / 2 = 131,328 a head, every one inside a 512-key window
+//     too; 2 × d multiply-adds a pair, the score's and the weighted sum's,
+//     4 × d operations: 0.54 × 10⁹ a layer, 14 × 10⁹ a step, about 1 ms at
+//     roughly 14 f32 TFLOPS (an M3 Max, an estimate, not measured in
+//     Frizzle) if the arithmetic ran at peak. A row tile streams the keys up
+//     to its last row, half a layer's 512 KiB of keys and values on average:
+//     about 128 MiB of KV cache reads a layer. From device memory that is
+//     between the layer's 512 KiB, if the GPU's caches keep it while its row
+//     tiles run, as they can hold it, and the whole 128 MiB,
 //     about 0.3 ms a layer at 400 GB/s, if they do not; WebGPU promises
 //     neither the order workgroups run in nor what the caches keep, so where
 //     in that range a step falls is the target's, to be measured.
-//   - Barriers: four a tile, 16 a chunk for Qwen3, 8 for Llama 3.2, 32
-//     for Gemma 3 — a decode workgroup's whole chain — and the merge at each
-//     chunk's end needs none.
+//   - Barriers: four a tile, 32 a chunk for Gemma 3 1B — a decode
+//     workgroup's whole chain — and the merge at each chunk's end needs
+//     none.
 // Optimization (practice): the softmax is online and tiled, so the
 // T × L scores are never written (GDSA.16).
 // Optimization (practice): a decode step is split across the context in
-// fixed chunks and combined, so 128 workgroups at 1,024 tokens and 512 at
-// 4,096 read the KV cache where one a key-value head would be 8 (GDSA.8).
-// The chunk is 64 keys: 256-key chunks run 40 workgroups at position 1,024
-// — 1,025 keys, 5 chunks — which read the KV cache at about 32 GB/s (an
-// estimate, not measured in Frizzle); 64-key chunks run 136 there (GPU.3).
+// fixed chunks and combined, so a full-attention layer's 16 workgroups at
+// 1,024 tokens and 64 at 4,096 read the KV cache where one a key-value head
+// would be 1 (GDSA.8). The chunk is 64 keys: at position 1,024 — 1,025
+// keys — a full-attention layer runs 17 workgroups, where 256-key chunks
+// would run 5. 40 workgroups of 256-key chunks, on a shape of 8 key-value
+// heads, not Gemma 3 1B's, read the KV cache at about 32 GB/s (an estimate,
+// not measured in Frizzle) (GPU.3).
 // Optimization (practice): chunks fixed by position and folded in order,
 // so a split does not change a result: the split size is fixed, not chosen
 // by the batch (CDSA.23).
@@ -266,11 +270,11 @@ namespace frizzle::kernels {
 // Where WebGPU limits it, and what each limit costs here:
 //   - Workgroup memory is 16 KiB at WebGPU's defaults, which the harness
 //     keeps for cross-browser compatibility (gpu/device_requirements.h). A
-//     tile is therefore M = 1,024 / d query vectors — 4 rows for Qwen3 —
-//     where a larger workgroup memory would hold 64 to 128; prefill reads each
-//     layer's KV cache 128 times rather than 4 to 8: 16 to 32 times the
-//     reads, which the GPU's caches serve as far as they keep the layer's
-//     keys and values (costs, above).
+//     tile is therefore M = 1,024 / d query vectors — for Gemma 3 1B 4, one
+//     row of its 4 query heads — where a larger workgroup memory would hold
+//     64 to 128 rows; a 512-row prefill reads each layer's KV cache 512 times
+//     rather than 4 to 8: 64 to 128 times the reads, which the GPU's caches
+//     serve as far as they keep the layer's keys and values (costs, above).
 //   - Subgroup operations are optional, for the same reason: each score is
 //     one invocation's whole dot product, and the softmax's per-tile maxima
 //     and sums are one invocation's loop over B, where a subgroup reduction
@@ -279,39 +283,34 @@ namespace frizzle::kernels {
 //     an experiment, not cross-browser. The arithmetic is f32 on the
 //     shader cores.
 //   - WGSL may assume no infinities: masks are flags, not −∞.
-//   - WGSL zero-fills workgroup memory: 12.7 KiB for Qwen3, stored once a
-//     workgroup — about 40% of the 32 KiB of keys and values a decode
+//   - WGSL zero-fills workgroup memory: 12.2 KiB for Gemma 3 1B, stored
+//     once a workgroup — about 19% of the 64 KiB of keys and values a decode
 //     workgroup reads from the KV cache for its chunk, though into on-chip
-//     memory: about 51 stores an invocation, against about 2,000
+//     memory: about 49 stores an invocation, against about 2,000
 //     multiply-adds an invocation a chunk.
 //
 // Levers not taken:
 //   - Splits sized to fill the GPU rather than fixed by position: more
 //     parallelism for a short context, and a result that would change with
 //     the step's shape, which the batch-invariant fold rules out.
-//   - The combine folded into the output projection's load: 28 launches a
-//     decode step saved, 42 µs, for a matrix product that reads partials
+//   - The combine folded into the output projection's load: 26 launches a
+//     decode step saved, 39 µs, for a matrix product that reads partials
 //     and knows attention's merge.
 //   - The combine's statistics folded once a head, one lane a head, its
-//     factors shared through workgroup memory: 32 times fewer exp2s for
-//     Qwen3, where each of a query's d / 4 invocations folds them itself.
-//     The combine's 512 invocations a layer leave most of the GPU's lanes
-//     idle, so the repeated exp2s run beside one another at no cost in time,
-//     and each invocation's chain is the same count of merges either way;
+//     factors shared through workgroup memory: 64 times fewer exp2s for
+//     Gemma 3 1B, where each of a query's d / 4 invocations folds them
+//     itself. The combine's 256 invocations a layer leave most of the GPU's
+//     lanes idle, so the repeated exp2s run beside one another at no cost in
+//     time, and each invocation's chain is the same count of merges either way;
 //     a head's lane would make every output wait on its serial pass and a
 //     barrier.
 //   - Larger tiles from a raised workgroup-memory limit: Apple adapters
 //     offer 32 KiB; the harness asks for none of the defaults' limits
 //     raised.
 //
-// Verification the implementation is held to, on the GPU against f64 from
-// the same KV cache contents: each listed shape, prefill steps of 1, 3, 4 and
-// 512 rows and decode steps, at positions 0, near 64's boundaries and deep
-// into the context; a decode step past 512 chunks, split; Gemma 3's window over
-// a ring that has wrapped; a step split and unsplit, and the same query
-// prefilled and decoded, giving the same bits; and a chunk wholly masked for
-// some rows. On the CPU: key_chunks at its boundaries, and each launch's
-// geometry, bindings and variant.
+// No test checks the attention's arithmetic on its own: not against f64, not
+// prefill against decode, not a split step against an unsplit one, not a
+// wrapped window, and not key_chunks or the launches' geometry on the CPU.
 // The capture alone has a test of its own, in the kernels suite
 // (tests/README.md): the scores against f64 dot products from the same
 // queries and stored keys, the statistics against the scores, the same bits

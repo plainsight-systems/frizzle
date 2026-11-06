@@ -179,7 +179,7 @@ keeps.
 | How many | A set, any number of neurons in any layers, applied together in one pass |
 | Where | Inside the pass, on the neurons' row, at every step its range holds |
 | When | From the branch point k on, held at every generated token |
-| Cost when off | The edit launch runs once a layer in every step that scores a token, edits or not: about 40 µs a token, estimated, not measured |
+| Cost when off | The edit launch runs once a layer in every step, over every row, edits or not, and edits only the rows whose position a range holds: about 40 µs a step, estimated, not measured |
 
 ## A run's captures: when the store is written and read
 

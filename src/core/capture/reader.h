@@ -48,7 +48,7 @@
 //     Frizzle), and 3.2 MiB moved twice (GPU to the mapping, the mapping to
 //     the host copy), counted, not measured.
 //   - Its own buffer, not the program's readback slots: those carry each
-//     step's 16-byte draw record and are at most kMaxReadback, 4 KiB
+//     step's 16-byte draw record and are kMaxReadback, 16 bytes
 //     (kernels/program.h); widening them would copy 3.2 MiB every step.
 //   - The words cross as floats copied by memcpy, which keeps every bit;
 //     the host decides what to show.

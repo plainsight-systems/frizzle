@@ -1,11 +1,16 @@
-// rope's decoder form (kernels/rope/rope.h), composed after rope.wgsl:
-// queries written back in place, keys and values packed into the layer's
-// cache at slot p mod slots. pack is the cache format's (format.h).
+// Axis E: changes with a new or optimized kernel.
+//
+// Contract, algorithm, cost and corpus guidance: rope.h. This file defines
+// what that header states. It is the second of the one form's two parts,
+// joined after rope.wgsl (rope.cpp): the key, value and cache bindings and
+// the entry point, which writes queries back in place and packs keys and
+// values into the layer's KV cache at slot p mod slots. pack is the cache
+// format's (formats/format.h), composed after this by the program.
 
-@group(0) @binding(6) var<storage, read> key: array<vec4<f32>>;
-@group(0) @binding(7) var<storage, read> value: array<vec4<f32>>;
-@group(0) @binding(8) var<storage, read_write> key_cache: array<u32>;
-@group(0) @binding(9) var<storage, read_write> value_cache: array<u32>;
+@group(0) @binding(5) var<storage, read> key: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read> value: array<vec4<f32>>;
+@group(0) @binding(7) var<storage, read_write> key_cache: array<u32>;
+@group(0) @binding(8) var<storage, read_write> value_cache: array<u32>;
 
 @compute @workgroup_size(workgroup_size)
 fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) local: u32) {
@@ -36,13 +41,12 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
         b = key[at.base + at.lane + lanes];
     }
 
-    // Step 3, with QK-norm, in a workgroup that rotates: r = 1 / sqrt(mean
-    // of the head's squares + epsilon), then (x × r) × g. Value heads sharing
-    // such a workgroup reach the barriers, as WGSL requires, and keep their
-    // values; a workgroup of value heads alone reduces nothing. The tree's
-    // first barrier publishes Step 1's table; without QK-norm a barrier of
-    // its own does.
-    if (qk_norm && token.rotates) {
+    // Step 3, QK-norm, in a workgroup that rotates: r = 1 / sqrt(mean of the
+    // head's squares + epsilon), then (x × r) × g. Value heads sharing such a
+    // workgroup reach the barriers, as WGSL requires, and keep their values;
+    // a workgroup of value heads alone reduces nothing. The tree's first
+    // barrier publishes Step 1's table.
+    if (token.rotates) {
         let total = reduce_head(local, at.lane, lanes, dot(a, a) + dot(b, b));
         if (!at.is_value) {
             let r = inverseSqrt(total / f32(head_dimension) + rope.epsilon);
@@ -54,8 +58,6 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
                 b = (b * r) * key_gain[at.lane + lanes];
             }
         }
-    } else if (token.rotates) {
-        workgroupBarrier();
     }
 
     // Step 4, query and key heads: each pair turned by its angle.

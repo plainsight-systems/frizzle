@@ -32,8 +32,9 @@ struct Attention {
 }
 
 // The program sets workgroup_size from the launcher (attention.cpp, 64) and
-// the launcher the shape; the defaults are Qwen3's, so a tool that reads
-// this file alone can size what uses them.
+// the launcher the shape; the defaults, d = 128 with 16 query and 8
+// key-value heads, are no Gemma 3 layer's and never take effect: they only
+// let a tool that reads this file alone size what uses them.
 override workgroup_size: u32 = 64;
 override head_dimension: u32 = 128;
 override query_heads: u32 = 16;
@@ -45,7 +46,7 @@ override key_value_heads: u32 = 8;
 // ("Failed to evaluate override value") or whose workgroup array is sized
 // by an expression of them, or by one left at its default ("failed to
 // evaluate override expression"), so each is a plain override, set on every
-// launch; the defaults are Qwen3's, as above.
+// launch; the defaults are those of the shape above.
 override queries_per_tile: u32 = 8u;      // M, 1024 / d
 override keys_per_tile: u32 = 16u;        // B, 2048 / d
 override group: u32 = 2u;                 // G, query heads / key-value heads
