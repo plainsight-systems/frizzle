@@ -289,7 +289,7 @@ TEST_CASE(
   // 2. The graph and its program.
   const frz::residency::ResidencyPlan& placed = upload->plan();
   std::vector<frz::kernels::Launch> launches;
-  const frz::graph::GraphResult built = frz::arch::decoder_graph(*architecture)(
+  const frz::graph::GraphResult built = architecture->graph(
       description, placed, *frz::capability::find_format(placed.cache_type),
       launches);
   REQUIRE_MESSAGE(built.ok(), built.subject);

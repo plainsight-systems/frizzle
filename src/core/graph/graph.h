@@ -49,8 +49,7 @@ namespace frizzle::graph {
 //     (UnsupportedShape): a head dimension of 64, 128 or 256; (query heads +
 //     2 × key-value heads) × head dimension / 8 a multiple of 64; the query
 //     heads a key-value head serves dividing 1,024 / head dimension; QK-norm
-//     on both queries and keys; a hidden width of at most 4,096; no
-//     frequency factors (rope_freqs.weight), which rope does not apply. A
+//     on both queries and keys; a hidden width of at most 4,096. A
 //     vocabulary under the 64 candidates selection keeps.
 //   - Residual: the norm that begins a block adds the last block's result
 //     into `hidden`, so `hidden` is never written by a matrix product. The
@@ -186,8 +185,8 @@ namespace frizzle::graph {
 //     the last token alone — the final norm, the head, selection, the draw,
 //     and the capture and weights launches (GDSA.6): for Gemma 3 1B the head
 //     is the Q8_0 token embedding, about 321 MB not read.
-//   - The graph is built at preflight and again at load, never per step;
-//     a step makes no call through it (WASM.4).
+//   - The graph is built once a load, never per step; a step makes no call
+//     through it (WASM.4).
 //   - Verified in Frizzle by the llama.cpp comparison (tests/README.md,
 //     integration): Gemma 3 1B decoded a token at a time over a pinned
 //     600-token sequence, every position's top 20 within llama.cpp's own
@@ -209,7 +208,7 @@ namespace frizzle::graph {
 //     GDSA.2 Declare each floating-point reduction's determinism level:
 //            batch-invariant end to end, as above.
 //     WASM.4 Reduce indirect dispatch in hot paths: the graph's function
-//            pointer is called at preflight and load, never per step.
+//            pointer is called once a load, never per step.
 
 enum class GraphError : std::uint8_t {
   Ok,

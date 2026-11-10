@@ -62,7 +62,7 @@ flowchart LR
 
 | Axis | Changes when | May change |
 | --- | --- | --- |
-| **A** Gemma 3's graph | The order of work in a layer, or a new ◉ or ✎ point | The graph, its working buffers, where the points sit |
+| **A** Gemma 3's graph | The order of work in a layer, or a new ◉ or ✎ point | The graph, its working buffers, where the points sit; the model description and the architecture entry |
 | **B** Weight formats | A format's layout | Device layout, pack, unpack |
 | **C** GGUF | The file format, or our parse contract | Reader, types, errors |
 | **D** Device | The WebGPU surface or the limits granted | Device, placement, buffer writer, the context the device allows; how GPU results come back, the one place the native and browser builds differ |
@@ -92,8 +92,8 @@ H is a family, as E is: one member per reason the app changes.
 | H(session) | What a session holds | The edit set, the copies of captures, the reply to steer from and its history, the branch point, the steered reply |
 | H(shape) | How values are presented | Folding vectors into grids, painting, ranking, numbers for reading; plain functions, tested without React |
 
-A family's contract header, such as the model description, the kernel
-interface or a weight format's interface, belongs to the family, not to a
+A family's contract header, such as the kernel interface or a weight
+format's interface, belongs to the family, not to a
 member, and changes only when the contract does. `policy/` is a contract;
 its values are J's.
 

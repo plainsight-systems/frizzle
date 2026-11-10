@@ -41,13 +41,6 @@ std::size_t index_of(gguf::TensorId tensor) {
 }
 std::size_t index_of(Role role) { return static_cast<std::size_t>(role); }
 
-// A weight a describe always fills (model_description.h); one missing is a
-// description not made by describe: a broken precondition.
-gguf::TensorId present(const std::optional<gguf::TensorId>& tensor) {
-  if (!tensor.has_value()) std::abort();
-  return *tensor;
-}
-
 // The plan names every working buffer the blocks bind (residency/plan.h).
 const residency::BufferRange& scratch(const residency::ResidencyPlan& plan,
                                       std::string_view purpose) {
@@ -274,7 +267,7 @@ void Builder::product(const residency::WeightView& weight,
 void Builder::embed(float scale) {
   const std::size_t at = out_->size();
   append(*out_,
-         kernels::gather_launches(view(present(model_->token_embedding)),
+         kernels::gather_launches(view(model_->token_embedding),
                                   buffers_.hidden, buffers_.sampled, scale));
   named(*out_, at, "embed");
 }
@@ -283,13 +276,6 @@ GraphResult Builder::attention(std::uint32_t layer) {
   const model::LayerDescription& l = model_->layers.at(layer);
   if (GraphResult r = check_shape(layer, l, model_->embedding_width); !r.ok()) {
     return r;
-  }
-  // rope applies no frequency factors, so a model that has them is refused
-  // rather than run without them.
-  if (model_->rotary_factors.has_value()) {
-    return unsupported(layer,
-                       "frequency factors (rope_freqs.weight), which "
-                       "rope does not apply");
   }
   const auto& t = l.tensors;
   if (group({t.at(index_of(Role::Query)), t.at(index_of(Role::Key)),
@@ -425,7 +411,7 @@ GraphResult Builder::output() {
   }
   const Buffers& b = buffers_;
   std::size_t at = out_->size();
-  kernels::NormLaunch norm{&view(present(model_->output_norm)),
+  kernels::NormLaunch norm{&view(model_->output_norm),
                            pending_.post_gain,
                            pending_.written,
                            b.output,
@@ -438,7 +424,7 @@ GraphResult Builder::output() {
   out_->push_back(kernels::norm_launch(norm));
   named(*out_, at, "output.norm");
   const residency::WeightView& head =
-      view(model_->output_head.value_or(present(model_->token_embedding)));
+      view(model_->output_head.value_or(model_->token_embedding));
   at = out_->size();
   product(head, b.normed, b.logits, kernels::Rows::LastToken);
   named(*out_, at, "output.head");

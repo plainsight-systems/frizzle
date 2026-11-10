@@ -345,8 +345,8 @@ void on_finished(residency::UploadError error, void* userdata) {
     return;
   }
   std::vector<kernels::Launch> launches;
-  const graph::GraphResult built = arch::decoder_graph(*s.architecture)(
-      s.description, plan, *cache_format, launches);
+  const graph::GraphResult built =
+      s.architecture->graph(s.description, plan, *cache_format, launches);
   if (!built.ok()) {
     settle(std::move(call), LoadError::Graph,
            std::string(name(built.error)) + " (" + built.subject + ")");
@@ -504,11 +504,6 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
     return {
         LoadError::Architecture,
         "architecture " + quoted(architecture_name) + " is not implemented"};
-  }
-  if (arch::decoder_graph(*architecture) == nullptr) {
-    return {LoadError::Architecture, "architecture " +
-                                         quoted(architecture_name) +
-                                         " does not generate text"};
   }
   model::ModelDescription description{};
   if (const arch::DescribeResult r = architecture->describe(index, description);

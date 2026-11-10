@@ -1,3 +1,9 @@
+// Axis A: changes with Gemma 3's order of work in a layer, or how its file
+// names and configures its layers.
+//
+// Contract, algorithm, cost and corpus guidance: gemma3.h. This file defines
+// what that header states.
+
 #include "core/arch/gemma3/gemma3.h"
 
 #include <array>
@@ -28,7 +34,7 @@ constexpr std::array kRoles{
     RoleName{Role::PostFeedForwardNorm, "post_ffw_norm.weight"},
 };
 
-// Defaults llama.cpp applies when the file does not say: in every run of six
+// Gemma 3's defaults where the file does not say: in every run of six
 // layers, the first five attend over a sliding window and the sixth over the
 // whole context; window layers rotate with a base of 10,000.
 constexpr std::uint32_t kDefaultPattern = 6;
@@ -40,8 +46,9 @@ DescribeResult apply_sliding_window(const gguf::TensorIndex& index,
   std::uint32_t window = 0;
   if (auto r =
           read_u32_or(index, "gemma3", "attention.sliding_window", 0, window);
-      !r.ok())
+      !r.ok()) {
     return r;
+  }
   if (window == 0) return {};
 
   // The pattern may be stored as one number or as a flag per layer; the
@@ -58,9 +65,10 @@ DescribeResult apply_sliding_window(const gguf::TensorIndex& index,
       !r.ok()) {
     return r;
   }
-  if (pattern == 0)
+  if (pattern == 0) {
     return DescribeResult{DescribeError::InvalidValue,
                           "gemma3.attention.sliding_window_pattern"};
+  }
   float window_rope_base = 0;
   if (auto r = read_f32_or(index, "gemma3", "rope.freq_base_swa",
                            kDefaultWindowRopeBase, window_rope_base);
@@ -69,46 +77,26 @@ DescribeResult apply_sliding_window(const gguf::TensorIndex& index,
   }
 
   for (std::size_t layer = 0; layer < out.layers.size(); ++layer) {
-    if (layer % pattern == pattern - 1)
+    if (layer % pattern == pattern - 1) {
       continue;  // the global layer of each run
+    }
     out.layers[layer].attention_window = window;
     out.layers[layer].rope_base = window_rope_base;
   }
   return {};
 }
 
-// Gemma 3 27B scales attention by 1 / sqrt(embedding width / query heads),
-// not by the head dimension. No GGUF key states it; llama.cpp infers the
-// 27B from its 62 layers, after Google's gemma_pytorch configuration, and so
-// does this.
-constexpr std::uint32_t k27BLayers = 62;
-
 DescribeResult describe(const gguf::TensorIndex& index,
                         model::ModelDescription& out) {
   Hyperparameters hp{};
   if (auto r = read_hyperparameters(index, "gemma3", hp); !r.ok()) return r;
-  // NEOX pairing, as llama.cpp's llama_model_rope_type gives Gemma 3, and
-  // GeGLU with GELU's tanh form, its graph's feed-forward and Hugging
-  // Face's gelu_pytorch_tanh.
-  if (auto r = describe_layers(index, hp, kRoles,
-                               {model::RotaryPairing::Halves,
-                                model::FeedForwardActivation::GeluTanh},
-                               out);
-      !r.ok()) {
-    return r;
-  }
-  if (hp.block_count == k27BLayers) {
-    out.attention_scale =
-        1.0f /
-        std::sqrt(static_cast<float>(hp.embedding_length / hp.head_count));
-  }
+  if (auto r = describe_layers(index, hp, kRoles, out); !r.ok()) return r;
   return apply_sliding_window(index, out);
 }
 
 // Each layer attention then the gated feed-forward block, each block's
 // output through its post-norm before it is added (graph/graph.h), and the
-// embedding scaled by the square root of its width in f32, as llama.cpp's
-// build_inp_embd(tok_embd, sqrtf(n_embd)) does for Gemma 3.
+// embedding scaled by the square root of its width, computed in f32.
 graph::GraphResult graph(const model::ModelDescription& model,
                          const residency::ResidencyPlan& plan,
                          const formats::Format& cache_format,

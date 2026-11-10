@@ -3,7 +3,7 @@
 How the [change axes](change-axes.md) become directories and files. The axis
 belongs to the file. A directory holds one axis plus, where there is one,
 that family's contract header. `src/core/arch/` is the exception: its
-contract, `describe` (C) and `gemma3/` (A) sit together because each names
+entry and `gemma3/` (A) and `describe` (C) sit together because each names
 the others.
 
 ## The repository
@@ -67,7 +67,7 @@ sources:
 
 | Path | Axis | What it holds |
 | --- | --- | --- |
-| `core/arch/`, `core/model/` | A, C, contract | Gemma 3's description and the order its graph runs the blocks |
+| `core/arch/`, `core/model/` | A, C | Gemma 3's description and the order its graph runs the blocks |
 | `core/graph/graph.*` | A | The layer's blocks; the ◉ and ✎ points |
 | `core/formats/<format>/` | B | F32, F16, Q4_0, Q4_1, Q8_0 |
 | `core/gguf/` | C | The file reader |

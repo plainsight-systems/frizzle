@@ -1,8 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 #include "core/formats/format.h"
@@ -14,54 +14,83 @@
 
 namespace frizzle::arch {
 
-// Contract: what every architecture supplies.
+// Axis A: changes with what Gemma 3's describe and graph take and return.
 //
-// Each arch/<arch>/ provides one Architecture, and the capability table lists
-// it under every general.architecture value it answers to. An architecture is
-// the only code that knows which architecture is loaded. It supplies two
-// things:
+// The contract every architecture supplies: a describe and a graph, behind
+// one Architecture entry. The capability table lists the one entry there is,
+// kGemma3, under general.architecture "gemma3" (capability/capability.cpp).
+// An architecture is the only code that knows what its file calls its
+// hyperparameters and weights, and the order its model runs the shared
+// blocks in.
 //
-//   - describe: reads its numbers from the tensor index into a model
-//     description, and names each layer's tensors by role. Fails naming the
-//     key or tensor when the file lacks what the architecture needs.
-//   - graph: every kernel launch of a step, in order, composed from the
-//     blocks every architecture shares (graph/graph.h) — the order its family
-//     runs them in, and what its family does that the description does not
-//     carry, such as Gemma 3's embedding scale. A family whose structure no
-//     block covers adds blocks; it never changes another family's graph.
+// Contract
+//   - describe(index, out): Ok with `out` filled (model/model_description.h),
+//     or a DescribeResult whose `subject` names the key or tensor at fault.
+//     On failure `out` is left partly written; the caller discards it.
+//   - graph(model, plan, cache_format, out): appends every launch of a step
+//     to `out`, in order, composed from the blocks in graph/graph.h; Ok, or a
+//     GraphResult naming the layer at fault. Its preconditions are on GraphFn
+//     below. One graph kind: a decoder, which runs a turn over the KV cache
+//     and ends in the draw.
+//   - An architecture holds no state. An entry is constant static data, its
+//     name and two function pointers.
+//   - It rewrites no weights. The file stores each norm gain as the factor
+//     the norm multiplies by (for Gemma 3, 1 + w), and no kernel adds 1, so
+//     upload writes what the file holds.
+//   - DescribeError, by kind: MissingKey, a key the file lacks; WrongKeyType,
+//     a key declared with another type, an array among them where one number
+//     is read; MissingTensor and ShapeMismatch, a weight absent or not the
+//     shape its role requires; InvalidValue, a value no model could run
+//     with; UnsupportedValue, a valid value or form the kernels do not
+//     implement. Each refusal is listed where it is made (arch/describe.h,
+//     arch/gemma3/gemma3.h).
 //
-// An architecture's graph is one of two kinds: a decoder's, which runs
-// turns over a cache and ends in the draw, or an encoder's, which runs one
-// step over a whole text and ends in a pooled vector (graph/encoder.h). The
-// kind is the architecture's, fixed in the capability table as a variant,
-// so no entry can hold both or neither (C.181); load reads it once and makes
-// a generator or an embedder (runtime/embedder.h). An architecture whose
-// graph encodes describes an encoder (model_description.h's `encoder`); one
-// whose graph decodes never does.
+// Algorithm, as the engine uses an entry (runtime/engine.h)
+//   1. begin_load reads general.architecture, finds the entry in the
+//      capability table, and calls describe once.
+//   2. The residency plan is made from the description, and upload carries
+//      it out.
+//   3. finish_load, once the upload is complete, calls graph once, over the
+//      plan as upload carried it out (Upload::plan()); the program is built
+//      from the launches.
+//   No step of a turn calls through the entry.
 //
-// It rewrites no weights. A file's converter has already put them in the
-// convention the shared kernels expect — llama.cpp's stores Gemma 3's norm
-// weights as 1 + w and permutes Llama's Q and K — so upload writes what the
-// file holds.
+// Design and cost
+//   - Function pointers, not a pure abstract class: an architecture holds no
+//     state, and the capability table lists its entry as constant data, so
+//     there is no object to construct. The entry has the property C.121 asks
+//     of an interface, no data of its own beyond what names it.
+//   - Two indirect calls a load, describe's and graph's, and none a token
+//     (WASM.4). The reference-logits test makes the same two calls on the
+//     pinned file (tests/integration/reference-logits/logits_test.cpp).
+//   - No test exercises describe's refusals (arch/describe.h, verification).
 //
-// An entry is chosen once, at load. Its graph is built when preflight judges
-// Run and again at load, for the program, and never per token, so the
-// per-token path makes no call through this table (WASM.4). Preflight runs
-// the same graph the load runs, not a check of its own beside it. Function
-// pointers, not a pure abstract class: an architecture holds no state, and
-// the capability table lists its entries as static data — the interface
-// C.121 asks for, without objects to construct.
+// Corpus guidance
+//   C++ Core Guidelines
+//     C.121  A base class used as an interface is pure abstract: there is no
+//            base class; the interface is a struct of function pointers with
+//            no state, as stable for the same reason.
+//     E.27   Error codes systematically: DescribeError and GraphError, each
+//            with a subject naming where.
+//     I.5    State preconditions: GraphFn's, below.
+//     Enum.7 Specify an enumeration's underlying type only when necessary:
+//            DescribeError takes one byte, the smallest that holds it.
+//   C++ performance guidelines
+//     WASM.4 Reduce indirect dispatch in hot paths: each entry's function
+//            pointers are called once a load, never per token.
 
-enum class DescribeError {
+enum class DescribeError : std::uint8_t {
   Ok,
   MissingKey,
   WrongKeyType,
   MissingTensor,
   ShapeMismatch,
-  // A value no architecture could run with: zero heads, a layer count larger
-  // than the file's tensors could fill.
+  // A value no model could run with: a zero count or width, key-value heads
+  // that do not divide the query heads, a layer count larger than the
+  // file's tensors could fill.
   InvalidValue,
-  // A valid value in a form this implementation does not read.
+  // A valid value or form the kernels do not implement, such as a norm gain
+  // not stored as F32 or a rotary form rope does not apply.
   UnsupportedValue,
 };
 
@@ -77,8 +106,8 @@ struct DescribeResult {
 using DescribeFn = DescribeResult (*)(const gguf::TensorIndex& index,
                                       model::ModelDescription& out);
 
-// Fills `out` with every launch of a step. Preconditions: `model` is this
-// architecture's describe's; `plan` was made from it, as upload carried it
+// Fills `out` with every launch of a step. Preconditions (I.5): `model` is
+// this architecture's describe's; `plan` was made from it, as upload carried it
 // out (Upload::plan()); `cache_format` has a pack and is the format the plan
 // sized the cache in.
 using GraphFn = graph::GraphResult (*)(const model::ModelDescription& model,
@@ -86,29 +115,10 @@ using GraphFn = graph::GraphResult (*)(const model::ModelDescription& model,
                                        const formats::Format& cache_format,
                                        std::vector<kernels::Launch>& out);
 
-// Fills `out` with every launch of an encoder's one step. Preconditions:
-// `model` is this architecture's describe's, with an encoder; `plan` was made
-// from it, with the encoder's working set, as upload carried it out.
-using EncodeFn = graph::GraphResult (*)(const model::ModelDescription& model,
-                                        const residency::ResidencyPlan& plan,
-                                        std::vector<kernels::Launch>& out);
-
 struct Architecture {
   std::string_view name;
   DescribeFn describe;
-  std::variant<GraphFn, EncodeFn> graph;
+  GraphFn graph;
 };
-
-// The decoder's graph, or null for an architecture that encodes.
-[[nodiscard]] constexpr GraphFn decoder_graph(const Architecture& a) noexcept {
-  const GraphFn* f = std::get_if<GraphFn>(&a.graph);
-  return f != nullptr ? *f : nullptr;
-}
-
-// The encoder's graph, or null for an architecture that decodes.
-[[nodiscard]] constexpr EncodeFn encoder_graph(const Architecture& a) noexcept {
-  const EncodeFn* f = std::get_if<EncodeFn>(&a.graph);
-  return f != nullptr ? *f : nullptr;
-}
 
 }  // namespace frizzle::arch

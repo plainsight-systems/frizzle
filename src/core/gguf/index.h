@@ -36,36 +36,28 @@ namespace frizzle::gguf {
 //     misdeclares it. `out` is untouched unless the result is Ok.
 //     read_string's `out` views storage the index owns and lives as long as
 //     it.
-//   - Arrays are located, not decoded: read_array gives the element type,
-//     count and byte range, to be read from the byte source. An array of
-//     numbers of at most kMaxDecodedArray elements is decoded too, each
-//     element's bits widened to 64, signed ones sign-extended, so describe,
-//     which has the index alone, reads a per-layer value as it reads a
-//     scalar.
-//   - read_u32_array: a decoded array of counts, UINT32 elements or INT32
-//     ones none negative; WrongType for any other array, a longer one, or a
-//     scalar. read_f32_array: a decoded array of FLOAT32 elements, WrongType
-//     otherwise.
+//   - Arrays are located, never decoded, whatever their length or element
+//     type: read_array gives the element type, count and byte range, and
+//     whoever needs the elements reads them from the byte source (arrays.h:
+//     read_strings, read_int32s, read_float32s). The index holds no
+//     array element.
 //
 // Algorithm
 //   - find: a binary search of every tensor's id sorted by name, built once
 //     by read_index.
 //   - A metadata accessor: find the entry by key, a scan of the metadata;
 //     MissingKey if absent; WrongType if its declared type is not the one
-//     asked for (and, for the array readers, if its elements are not, or
-//     were not decoded); else convert the stored value to `out`.
+//     asked for; else convert the stored value to `out`.
 //
 // Design and cost
 //   - Gemma 3 1B's pinned file, counted: 340 tensors, so a find is about
 //     nine comparisons; 38 metadata keys, so a metadata lookup compares at
 //     most 38 keys. Its vocabulary, 262,144 strings, is located and read by
 //     the tokenizer from the byte source; its scores and token types, 262,144
-//     numbers each, are past kMaxDecodedArray and only located.
+//     numbers each, are located only, as every array is.
 //   - Optimization: the sorted ids are one contiguous vector, built once,
 //     so describe's lookups each take a binary search rather than a
 //     comparison with every tensor's name.
-//   - Decoding a short array costs at most kMaxDecodedArray × 8 bytes, 8
-//     KiB, at read.
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -79,13 +71,10 @@ namespace frizzle::gguf {
 //     E.12   noexcept where a throw is unacceptable: a scalar accessor reads
 //            its value with get_if, and a value stored in another
 //            alternative than its declared type's, a defect in the reader,
-//            aborts.
+//            aborts. read_array copies an ArrayLocation, three plain fields,
+//            so no accessor allocates and none can throw for want of memory.
 //     Enum.7 Specify an enumeration's underlying type only when necessary:
 //            MetadataError takes one byte, the smallest that holds it.
-
-// The longest array of numbers the read decodes: far past Gemma 3 1B's 26
-// layers.
-inline constexpr std::uint64_t kMaxDecodedArray = 1024;
 
 // A tensor's position in the index. Its own type, so a tensor identifier
 // cannot be passed where a layer or a token is meant (I.4).
@@ -104,10 +93,6 @@ struct ArrayLocation {
   ValueType element_type;
   std::uint64_t element_count;
   ByteRange bytes;
-  // For an array of numbers of at most kMaxDecodedArray elements, each
-  // element's bits widened to 64, signed ones sign-extended; empty
-  // otherwise.
-  std::vector<std::uint64_t> decoded;
 };
 
 // One metadata value as the file stores it. Integers widen to 64 bits and
@@ -152,15 +137,6 @@ class TensorIndex {
                                           std::string_view& out) const noexcept;
   [[nodiscard]] MetadataError read_array(std::string_view key,
                                          ArrayLocation& out) const noexcept;
-  // A short array of counts, one a layer: UINT32 elements, or INT32 ones
-  // none negative. WrongType for any other array, a longer one, or a scalar.
-  // `out` is left untouched unless it succeeds.
-  [[nodiscard]] MetadataError read_u32_array(
-      std::string_view key, std::vector<std::uint32_t>& out) const;
-  // A short array of values: FLOAT32 elements, decoded as read_u32_array
-  // decodes counts. `out` is left untouched unless it succeeds.
-  [[nodiscard]] MetadataError read_f32_array(std::string_view key,
-                                             std::vector<float>& out) const;
 
  private:
   friend ReadResult read_index(ByteSource& source, TensorIndex& out);

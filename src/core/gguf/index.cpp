@@ -13,8 +13,9 @@
 namespace frizzle::gguf {
 namespace {
 
-// Reads the value of `entry` as `T`, provided the file declared it as
-// `declared`. Every typed accessor is this, with its own pair.
+// Reads the value of `entry`, stored as `Stored`, into `out` as `Out`,
+// provided the file declared it as `declared`. Every typed accessor but
+// read_string is this, with its own pair.
 template <typename Stored, typename Out>
 MetadataError read_as(const MetadataEntry* entry, ValueType declared,
                       Out& out) noexcept {
@@ -76,51 +77,6 @@ MetadataError TensorIndex::read_string(std::string_view key,
 MetadataError TensorIndex::read_array(std::string_view key,
                                       ArrayLocation& out) const noexcept {
   return read_as<ArrayLocation>(entry(key), ValueType::Array, out);
-}
-
-MetadataError TensorIndex::read_u32_array(
-    std::string_view key, std::vector<std::uint32_t>& out) const {
-  const MetadataEntry* e = entry(key);
-  if (e == nullptr) return MetadataError::MissingKey;
-  if (e->type != ValueType::Array) return MetadataError::WrongType;
-  const ArrayLocation& a = std::get<ArrayLocation>(e->value);
-  if (a.element_type != ValueType::UInt32 &&
-      a.element_type != ValueType::Int32) {
-    return MetadataError::WrongType;
-  }
-  if (a.decoded.size() != a.element_count) {
-    return MetadataError::WrongType;  // too long to be decoded
-  }
-  std::vector<std::uint32_t> values;
-  values.reserve(a.decoded.size());
-  for (const std::uint64_t v : a.decoded) {
-    if (a.element_type == ValueType::Int32 &&
-        static_cast<std::int64_t>(v) < 0) {
-      return MetadataError::WrongType;
-    }
-    values.push_back(static_cast<std::uint32_t>(v));
-  }
-  out = std::move(values);
-  return MetadataError::Ok;
-}
-
-MetadataError TensorIndex::read_f32_array(std::string_view key,
-                                          std::vector<float>& out) const {
-  const MetadataEntry* e = entry(key);
-  if (e == nullptr) return MetadataError::MissingKey;
-  if (e->type != ValueType::Array) return MetadataError::WrongType;
-  const ArrayLocation& a = std::get<ArrayLocation>(e->value);
-  if (a.element_type != ValueType::Float32 ||
-      a.decoded.size() != a.element_count) {
-    return MetadataError::WrongType;
-  }
-  std::vector<float> values;
-  values.reserve(a.decoded.size());
-  for (const std::uint64_t v : a.decoded) {
-    values.push_back(std::bit_cast<float>(static_cast<std::uint32_t>(v)));
-  }
-  out = std::move(values);
-  return MetadataError::Ok;
 }
 
 }  // namespace frizzle::gguf

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -15,8 +16,7 @@ namespace frizzle::gguf {
 //
 // Whole-array reads, for a consumer that needs every element of an array the
 // index located: a tokenizer's vocabulary, merges, token types and scores.
-// Each is one pass over the array, so its cost is linear in the array, where
-// read_string_element pays for every element before the one it reads.
+// Each is one pass over the array, so its cost is linear in the array.
 // Optimization (practice): Llama 3.2's 280,147 merges read element by element
 // would be tens of billions of skips; one pass is 3 ms.
 //
@@ -38,7 +38,9 @@ class StringTable {
   [[nodiscard]] std::string_view operator[](
       std::size_t element) const noexcept {
     const std::size_t begin = element == 0 ? 0 : ends_[element - 1];
-    return {bytes_.data() + begin, ends_[element] - begin};
+    const std::span<const char> text =
+        std::span(bytes_).subspan(begin, ends_[element] - begin);
+    return {text.data(), text.size()};
   }
 
  private:
