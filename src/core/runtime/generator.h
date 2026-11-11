@@ -38,12 +38,13 @@ namespace frizzle::runtime {
 //         without one prepared since the last start: there is no prompt to
 //         run. A refused prepare leaves none prepared.
 //   - A token covers at most the tokenizer's longest_cover(), L bytes, of
-//     normalized text, and normalizing shrinks UTF-8 at most 7/2-fold — a
-//     character NFC writes stands for at most its longest canonical
-//     equivalent, at most 7/2 times its bytes in Unicode 16.0 — so text
-//     longer than 7/2 × the context × L bytes makes more tokens than the
-//     context holds: it is refused before it is encoded, as PromptTooLong,
-//     naming its bytes and the least tokens they make.
+//     normalized text, and normalizing never shrinks the text
+//     (tokenizer.h), so text longer than the context × L bytes makes more
+//     tokens than the context holds. The check allows 7/2 of that, looser
+//     than it needs and still sound: text longer than 7/2 × the context × L
+//     bytes is refused before it is encoded, as PromptTooLong, naming its
+//     bytes and a least count of tokens; shorter text too long to fit is
+//     refused by the encode, below.
 //   - Shorter text is encoded with the context offered as its limit
 //     (tokenizer/tokenizer.h, encoding is bounded): text that makes more
 //     tokens at least, its specials and segments counted after normalizing,
@@ -95,15 +96,12 @@ namespace frizzle::runtime {
 //      result, what was pending as U+FFFD its tail.
 //
 // Design and cost
-//   - A turn, once: the text's bytes encoded, 28.8 to 30.4 ns a byte for
-//     byte-level BPE with its piece cache warm, 43.3 for SentencePiece (their
-//     headers) — 4.6 to 5.6 ms for a conversation of a listed model's whole
-//     context — then the runtime's turn. The encoders allocate their working
-//     lists afresh each encode: for each span between special tokens its
-//     normalized text and its pieces, and for each piece too long for the
-//     piece cache its symbols and their merge queue — allocations a turn in
-//     proportion to the conversation's spans and long pieces, beside the
-//     turn's prefill, none a token.
+//   - A turn, once: the text encoded, at the cost SentencePiece BPE counts
+//     (bpe/sentencepiece_bpe.h), then the runtime's turn. The encode
+//     allocates its working lists afresh each time: the escaped copy, the
+//     segments, and for each long run its merge's symbols and heap
+//     (bpe/merge.h) — allocations a turn in proportion to the conversation,
+//     beside the turn's prefill, none a token. Its time is not measured.
 //   - A token: one decode, an indirect call that appends the token's bytes
 //     to a string reserved at load for the vocabulary's longest token; the
 //     stream's push over those bytes; and one token callback — the

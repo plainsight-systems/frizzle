@@ -36,13 +36,12 @@ struct Generator::State {
 
 namespace {
 
-// NFC's greatest shrinking of UTF-8, 7 bytes to 2: a character NFC writes
-// stands for at most its longest canonical equivalent, which is at most 7/2
-// times its bytes — U+0390 from U+1FBE U+0308 U+0301 — in Unicode 16.0, the
-// tables' version (tokenizer/nfc.h), as tokenizer_nfc_test computes over
-// them.
-constexpr std::uint64_t kNfcShrinkFrom = 7;
-constexpr std::uint64_t kNfcShrinkTo = 2;
+// The early refusal's ratio, 7 to 2: the most canonical normalization (NFC)
+// shrinks UTF-8, as U+1FBE U+0308 U+0301 (7 bytes) becomes U+0390 (2).
+// Gemma 3's encode never shrinks text, so 1 to 1 would do; 7 to 2 is looser
+// and still sound (generator.h).
+constexpr std::uint64_t kLooseShrinkFrom = 7;
+constexpr std::uint64_t kLooseShrinkTo = 2;
 
 // The reply's UTF-8 stream, made at construction; none is a broken
 // precondition.
@@ -98,13 +97,14 @@ GenerateResult Generator::prepare(std::string_view text,
   }
   s.prepared = false;
   // A token covers at most `longest` bytes of normalized text, and
-  // normalizing shrinks text at most 7/2-fold, so text longer than 7/2 ×
-  // the context × that makes more tokens than the context holds: refused
-  // unencoded.
+  // normalizing never shrinks text, so text longer than the context × that
+  // makes more tokens than the context holds. Refused unencoded past 7/2 of
+  // that (above); shorter text too long to fit, by the encode.
   const std::uint64_t longest = s.tokenizer->longest_cover();
-  const std::uint64_t covered2 =
-      kNfcShrinkFrom * longest;  // twice the bytes a token covers, unnormalized
-  const std::uint64_t bytes2 = kNfcShrinkTo * text.size();
+  // Twice the bytes a token is allowed to cover, unnormalized, and twice the
+  // text's bytes, so the 7/2 compares in integers.
+  const std::uint64_t covered2 = kLooseShrinkFrom * longest;
+  const std::uint64_t bytes2 = kLooseShrinkTo * text.size();
   if (bytes2 > std::uint64_t{s.capacity} * covered2) {
     const std::uint64_t least = (bytes2 + covered2 - 1) / covered2;
     return {

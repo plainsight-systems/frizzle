@@ -15,10 +15,11 @@ namespace frizzle::gguf {
 // Axis C: changes with the GGUF format.
 //
 // Whole-array reads, for a consumer that needs every element of an array the
-// index located: a tokenizer's vocabulary, merges, token types and scores.
-// Each is one pass over the array, so its cost is linear in the array.
-// Optimization (practice): Llama 3.2's 280,147 merges read element by element
-// would be tens of billions of skips; one pass is 3 ms.
+// index located: the tokenizer's vocabulary, token types and scores. Each is
+// one pass over the array, so its cost is linear in the array.
+// Optimization (practice): Gemma 3's 262,144 token strings read element by
+// element, each skipping from the array's start, would be about 34 billion
+// skips, counted; one pass reads each once.
 //
 //   - Elements of another type than the one asked for are WrongElementType.
 //   - The array's bytes must hold exactly its elements; anything else is

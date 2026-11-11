@@ -46,8 +46,7 @@ namespace frizzle::capability {
 //
 // Design and cost
 //   - The tables hold a row only for an architecture, format or tokenizer
-//     the pinned model uses, and there is no media-encoder or pre-tokenizer
-//     lookup.
+//     the pinned model uses.
 //   - The tables are constexpr arrays of an identifier and a pointer to a
 //     constant: constant-initialized read-only data, with no work at startup
 //     and no dependence on another translation unit's initialization order.

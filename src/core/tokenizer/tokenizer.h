@@ -55,10 +55,10 @@ struct LoadResult;
 //          unread. Text that could be admitted is within it: at most the
 //          limit's special tokens, and ordinary bytes that normalize to at
 //          most kMaxEncodeBytes; escaping spaces as ▁ never shrinks text.
-//          The 7/2 is the most NFC shrinks UTF-8; SentencePiece as Gemma 3
-//          configures it applies no NFC, so a ratio of 1 would bound it as
-//          well. 7/2 is kept as the code has it: changing it tightens what
-//          text step 1 lets through, a contract change of its own.
+//          The 7/2 is looser than this tokenizer needs: its normalizing
+//          never shrinks text, so a ratio of 1 would bound it too. A looser
+//          early refusal is still sound: text it lets through that is too
+//          long is refused at step 3.
 //       2. Each space becomes ▁, and the special tokens, spelled that way,
 //          are split out, stopping past the limit's worth of them as
 //          TooManyTokens, so the segments are at most two a token allowed.

@@ -59,18 +59,19 @@ namespace frizzle::cache {
 // set, at most kMaxEdits records, and walks them once (CDSA.10): below a
 // millisecond, an estimate. longest_common_prefix, one pass over at most the
 // shorter sequence,
-// comparing 4-byte identifiers — at most the context offered, 40,960 for
-// Qwen3, 160 KiB read from each side. At one comparison a cycle that is about
-// 15 µs, an estimate, not a measurement. What it saves grows with the tokens
-// it reuses: each reused token is a row that every layer's projections,
-// attention and feed-forward no longer compute, about 1.2 GFLOP for Qwen3,
-// and each 512 reused tokens a prefill pass that no longer reads the
-// weights. Both sequences live in the module's memory when compared. The page
-// sends text and, for a branch, the identifiers of the reply tokens it keeps
-// (runtime/engine.h): a few kilobytes once a run, which the page holds
-// because it holds the conversation, as it holds the edit set
-// (logical-overview.md, invariant 4). WASM.2 is kept in its intent: one
-// crossing a run, never one a token.
+// comparing 4-byte identifiers — at most the context offered, 32,768 for
+// Gemma 3 1B, 128 KiB read from each side. At one comparison a cycle that is
+// about 12 µs, an estimate, not a measurement. What it saves grows with the
+// tokens it reuses: each reused token is a row that every layer's
+// projections, attention and feed-forward no longer compute — about 1.4
+// GFLOP for Gemma 3 1B, counted from its projections and feed-forward, before
+// attention, which grows with the context — and each 512 reused tokens a
+// prefill pass that no longer reads the weights. Both sequences live in the
+// module's memory when compared. The page sends text and, for a branch, the
+// identifiers of the reply tokens it keeps (runtime/engine.h): a few kilobytes
+// once a run, which the page holds because it holds the conversation, as it
+// holds the edit set (logical-overview.md, invariant 4). WASM.2 is kept in its
+// intent: one crossing a run, never one a token.
 //
 // Guidelines, by corpus:
 //   C++ Core Guidelines
