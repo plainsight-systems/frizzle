@@ -1,9 +1,14 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: sentencepiece_bpe.h. This
+// file defines what that header states.
+
 #include "core/tokenizer/bpe/sentencepiece_bpe.h"
 
 #include <algorithm>
 #include <charconv>
-#include <cstdio>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -41,9 +46,24 @@ bool one_character(std::string_view text) noexcept {
   return !text.empty() && decode_utf8(text, 0, c) && c.length == text.size();
 }
 
+// A byte token's text, "<0xXX>": the byte in two uppercase hexadecimal digits.
+constexpr std::string_view kBytePrefix = "<0x";
+constexpr std::string_view kHexDigits = "0123456789ABCDEF";
+constexpr std::size_t kByteDigits = 2;
+constexpr int kHexBase = static_cast<int>(kHexDigits.size());
+
+// The text of the byte token for `byte`. Precondition: byte < 256.
+std::string byte_token_text(std::size_t byte) {
+  std::string text(kBytePrefix);
+  text += kHexDigits[byte / kHexDigits.size()];
+  text += kHexDigits[byte % kHexDigits.size()];
+  text += '>';
+  return text;
+}
+
 }  // namespace
 
-const Algorithm kSentencePiece{"llama", false, load_sentencepiece_tokenizer};
+const Algorithm kSentencePiece{"llama", load_sentencepiece_tokenizer};
 
 EncodeResult SentencePieceBpe::encode(std::string_view raw,
                                       std::uint32_t max_tokens,
@@ -93,8 +113,9 @@ EncodeResult SentencePieceBpe::encode(std::string_view raw,
     symbols.clear();
     for (std::size_t at = 0; at < ordinary.size();) {
       Utf8Char c{};
-      if (!decode_utf8(ordinary, at, c))
+      if (!decode_utf8(ordinary, at, c)) {
         return {EncodeError::InvalidUtf8, 0, 0, raw.size()};
+      }
       if (!symbols.empty() && cut_before(ordinary, at)) {
         merge(symbols, merges_, tokens);
         symbols.clear();
@@ -104,8 +125,9 @@ EncodeResult SentencePieceBpe::encode(std::string_view raw,
       if (token && vocabulary_.type(*token) == TokenType::Normal) {
         symbols.push_back(*token);
       } else {
-        for (const char byte : character)
-          symbols.push_back(byte_tokens_[static_cast<unsigned char>(byte)]);
+        for (const char byte : character) {
+          symbols.push_back(byte_tokens_.at(static_cast<unsigned char>(byte)));
+        }
       }
       at += c.length;
     }
@@ -130,8 +152,11 @@ void SentencePieceBpe::decode(TokenId token, std::string& out) const {
       return;
     case TokenType::Byte: {
       // "<0xXX>": load_sentencepiece_bpe found each of the 256, and no other.
+      const std::string_view digits =
+          text.substr(kBytePrefix.size(), kByteDigits);
       unsigned value = 0;
-      (void)std::from_chars(text.data() + 3, text.data() + 5, value, 16);
+      (void)std::from_chars(std::to_address(digits.begin()),
+                            std::to_address(digits.end()), value, kHexBase);
       out.push_back(static_cast<char>(value));
       return;
     }
@@ -146,8 +171,9 @@ bool SentencePieceBpe::cut_before(std::string_view text,
   if (!cuts_ || text.substr(at, kSpace.size()) != kSpace) return false;
   for (const Straddle& s : straddles_) {
     for (const std::uint32_t mark : s.marks) {
-      if (at >= mark && text.substr(at - mark, s.text.size()) == s.text)
+      if (at >= mark && text.substr(at - mark, s.text.size()) == s.text) {
         return false;
+      }
     }
   }
   return true;
@@ -167,21 +193,26 @@ LoadResult load_sentencepiece_bpe(gguf::ByteSource& source,
     case gguf::MetadataError::WrongType:
       return {LoadError::WrongKeyType, std::string(kSpacePrefix)};
   }
-  if (space_prefix)
+  if (space_prefix) {
     return {LoadError::Unsupported, std::string(kSpacePrefix) + " is true"};
+  }
 
   SentencePieceBpe spm;
-  if (auto r = load_vocabulary(source, index, spm.vocabulary_); !r.ok())
+  if (auto r = load_vocabulary(source, index, spm.vocabulary_); !r.ok()) {
     return r;
+  }
   std::vector<float> scores;
   if (auto r =
           read_float32_array(source, index, "tokenizer.ggml.scores", scores);
-      !r.ok())
+      !r.ok()) {
     return r;
-  if (scores.size() != spm.vocabulary_.size())
+  }
+  if (scores.size() != spm.vocabulary_.size()) {
     return {LoadError::CountMismatch, "tokenizer.ggml.scores"};
-  if (auto r = implied_merges(spm.vocabulary_, scores, spm.merges_); !r.ok())
+  }
+  if (auto r = implied_merges(spm.vocabulary_, scores, spm.merges_); !r.ok()) {
     return r;
+  }
 
   // A character becomes its normal token, and a special token's text is
   // matched before that. One with a token of another type (unused, unknown)
@@ -199,22 +230,23 @@ LoadResult load_sentencepiece_bpe(gguf::ByteSource& source,
                 ", one character that is not a normal token"};
   }
 
-  for (std::size_t byte = 0; byte < 256; ++byte) {
-    char name[8];
-    std::snprintf(name, sizeof name, "<0x%02zX>", byte);
+  std::size_t byte = 0;
+  for (TokenId& byte_token : spm.byte_tokens_) {
+    const std::string name = byte_token_text(byte++);
     const auto token = spm.vocabulary_.find(name);
     if (!token || spm.vocabulary_.type(*token) != TokenType::Byte) {
-      return {LoadError::MissingByte, "byte " + std::string(name)};
+      return {LoadError::MissingByte, "byte " + name};
     }
-    spm.byte_tokens_[byte] = *token;
+    byte_token = *token;
   }
   std::size_t byte_tokens = 0;
   for (std::size_t id = 0; id < spm.vocabulary_.size(); ++id) {
     byte_tokens +=
         spm.vocabulary_.type(static_cast<TokenId>(id)) == TokenType::Byte;
   }
-  if (byte_tokens != 256)
+  if (byte_tokens != SentencePieceBpe::kByteTokens) {
     return {LoadError::Unsupported, "byte tokens other than <0x00> to <0xFF>"};
+  }
   // Special tokens are matched in the text after spaces become ▁, so they are
   // spelled that way too.
   std::vector<SpecialTokens::Entry> special;
@@ -228,6 +260,7 @@ LoadResult load_sentencepiece_bpe(gguf::ByteSource& source,
     }
   }
   std::vector<std::string_view> texts;
+  texts.reserve(special.size());
   for (const auto& entry : special) texts.push_back(entry.text);
   std::sort(texts.begin(), texts.end());
   if (const auto repeat = std::adjacent_find(texts.begin(), texts.end());
@@ -280,7 +313,6 @@ void SentencePieceTokenizer::decode(TokenId token, std::string& out) const {
 
 LoadResult load_sentencepiece_tokenizer(gguf::ByteSource& source,
                                         const gguf::TensorIndex& index,
-                                        const PreTokenizer* /*pretokenizer*/,
                                         std::unique_ptr<Tokenizer>& out) {
   auto loaded = std::make_unique<SentencePieceTokenizer>();
   const LoadResult r = load_sentencepiece_bpe(source, index, loaded->bpe_);

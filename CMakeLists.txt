@@ -107,7 +107,6 @@ add_library(frizzle_core STATIC
     src/core/tokenizer/load.cpp
     src/core/tokenizer/special.cpp
     src/core/tokenizer/unicode.cpp
-    src/core/tokenizer/unicode_tables.cpp
     src/core/tokenizer/utf8_stream.cpp
     src/core/tokenizer/vocabulary.cpp
 )

@@ -546,14 +546,8 @@ LoadResult Engine::begin_load(gguf::ByteSource& front, std::size_t max_chunk,
     return {LoadError::Tokenizer,
             "tokenizer " + quoted(tokenizer_name) + " is not implemented"};
   }
-  if (algorithm->requires_pretokenizer) {
-    return {LoadError::Tokenizer, "tokenizer " + quoted(tokenizer_name) +
-                                      " needs a pre-tokenizer, and Frizzle "
-                                      "implements none"};
-  }
   std::unique_ptr<tokenizer::Tokenizer> loaded;
-  if (const tokenizer::LoadResult r =
-          algorithm->load(front, index, nullptr, loaded);
+  if (const tokenizer::LoadResult r = algorithm->load(front, index, loaded);
       !r.ok()) {
     return {LoadError::Tokenizer,
             "tokenizer " + quoted(tokenizer_name) +

@@ -71,7 +71,7 @@ std::unique_ptr<Tokenizer> gemma() {
   REQUIRE(algorithm != nullptr);
   std::unique_ptr<Tokenizer> out;
   const frizzle::tokenizer::LoadResult loaded =
-      algorithm->load(source, index, nullptr, out);
+      algorithm->load(source, index, out);
   REQUIRE_MESSAGE(loaded.ok(), loaded.subject);
   return out;
 }

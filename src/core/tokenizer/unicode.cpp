@@ -1,21 +1,28 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: unicode.h. This file defines
+// what that header states.
+
 #include "core/tokenizer/unicode.h"
 
-#include <algorithm>
-
-#include "core/tokenizer/unicode_tables.h"
-
 namespace frizzle::tokenizer {
+namespace {
 
-CharClass char_class(char32_t code_point) noexcept {
-  const auto table = unicode_tables::classes();
-  // The first range that ends at or after the code point; it holds the code
-  // point if it also starts at or before it.
-  const auto range = std::lower_bound(table.begin(), table.end(), code_point,
-                                      [](const unicode_tables::ClassRange& r,
-                                         char32_t c) { return r.last < c; });
-  return range != table.end() && range->first <= code_point ? range->char_class
-                                                            : CharClass::Other;
-}
+// A continuation byte is 10xxxxxx: the mark, then six bits of the value.
+constexpr unsigned char kContinuationMark = 0x80;
+constexpr unsigned kContinuationBits = 6;
+constexpr char32_t kContinuationMask = 0x3F;
+// A lead of n bytes keeps the low 7 - n bits of this mask as value bits.
+constexpr char32_t kLeadValueMask = 0x7F;
+// Each length's lead mark, and the first code point that needs the length.
+constexpr char32_t kLead2Mark = 0xC0;
+constexpr char32_t kLead3Mark = 0xE0;
+constexpr char32_t kLead4Mark = 0xF0;
+constexpr char32_t kTwoBytesFrom = 0x80;
+constexpr char32_t kThreeBytesFrom = 0x800;
+constexpr char32_t kFourBytesFrom = 0x10000;
+
+}  // namespace
 
 bool decode_utf8(std::string_view text, std::size_t at,
                  Utf8Char& out) noexcept {
@@ -23,7 +30,7 @@ bool decode_utf8(std::string_view text, std::size_t at,
     return static_cast<unsigned char>(text[i]);
   };
   const unsigned char first = byte(at);
-  if (first < 0x80) {
+  if (first < utf8::kAsciiEnd) {
     out = {first, 1};
     return true;
   }
@@ -31,13 +38,14 @@ bool decode_utf8(std::string_view text, std::size_t at,
   if (lead.length == 0 || text.size() - at < lead.length) return false;
   // The lead byte's value bits: 5 of a two-byte character's, 4 of three, 3 of
   // four.
-  char32_t value = first & (0x7Fu >> lead.length);
+  char32_t value = first & (kLeadValueMask >> lead.length);
   for (std::uint8_t i = 1; i < lead.length; ++i) {
     const unsigned char next = byte(at + i);
-    const unsigned char low = i == 1 ? lead.second_low : 0x80;
-    const unsigned char high = i == 1 ? lead.second_high : 0xBF;
+    const unsigned char low = i == 1 ? lead.second_low : utf8::kContinuationLow;
+    const unsigned char high =
+        i == 1 ? lead.second_high : utf8::kContinuationHigh;
     if (next < low || next > high) return false;
-    value = (value << 6) | (next & 0x3Fu);
+    value = (value << kContinuationBits) | (next & kContinuationMask);
   }
   out = {value, lead.length};
   return true;
@@ -47,20 +55,25 @@ void append_utf8(char32_t code_point, std::string& out) {
   const auto put = [&](char32_t bits) {
     out.push_back(static_cast<char>(bits));
   };
-  if (code_point < 0x80) {
+  // The continuation byte that has `later` more after it.
+  const auto continuation = [&](unsigned later) {
+    put(kContinuationMark |
+        ((code_point >> (later * kContinuationBits)) & kContinuationMask));
+  };
+  if (code_point < kTwoBytesFrom) {
     put(code_point);
-  } else if (code_point < 0x800) {
-    put(0xC0 | (code_point >> 6));
-    put(0x80 | (code_point & 0x3F));
-  } else if (code_point < 0x10000) {
-    put(0xE0 | (code_point >> 12));
-    put(0x80 | ((code_point >> 6) & 0x3F));
-    put(0x80 | (code_point & 0x3F));
+  } else if (code_point < kThreeBytesFrom) {
+    put(kLead2Mark | (code_point >> kContinuationBits));
+    continuation(0);
+  } else if (code_point < kFourBytesFrom) {
+    put(kLead3Mark | (code_point >> (2 * kContinuationBits)));
+    continuation(1);
+    continuation(0);
   } else {
-    put(0xF0 | (code_point >> 18));
-    put(0x80 | ((code_point >> 12) & 0x3F));
-    put(0x80 | ((code_point >> 6) & 0x3F));
-    put(0x80 | (code_point & 0x3F));
+    put(kLead4Mark | (code_point >> (3 * kContinuationBits)));
+    continuation(2);
+    continuation(1);
+    continuation(0);
   }
 }
 
