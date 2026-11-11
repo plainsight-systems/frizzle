@@ -149,7 +149,10 @@ namespace frizzle::gguf {
 //     resident (no fixture holds one); `out` untouched when it already held
 //     an index, or its metadata untouched (only an empty index's tensors are
 //     checked); a tensor of a format the capability table does not list
-//     recorded (the valid fixture's are Q4_0 and F32). Every load runs
+//     recorded (the valid fixture's are Q4_0 and F32); UnknownTensorType for
+//     a format number above 255, which TensorType's one byte cannot hold
+//     (the fixture's 999 would be refused even unchecked, as its low byte
+//     is no format either). Every load runs
 //     read_index on the pinned file, the oracle's and replay's among them.
 //
 // Corpus guidance

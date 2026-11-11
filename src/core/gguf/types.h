@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -9,7 +10,92 @@
 
 namespace frizzle::gguf {
 
-inline constexpr char kMagic[4] = {'G', 'G', 'U', 'F'};
+// Axis C: changes with the GGUF format.
+//
+// The GGUF format's vocabulary, as the reader (reader.h), the index (index.h)
+// and the formats use it: the header constants, the numbering of metadata
+// value types and tensor formats, each format's block layout, the reader's
+// bounds and errors, and the record of one tensor.
+//
+// Contract
+//   - Format facts, as GGUF defines them: the magic "GGUF"; version 3; data
+//     aligned to 32 bytes unless general.alignment says otherwise; at most 4
+//     dimensions; a tensor name at most 64 bytes.
+//   - Frizzle's bounds, not the format's: at most 2^20 tensors, 2^20
+//     metadata entries, 2^20 bytes in a string and 2^24 elements in an
+//     array. Each stops a hostile file from making the reader allocate, and
+//     exceeding one is a named ReadError.
+//   - ValueType and TensorType carry GGUF's own numbers. The file stores
+//     each as a uint32; here each takes one byte, as every number GGUF
+//     defines is below 256. The reader refuses a value-type number GGUF does
+//     not define, and a format number above 255, before converting it, so a
+//     file's number never wraps onto a defined one; a format number that
+//     fits but is undefined has no layout and is refused then (reader.cpp).
+//   - TensorType lists every format GGUF defines, gaps included: a gap is a
+//     number GGUF no longer defines, and a file that names one is
+//     UnknownTensorType. Listing a format is not running it; which formats
+//     run is the capability table's question (capability/capability.h).
+//   - kFormatLayouts holds one row per TensorType: `block_bytes` bytes hold
+//     `block_elements` consecutive values of a row, as the format defines
+//     its block. An unquantized format is a block of one value.
+//     format_layout(type) returns the row for `type`, or null for a number
+//     GGUF does not define; the row lives for the whole program.
+//   - ReadError is the closed set of ways reading can fail, in one byte;
+//     to_string names each in a short sentence. ReadResult carries the
+//     error and, with NeedMoreBytes, the bytes needed from the file's start.
+//   - TensorEntry records one tensor: name, format, shape, element count and
+//     byte range, as offsets and lengths, never pointers. It has no default
+//     constructor, so no entry exists without a format. Dimensions past
+//     dimension_count are 1. is_quantized's precondition: `type` has a
+//     layout, which holds for every entry the reader made.
+//   - Nothing here allocates but TensorEntry's name, and nothing throws but
+//     that allocation.
+//
+// Algorithm
+//   1. format_layout scans kFormatLayouts in order and returns the first
+//      row whose type equals the argument; with no such row, null.
+//   2. to_string maps each ReadError to its sentence; a value outside the
+//      set, which only a defect could make, gives "unrecognised error".
+//
+// Design and cost
+//   - The tables and constants are constexpr: constant data, no work at
+//     startup. kFormatLayouts's length follows its initializers, so a row
+//     cannot be left out by a miscounted size.
+//   - format_layout is a linear scan of 35 rows: at most 35 comparisons of
+//     a one-byte value. The reader calls it once a tensor; for Gemma 3 1B's
+//     340 tensors that is at most 11,900 comparisons a load, counted.
+//   - The K-quant, IQ and TQ formats, all but IQ4_NL, store blocks of 256
+//     values (kSuperBlock).
+//   - TensorEntry takes its shape and byte range as two small structs of
+//     distinct types, so its four leading arguments cannot be swapped
+//     silently, where four std::uint64_t parameters could.
+//   - Quantization travels with the tensor: no weight reference exists
+//     without its format, so no consumer sees bytes it cannot interpret.
+//
+// Corpus guidance
+//   C++ Core Guidelines
+//     SL.con.1 Prefer std::array to a C array: the magic, the layout table
+//              and a shape's dimensions.
+//     Con.5    Use constexpr for values computed at compile time: the
+//              constants and the layout table.
+//     Enum.7   Specify an enumeration's underlying type only when necessary:
+//              ValueType, TensorType and ReadError name one byte, to save
+//              space, as the rule's own example does.
+//     ES.46    Avoid narrowing conversions: the file's 32-bit numbers are
+//              checked to fit before they become a one-byte enumeration.
+//     E.27     Use error codes systematically: ReadError and ReadResult are
+//              the reader's one vocabulary of failure.
+//     C.41     A constructor creates a fully initialized object: a
+//              TensorEntry needs its format to exist.
+//     NR.5     Don't use two-phase initialization: there is no entry whose
+//              format is assigned later.
+//     F.6      Declare noexcept what must not throw: format_layout and
+//              to_string.
+//   C++ performance guidelines
+//     EMB.6    Push computation to compile time: the layout table is
+//              constant data, read with no startup work.
+
+inline constexpr std::array<char, 4> kMagic = {'G', 'G', 'U', 'F'};
 inline constexpr std::uint32_t kSupportedVersion = 3;
 inline constexpr std::uint32_t kDefaultAlignment = 32;
 inline constexpr std::uint32_t kMaxDimensions = 4;
@@ -25,7 +111,7 @@ inline constexpr std::uint64_t kMaxStringLength = 1u << 20;
 inline constexpr std::uint64_t kMaxArrayLength = 1u << 24;
 
 // GGUF metadata value types, matching the format's own numbering.
-enum class ValueType : std::uint32_t {
+enum class ValueType : std::uint8_t {
   UInt8 = 0,
   Int8 = 1,
   UInt16 = 2,
@@ -42,12 +128,12 @@ enum class ValueType : std::uint32_t {
 };
 
 // The weight formats GGUF defines, numbered as the format numbers them. Gaps
-// are formats ggml has removed; a file that names one is malformed.
+// are numbers GGUF no longer defines; a file that names one is malformed.
 //
 // Enumerating a format is not implementing it. The reader needs every
 // format's block size to validate the file and to name a tensor it cannot
 // run; which formats run is the capability table's business.
-enum class TensorType : std::uint32_t {
+enum class TensorType : std::uint8_t {
   F32 = 0,
   F16 = 1,
   Q4_0 = 2,
@@ -94,11 +180,12 @@ struct FormatLayout {
   std::uint32_t block_bytes;
 };
 
-inline constexpr std::uint32_t kSuperBlock = 256;  // ggml's QK_K
+// The values in one block of GGUF's K-quant, IQ and TQ formats, IQ4_NL
+// aside.
+inline constexpr std::uint32_t kSuperBlock = 256;
 
-// Every format GGUF defines, from ggml's own table (GGML_QUANT_SIZES in
-// gguf-py).
-inline constexpr FormatLayout kFormatLayouts[] = {
+// Every format GGUF defines, with its block as the format defines it.
+inline constexpr auto kFormatLayouts = std::to_array<FormatLayout>({
     {TensorType::F32, "F32", 1, 4},
     {TensorType::F16, "F16", 1, 2},
     {TensorType::Q4_0, "Q4_0", 32, 18},
@@ -134,7 +221,7 @@ inline constexpr FormatLayout kFormatLayouts[] = {
     {TensorType::NVFP4, "NVFP4", 64, 36},
     {TensorType::Q1_0, "Q1_0", 128, 18},
     {TensorType::Q2_0, "Q2_0", 64, 18},
-};
+});
 
 // The layout of `type`, or null for a number GGUF does not define.
 [[nodiscard]] constexpr const FormatLayout* format_layout(
@@ -147,7 +234,7 @@ inline constexpr FormatLayout kFormatLayouts[] = {
 
 // The closed set of ways reading can fail. One vocabulary for callers (E.27);
 // the reader never throws and never reads out of bounds.
-enum class ReadError : std::uint32_t {
+enum class ReadError : std::uint8_t {
   Ok = 0,
   // The bytes lie inside the file but have not been supplied yet. Not a
   // defect in the file: supply the bytes ReadResult asks for and read again.
@@ -245,7 +332,7 @@ struct ReadResult {
 // pieces or misordered against the byte range.
 struct TensorShape {
   std::uint32_t dimension_count = 0;
-  std::uint64_t dimensions[kMaxDimensions] = {1, 1, 1, 1};
+  std::array<std::uint64_t, kMaxDimensions> dimensions = {1, 1, 1, 1};
   std::uint64_t element_count = 0;
 };
 
@@ -280,8 +367,7 @@ struct TensorEntry {
       : name(std::move(tensor_name)),
         type(tensor_type),
         dimension_count(shape.dimension_count),
-        dimensions{shape.dimensions[0], shape.dimensions[1],
-                   shape.dimensions[2], shape.dimensions[3]},
+        dimensions(shape.dimensions),
         element_count(shape.element_count),
         data_offset(data.offset),
         data_length(data.length) {}
@@ -289,7 +375,7 @@ struct TensorEntry {
   std::string name;
   TensorType type;
   std::uint32_t dimension_count;
-  std::uint64_t dimensions[kMaxDimensions];
+  std::array<std::uint64_t, kMaxDimensions> dimensions;
 
   std::uint64_t element_count;
   // Byte range within the file. Relative to the tensor data region while the

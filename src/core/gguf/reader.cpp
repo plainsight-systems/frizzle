@@ -10,9 +10,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -352,6 +354,12 @@ ReadError Reader::take_tensor() {
 
   std::uint64_t raw_type = 0;
   if (const auto e = take_uint(4, raw_type); e != ReadError::Ok) return e;
+  // TensorType holds one byte; a larger number would wrap onto a defined
+  // format when converted, so it is refused first.
+  if (raw_type >
+      std::numeric_limits<std::underlying_type_t<TensorType>>::max()) {
+    return ReadError::UnknownTensorType;
+  }
   const auto type = static_cast<TensorType>(raw_type);
   const FormatLayout* layout = format_layout(type);
   if (layout == nullptr) return ReadError::UnknownTensorType;
@@ -430,7 +438,7 @@ ReadError Reader::place_tensor_data(std::uint64_t alignment) {
 }
 
 ReadError Reader::parse() {
-  std::array<std::byte, sizeof kMagic> magic{};
+  std::array<std::byte, kMagic.size()> magic{};
   if (const auto e = take(magic); e != ReadError::Ok) return e;
   if (!std::ranges::equal(magic, kMagic, {}, [](std::byte b) {
         return std::to_integer<char>(b);
