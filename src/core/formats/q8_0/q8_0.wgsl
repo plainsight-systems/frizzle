@@ -1,8 +1,13 @@
-// Q8_0 unpack (format.h). A block is 32 weights: an fp16 scale d and 32
-// signed 8-bit codes; weight j is qs[j] * d, as ggml's dequantize_row_q8_0.
-// On the device a piece holds every block's 32 code bytes, then every
-// block's scale (device_layout.h): eight words of codes per block, then two
-// scales a word.
+// Axis B: changes with the Q8_0 format: its layout on the device or its
+// unpack.
+//
+// Contract, algorithm, cost and corpus guidance: q8_0.h. This file defines
+// what that header states: Q8_0's unpack (formats/format.h). A block is 32
+// weights: an fp16 scale d and 32 signed 8-bit codes qs; weight j is
+// qs[j] * d. On the device a piece holds every block's 32 code bytes, then
+// every block's scale (device_layout.h): eight words of codes a block, then
+// two scales a word. `weights` is the kernel's binding; bitcast and
+// unpack2x16float are WGSL built-ins.
 fn unpack(base: u32, blocks_in_piece: u32, group: u32) -> array<vec4<f32>, 8> {
     let d = unpack2x16float(weights[base + blocks_in_piece * 8u + group / 2u])[group % 2u];
     var out: array<vec4<f32>, 8>;

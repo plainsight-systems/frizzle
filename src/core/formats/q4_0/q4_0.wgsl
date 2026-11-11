@@ -1,8 +1,14 @@
-// Q4_0 unpack (format.h). A block is 32 weights: an fp16 scale d and 16
-// bytes of 4-bit codes; weight j is ((qs[j] & 0xF) - 8) * d and weight j + 16
-// is ((qs[j] >> 4) - 8) * d, as ggml's dequantize_row_q4_0. On the device a
-// piece holds every block's 16 code bytes, then every block's scale
-// (device_layout.h): four words of codes per block, then two scales a word.
+// Axis B: changes with the Q4_0 format: its layout on the device or its
+// unpack.
+//
+// Contract, algorithm, cost and corpus guidance: q4_0.h. This file defines
+// what that header states: Q4_0's unpack (formats/format.h). A block is 32
+// weights: an fp16 scale d and 16 bytes of 4-bit codes qs; weight j is
+// ((qs[j] & 0xF) - 8) * d and weight j + 16 is ((qs[j] >> 4) - 8) * d. On
+// the device a piece holds every block's 16 code bytes, then every block's
+// scale (device_layout.h): four words of codes a block, then two scales a
+// word. `weights` is the kernel's binding; unpack2x16float is a WGSL
+// built-in.
 fn unpack(base: u32, blocks_in_piece: u32, group: u32) -> array<vec4<f32>, 8> {
     let scale_byte = blocks_in_piece * 16u + group * 2u;
     let d = unpack2x16float(weights[base + scale_byte / 4u])[(scale_byte / 2u) % 2u];
