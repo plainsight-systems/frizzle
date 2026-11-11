@@ -1,3 +1,9 @@
+// Axis D: changes with the WebGPU surface used to read buffers back, or how a
+// device reports their failure.
+//
+// Contract, algorithm, cost and corpus guidance: mapping.h. This file defines
+// what that header states.
+
 #include "core/residency/mapping.h"
 
 namespace frizzle::residency {

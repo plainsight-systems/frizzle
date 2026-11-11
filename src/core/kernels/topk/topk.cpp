@@ -1,3 +1,8 @@
+// Axis E: changes with a new or optimized kernel.
+//
+// Contract, algorithm, cost and corpus guidance: topk.h. This file defines
+// what that header states: the passes and their launches.
+
 #include "core/kernels/topk/topk.h"
 
 #include <cstring>

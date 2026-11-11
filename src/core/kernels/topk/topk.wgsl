@@ -1,9 +1,13 @@
-// Top-k selection (kernels/topk/topk.h): each workgroup keeps the top 64 of
-// its tile of 1,024 entries by bitonic select, and writes them, sorted, as
-// (logit bits, token) pairs. `first` reads logits, a token's id its index;
-// `merge` reads the pairs a pass before it wrote.
+// Axis E: changes with a new or optimized kernel.
 //
-// Bindings: 1 the constants, 2 the input, 3 the output.
+// Contract, algorithm, cost and corpus guidance: topk.h. This file defines
+// what that header states: one pass of top-k selection. Each workgroup keeps
+// the top 64 of its tile of 1,024 entries by bitonic select and writes them,
+// sorted, as (logit bits, token) pairs. `first` reads logits, a token's id
+// its index; `merge` reads the pairs a pass before it wrote.
+//
+// Bindings: 0 the step (step.wgsl), 1 the constants, 2 the input, 3 the
+// output. workgroupBarrier is a WGSL built-in.
 
 struct TopK {
     count: u32,   // the entries this pass reads

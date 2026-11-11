@@ -1,5 +1,9 @@
-// upload.h's witness_result, apart from upload.cpp so that it is built and
-// tested without a device.
+// Axis D: changes with the WebGPU surface used to create and fill buffers, or
+// how a device reports their failure.
+//
+// Contract, algorithm, cost and corpus guidance: upload.h. This file defines
+// what that header states for witness_result, apart from upload.cpp so that
+// it builds without a device.
 
 #include <algorithm>
 

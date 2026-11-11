@@ -1,3 +1,8 @@
+// Axis G: changes with a new cache or context mechanism.
+//
+// Contract, algorithm, cost and corpus guidance: kv.h. This file defines
+// what that header states.
+
 #include "core/cache/kv.h"
 
 #include <algorithm>
