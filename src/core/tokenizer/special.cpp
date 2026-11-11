@@ -1,6 +1,12 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: special.h. This file
+// defines what that header states.
+
 #include "core/tokenizer/special.h"
 
 #include <algorithm>
+#include <span>
 #include <utility>
 
 namespace frizzle::tokenizer {
@@ -51,7 +57,10 @@ SpecialTokens::SpecialTokens(std::vector<Entry> entries)
     }
     token[node] = static_cast<std::uint32_t>(entry.id);
   }
-  for (const auto& [byte, child] : children[0]) first_[byte] = child;
+  const std::span first(first_);
+  for (const auto& [byte, child] : children[0]) {
+    first[byte] = child;
+  }
   edge_start_.reserve(children.size() + 1);
   for (const auto& edges : children) {
     edge_start_.push_back(static_cast<std::uint32_t>(edge_byte_.size()));
@@ -70,7 +79,7 @@ bool SpecialTokens::segment(std::string_view text, std::vector<Segment>& out,
   std::uint64_t found = 0;
   for (std::size_t i = 0; i < text.size();) {
     // Walk the trie from i; the last token passed is the longest match.
-    std::uint32_t node = first_[static_cast<unsigned char>(text[i])];
+    std::uint32_t node = std::span(first_)[static_cast<unsigned char>(text[i])];
     std::uint32_t match = kNone;
     std::size_t length = 0;
     for (std::size_t at = i + 1; node != kNone; ++at) {

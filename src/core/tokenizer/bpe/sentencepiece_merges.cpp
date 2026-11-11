@@ -1,3 +1,8 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: sentencepiece_merges.h.
+// This file defines what that header states.
+
 #include "core/tokenizer/bpe/sentencepiece_merges.h"
 
 #include <algorithm>
@@ -8,20 +13,25 @@
 #include <utility>
 #include <vector>
 
+#include "core/tokenizer/unicode.h"
+
 namespace frizzle::tokenizer::bpe {
 namespace {
 
 // Whether a split of UTF-8 text before this byte falls between two characters.
+// A continuation byte, 0x80..0xBF, never begins one.
 bool starts_character(char byte) noexcept {
-  return (static_cast<unsigned char>(byte) & 0xC0) != 0x80;
+  const auto value = static_cast<unsigned char>(byte);
+  return value < utf8::kContinuationLow || value > utf8::kContinuationHigh;
 }
 
 }  // namespace
 
 LoadResult implied_merges(const Vocabulary& vocabulary,
                           std::span<const float> scores, MergeTable& out) {
-  if (scores.size() != vocabulary.size())
+  if (scores.size() != vocabulary.size()) {
     return {LoadError::CountMismatch, "scores"};
+  }
   const auto score = [&](TokenId t) {
     return scores[static_cast<std::size_t>(t)];
   };
@@ -33,8 +43,9 @@ LoadResult implied_merges(const Vocabulary& vocabulary,
   for (std::size_t id = 0; id < vocabulary.size(); ++id) {
     const auto token = static_cast<TokenId>(id);
     if (!normal(token)) continue;
-    if (std::isnan(score(token)))
+    if (std::isnan(score(token))) {
       return {LoadError::InvalidScore, std::string(vocabulary.text(token))};
+    }
     by_score.push_back(token);
   }
   // Highest score first; the rank rises only where the score falls.

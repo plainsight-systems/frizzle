@@ -1,3 +1,8 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: load.h. This file defines
+// what that header states.
+
 #include "core/tokenizer/load.h"
 
 #include <string>

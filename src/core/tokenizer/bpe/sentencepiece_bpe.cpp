@@ -68,8 +68,7 @@ const Algorithm kSentencePiece{"llama", load_sentencepiece_tokenizer};
 EncodeResult SentencePieceBpe::encode(std::string_view raw,
                                       std::uint32_t max_tokens,
                                       std::vector<TokenId>& out) const {
-  if (const EncodeResult r =
-          admit_raw(raw.size(), max_tokens, special_.longest());
+  if (const EncodeResult r = admit_raw(raw, max_tokens, special_.longest());
       r.error != EncodeError::Ok) {
     return r;
   }

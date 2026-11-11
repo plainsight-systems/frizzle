@@ -1,9 +1,15 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: admission.h. This file
+// defines what that header states.
+
 #include "core/tokenizer/admission.h"
 
 namespace frizzle::tokenizer {
 
-EncodeResult admit_raw(std::uint64_t raw_bytes, std::uint32_t max_tokens,
+EncodeResult admit_raw(std::string_view raw, std::uint32_t max_tokens,
                        std::size_t longest_special) noexcept {
+  const std::uint64_t raw_bytes = raw.size();
   // Doubled, in integers: 2 × bytes against 7 × kMaxEncodeBytes and twice
   // the specials' allowance, at most 2 × 2^32 × a special's length.
   const std::uint64_t allowed2 =

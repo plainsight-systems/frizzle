@@ -1,3 +1,8 @@
+// Axis K: changes with Gemma 3's tokenizer, SentencePiece BPE.
+//
+// Contract, algorithm, cost and corpus guidance: merge.h. This file defines
+// what that header states.
+
 #include "core/tokenizer/bpe/merge.h"
 
 #include <algorithm>
@@ -12,62 +17,79 @@ namespace {
 
 constexpr std::uint32_t kNone = std::numeric_limits<std::uint32_t>::max();
 
-// Pieces up to this many bytes are merged by rescanning; longer ones by the
-// heap below.
-// Optimization (practice): tiktoken rescans pieces under 100 bytes and Hugging
-// Face tokenizers rescans short words, because for a few symbols a scan of
-// adjacent ranks beats a heap. Measured here on real text, the rescan is about
-// 20% faster from 3 to 32 bytes, even at 64, and slower beyond; 99% of pieces
-// are 16 bytes or under.
-constexpr std::size_t kShortPiece = 64;
+// Runs of up to this many symbols are merged by rescanning; longer ones by
+// the heap below (merge.h, Design and cost).
+constexpr std::size_t kShortRun = 64;
 
 // The rank of a pair with no rule, above every real rank.
 constexpr std::uint32_t kNoRule = std::numeric_limits<std::uint32_t>::max();
 
-// A short piece: the symbols in a row, and the rule of each adjacent pair. Each
+// A short run: the symbols in a row, and the rule of each adjacent pair. Each
 // round takes the lowest rank, the leftmost on a tie, merges it, closes the
 // gap, and looks up only the two pairs the new token is part of. Fixed arrays
-// on the stack: a short piece allocates nothing.
+// on the stack, zeroed: a short run allocates nothing.
 void merge_short(std::span<const TokenId> symbols, const MergeTable& merges,
                  std::vector<TokenId>& out) {
-  std::array<TokenId, kShortPiece> parts;
-  std::array<std::uint32_t, kShortPiece>
-      ranks;  // ranks[i] is the pair parts[i], parts[i + 1]
-  std::array<TokenId, kShortPiece> results;
+  std::array<TokenId, kShortRun> part_storage{};
+  std::array<std::uint32_t, kShortRun> rank_storage{};
+  std::array<TokenId, kShortRun> result_storage{};
+  const std::span parts(part_storage);
+  // ranks[i] and results[i] are the pair parts[i], parts[i + 1].
+  const std::span ranks(rank_storage);
+  const std::span results(result_storage);
   std::size_t count = symbols.size();
   std::copy(symbols.begin(), symbols.end(), parts.begin());
 
   const auto look_up = [&](std::size_t i) {
     const auto rule = merges.find(parts[i], parts[i + 1]);
     ranks[i] = rule ? rule->rank : kNoRule;
-    if (rule) results[i] = rule->result;
+    if (rule) {
+      results[i] = rule->result;
+    }
   };
-  for (std::size_t i = 0; i + 1 < count; ++i) look_up(i);
+  for (std::size_t i = 0; i + 1 < count; ++i) {
+    look_up(i);
+  }
 
   while (count > 1) {
     std::size_t best = 0;
     for (std::size_t i = 1; i + 1 < count; ++i) {
-      if (ranks[i] < ranks[best]) best = i;  // strict: the leftmost wins a tie
+      if (ranks[i] < ranks[best]) {
+        best = i;  // strict: the leftmost wins a tie
+      }
     }
-    if (ranks[best] == kNoRule) break;
+    if (ranks[best] == kNoRule) {
+      break;
+    }
     parts[best] = results[best];
-    std::copy(parts.begin() + best + 2, parts.begin() + count,
-              parts.begin() + best + 1);
+    // The parts after the pair close the gap: [best + 2, count) moves to
+    // best + 1.
+    const auto parts_after = parts.subspan(best + 2, count - (best + 2));
+    std::copy(parts_after.begin(), parts_after.end(),
+              parts.subspan(best + 1).begin());
     if (best + 2 < count - 1) {  // pairs after the next one shift down; none
                                  // when it was the last
-      std::copy(ranks.begin() + best + 2, ranks.begin() + count - 1,
-                ranks.begin() + best + 1);
-      std::copy(results.begin() + best + 2, results.begin() + count - 1,
-                results.begin() + best + 1);
+      const std::size_t after = count - 1 - (best + 2);
+      const auto ranks_after = ranks.subspan(best + 2, after);
+      std::copy(ranks_after.begin(), ranks_after.end(),
+                ranks.subspan(best + 1).begin());
+      const auto results_after = results.subspan(best + 2, after);
+      std::copy(results_after.begin(), results_after.end(),
+                results.subspan(best + 1).begin());
     }
     --count;
-    if (best > 0) look_up(best - 1);
-    if (best + 1 < count) look_up(best);
+    if (best > 0) {
+      look_up(best - 1);
+    }
+    if (best + 1 < count) {
+      look_up(best);
+    }
   }
-  out.insert(out.end(), parts.begin(), parts.begin() + count);
+  const auto kept = parts.first(count);
+  out.insert(out.end(), kept.begin(), kept.end());
 }
 
-// One symbol of the piece, linked to its neighbours by position. A merge
+// One symbol of the run, linked to its neighbours by position. A merge
 // gives the left symbol the merged token and unlinks the right one, which no
 // pair ever reaches again.
 struct Symbol {
@@ -116,7 +138,7 @@ bool still_stands(const std::vector<Symbol>& piece, const Candidate& c) {
          piece[c.right].token == c.right_token;
 }
 
-// A long piece: the chain and the heap.
+// A long run: the chain and the heap.
 void merge_long(std::span<const TokenId> symbols, const MergeTable& merges,
                 std::vector<TokenId>& out) {
   const auto count = static_cast<std::uint32_t>(symbols.size());
@@ -128,8 +150,9 @@ void merge_long(std::span<const TokenId> symbols, const MergeTable& merges,
   }
 
   Queue queue;
-  for (std::uint32_t i = 0; i + 1 < count; ++i)
+  for (std::uint32_t i = 0; i + 1 < count; ++i) {
     consider(piece, i, merges, queue);
+  }
 
   while (!queue.empty()) {
     const Candidate c = queue.top();
@@ -151,8 +174,9 @@ void merge_long(std::span<const TokenId> symbols, const MergeTable& merges,
   }
 
   // The first symbol is never the right of a pair, so the chain starts at 0.
-  for (std::uint32_t i = 0; i != kNone; i = piece[i].next)
+  for (std::uint32_t i = 0; i != kNone; i = piece[i].next) {
     out.push_back(piece[i].token);
+  }
 }
 
 }  // namespace
@@ -160,7 +184,7 @@ void merge_long(std::span<const TokenId> symbols, const MergeTable& merges,
 void merge(std::span<const TokenId> symbols, const MergeTable& merges,
            std::vector<TokenId>& out) {
   if (symbols.empty()) return;
-  if (symbols.size() <= kShortPiece) {
+  if (symbols.size() <= kShortRun) {
     merge_short(symbols, merges, out);
   } else {
     merge_long(symbols, merges, out);
