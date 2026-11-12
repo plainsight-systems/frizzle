@@ -6,8 +6,6 @@
 
 namespace frizzle::policy {
 
-// Contract 12: policy.
-//
 // A model's measured configuration, from its entry in web/models.json. The
 // values change when a model is measured (axis J); this header changes only
 // when what can be configured changes.

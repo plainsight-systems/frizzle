@@ -25,9 +25,10 @@ namespace frizzle::tokenizer {
 //   - load_vocabulary(source, index, out): Ok with `out` holding every token,
 //     identifier i the i-th entry of both arrays; or the first refusal, `out`
 //     untouched:
-//       MissingKey, WrongKeyType, Unreadable: either array missing, not an
-//         array of the type read (strings, INT32), or unreadable; the subject
-//         names the key (load.h).
+//       MissingKey, WrongKeyType, Unreadable: either array missing; its
+//         value not an array; or the array not readable whole as the type
+//         read (strings, INT32), its elements of another type or its bytes
+//         short; the subject names the key (load.h).
 //       CountMismatch: the arrays differ in length; the subject names
 //         tokenizer.ggml.token_type.
 //       UnknownTokenType: a type outside 0..6; the subject names the token.

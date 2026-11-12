@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -14,41 +15,85 @@ namespace frizzle::runtime {
 
 // Axis M: changes with a new stage in the generation loop.
 //
-// The tokens that end a turn when drawn. Made once at load, read once a draw.
+// The stop set: the tokens that end a turn when drawn. Made once at load
+// from the file and the load policy; read once a draw, when the runtime
+// learns the drawn token (runtime.h).
 //
-//   - From the file: tokenizer.ggml.eos_token_id, and eot_token_id and
-//     eom_token_id where present — the keys llama.cpp reads for its
-//     end-of-generation set. Each of the listed models' files names its chat
-//     turn's end as eos: Qwen3 <|im_end|>, Llama 3.2 <|eot_id|>, Gemma 3
-//     <end_of_turn>.
-//   - From the model's load policy (policy/policy.h): further stop tokens, by
-//     their text, where the model's own generation config lists more than the
-//     file carries — Qwen3's <|endoftext|>, Llama 3.2's <|eom_id|> and
-//     <|end_of_text|>, Gemma 3's <eos>. They are measured per model, as the
-//     sampling settings are (principle 8); an unmeasured model stops on its
-//     file's alone. A text, not an identifier, since the page never sees an
-//     identifier (cache/prefix.h).
-//   - Refused by name, never dropped: a file's key that is not an unsigned
-//     32-bit integer; a file's identifier at or past the vocabulary; a
-//     policy text that is not exactly one token of the vocabulary, or names
-//     one that is not a control token, since a stop on an ordinary word would
-//     end replies at that word; more than kMaxStops distinct tokens; and
-//     none at all, since a turn would then end only at its limit or the
+// Contract
+//   - resolve_stops(index, vocabulary, policy_stops, out): Ok with `out`
+//     holding every stop token, each once, in the order found; or the first
+//     refusal, named in the result's subject, `out` untouched.
+//   - From the file: tokenizer.ggml.eos_token_id, tokenizer.ggml.eot_token_id
+//     and tokenizer.ggml.eom_token_id, each where present. Refused: a key
+//     present but not an unsigned 32-bit integer (WrongType); an identifier
+//     at or past the vocabulary (OutOfVocabulary).
+//   - From the load policy (policy/policy.h, LoadPolicy::stop): further
+//     stop tokens, by their text. Each must be exactly one token of the
+//     vocabulary (else NotAToken) and a control token (else NotControl),
+//     since a stop on an ordinary word would end replies at that word. A
+//     text is checked against the vocabulary at load, so a wrong one is
+//     refused by name rather than stopping on an unrelated identifier.
+//   - Refused too: more than kMaxStops distinct tokens (TooMany); and none
+//     at all (None), since a turn would then end only at its limit or the
 //     context. A token named twice is held once.
-//   - Held in a fixed array, searched in order: at most 8 comparisons a draw,
-//     the listed models' sets holding 2 or 3.
+//   - StopSet(tokens): precondition, not checked: the tokens are distinct
+//     and at most kMaxStops; resolve_stops ensures both. A StopSet is a
+//     value with no member that changes it; the default one is empty.
+//   - contains(token): whether `token` is in the set. tokens(): the set, in
+//     the order found, valid as long as the StopSet.
+//   Precondition of resolve_stops: `vocabulary` was loaded from `index`'s
+//   file.
 //
-// Guidelines, by corpus:
+// Algorithm, resolve_stops
+//   1. For each of the three keys in order: absent, skip it; not an
+//      unsigned 32-bit integer, WrongType; an identifier at or past the
+//      vocabulary's size, OutOfVocabulary; otherwise add it unless already
+//      found.
+//   2. For each policy text in order: find its token, else NotAToken; not a
+//      control token, NotControl; otherwise add it unless already found.
+//   3. None found, None; more than kMaxStops, TooMany; otherwise `out` is
+//      the set.
+//   contains: a linear search of the held tokens, in order.
+//
+// For Gemma 3 1B's pinned file: tokenizer.ggml.eos_token_id is 106,
+// <end_of_turn>, a control token, the token the chat template closes each
+// turn with; the file has no eot or eom key. The load policy lists no stop
+// (LoadPolicy's default, which every host passes), so the set holds one
+// token. <eos>, identifier 1, is also a control token, and a policy could
+// add it by its text.
+//
+// Design and cost
+//   - Load, counted: three metadata reads, a vocabulary lookup for each
+//     policy text, and a vector of the found tokens, freed when it returns.
+//   - A draw, counted: at most kMaxStops comparisons of 4-byte identifiers,
+//     one for Gemma 3 1B; nothing allocated (MEM.9).
+//   - The set is held inline, kMaxStops identifiers and a count: 40 bytes
+//     natively, 36 in the 32-bit browser build. 8 is a ceiling on what a
+//     file and a policy name, stated, not measured across models (EMB.2).
+//     So few keys are searched by a linear scan (CDSA.9).
+//
+// Verification
+//   The replay scenario's turns run with the stop set made from the pinned
+//   file (tests/README.md). No test checks resolve_stops on its own, reaches
+//   one of its refusals, or passes a policy stop.
+//
+// Corpus guidance
 //   C++ Core Guidelines
-//     C.2    Use class if the class has an invariant — distinct tokens, at
-//            most kMaxStops.
-//     E.27   Use error codes systematically — StopsError, with the subject
-//            named.
+//     C.2      Use class if the class has an invariant: StopSet's tokens are
+//              distinct and at most kMaxStops.
+//     E.27     If you can't throw exceptions, use error codes
+//              systematically: StopsError, with the subject named.
+//     SL.con.3 Avoid bounds errors: contains searches a span of the held
+//              tokens, never past the count (stops.cpp).
+//     Enum.7   Specify an enumeration's underlying type only when
+//              necessary: StopsError names one byte, to save space.
 //   C++ performance guidelines
-//     EMB.2  Prefer fixed-capacity containers — the set, inline, its
-//            capacity stated.
-//     MEM.9  Allocate at init — made at load; a draw's test allocates
-//            nothing.
+//     EMB.2    Prefer fixed-capacity containers: the set, inline, its
+//              capacity stated.
+//     MEM.9    Allocate at init: made at load; a draw's test allocates
+//              nothing.
+//     CDSA.9   Pick the sorted-search layout by cache level: up to a few
+//              dozen keys, a linear scan; here at most 8 identifiers.
 
 inline constexpr std::size_t kMaxStops = 8;
 
@@ -66,7 +111,7 @@ class StopSet {
   std::size_t size_ = 0;
 };
 
-enum class StopsError {
+enum class StopsError : std::uint8_t {
   Ok,
   WrongType,        // a file's key present, but not an unsigned 32-bit integer
   OutOfVocabulary,  // a file's identifier at or past the vocabulary

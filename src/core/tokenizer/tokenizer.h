@@ -97,9 +97,10 @@ struct LoadResult;
 //     most the trained context, 32,768, and N at most 512 KiB of normalized
 //     ordinary bytes:
 //       Resident, once loaded: the vocabulary, 7.5 MiB (vocabulary.h); the
-//         merge table, 16 MiB (bpe/merge_table.h); the special tokens' trie
-//         and their copies, under 0.5 MiB: under 25 MiB. Charlotte measured
-//         its tokenizer natively at 30.2 MiB, 64-bit; not re-measured here.
+//         merge table, 16 MiB (bpe/merge_table.h); the special tokens'
+//         trie, which holds their texts, under 0.5 MiB (special.h): under
+//         25 MiB. Natively, 64-bit, about 30.2 MiB, an estimate, not
+//         measured in Frizzle.
 //       The encode, before merging: the raw text, at most 7/2 × 512 KiB +
 //         93 T, 4.7 MiB; its escaped copy, at most 3 times that, doubled by
 //         its growth, 28 MiB; the segments, 16 bytes each, at most 2 T + 1,

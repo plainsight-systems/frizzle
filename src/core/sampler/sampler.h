@@ -12,240 +12,176 @@ namespace frizzle::sampler {
 // Axis F: changes with a new sampling method. The settings a model samples
 // with are policy, and are passed in.
 //
-// Contract 10: the sampler. The next token is drawn on the GPU, from the
-// top kCandidates the selection kept (kernels/topk/topk.h), and stays there:
-// the next decode step embeds it from the GPU, and the CPU reads it back a
-// step behind, while that step runs. A token read back each step before the
-// next could start would cost a map's round trip — 0.5 ms median on the
-// target (research/2026-08-31-gpu-readback-round-trip.md) — on every token:
-// 24 to 38% added to a Qwen3 decode step of 1.3 to 2.1 ms (graph/graph.h). That
-// research recorded reading back each step, when a step was thought to take
-// 20 to 50 ms; counted, it does not, and the decision is reversed (GPU.1,
-// GPU.7).
+// The draw: the next token, drawn on the GPU from the kCandidates (64)
+// candidates top-k selection kept (kernels/topk/topk.h), sorted largest
+// first. The token stays on the GPU: the next decode step embeds it from the
+// draw's record (kernels/gather/gather.h, a `fed` step), and the CPU reads
+// the record back a step behind, while that step runs (kernels/program.h,
+// runtime/runtime.h). Also the settings' check, and their place in the step.
 //
-// The draw, one workgroup of 64 invocations, over the candidates sorted
-// largest first, in llama.cpp's order (common.h's default chain, at the
-// commit tools/make_reference_logits.sh pins). Invocation i below top_k
-// works candidate i — its two exponentials, its min-p test, and its division
-// by top-p's total — and a candidate past top_k is never read; the last
-// invocation runs Philox, side by side; invocation 0 alone
-// takes the sums and running sums, in candidate order, so the draw does not
-// depend on how the others are scheduled:
-//   1. top-k: the first top_k candidates.
-//   2. top-p: below 1, their softmax at temperature 1 in f32 — each weight
-//      exp(logit − first's) divided by their total, as llama.cpp's does —
-//      and the shortest prefix whose probabilities, summed in order, reach
-//      top_p, one candidate at least; at 1, nothing — as llama.cpp's top-p
-//      returns at once for p of 1 or more — since an f32 softmax would round
-//      a far tail to zero and drop it. Dividing first, not comparing a
-//      running weight with top_p × the total, keeps llama.cpp's survivors:
-//      the two round differently in f32 near the edge.
-//   3. min-p: of those, each whose logit is at least the first's + ln
-//      min_p — ln min_p taken once a turn, on the CPU in f32 as llama.cpp's
-//      logf does, and carried in the step, not once a candidate.
-//   4. temperature: zero draws the first candidate; otherwise each
-//      survivor's weight is exp((logit − first's) / temperature) — a second
-//      pass of exponentials, since top-p's were at temperature 1 — and the
-//      draw is by inverse transform: the first survivor whose running sum of
-//      weights exceeds u × their total, or, should rounding leave none, the
-//      last survivor. At most 64 candidates, so at most 128 exponentials,
-//      and one uniform draws where a random-key race spends one a candidate
-//      (GDSA.21's caveat).
-//   - u is Philox4x32-10's first word (Salmon et al., SC '11) keyed by the
-//     turn's 64-bit seed with the drawn token's position as the counter —
-//     the step's position plus its tokens, so a token's draw is the same
-//     whether its prompt was prefilled in one step or resumed from the
-//     cache: its top 23 bits scaled by 2⁻²³, plus 2⁻²⁴, so u lies in
-//     [2⁻²⁴, 1 − 2⁻²⁴], every value exact in f32 and neither 0 nor 1. A pure
-//     function of seed and position, so a run replays from its seed and any
-//     step replays alone (GDSA.3). WGSL has no 64-bit integers; Philox's 32-bit
-//     high products are formed from 16-bit halves. The same draw on the
-//     target's GPU and compiler; WGSL's exp may round differently elsewhere,
-//     which moves a draw only when u falls within that rounding of a boundary.
-//   - Weights and sums are f32: each survivor's share is within a few units
-//     in the last place of its exact value, the 64 summed in order.
-//   - Failure is visible: when the first candidate's logit is not finite,
-//     the draw writes token 0 and sets `failed`, so the next step embeds a
-//     real token, and the runtime, reading the result a step later, stops the
-//     turn with the step's logits named not finite (GDSA.21: reject NaN and
-//     +∞).
-//   - Settings are checked before a turn begins, by check below, never
-//     clamped: 1 ≤ top_k ≤ kCandidates, temperature finite and ≥ 0, top_p
-//     in (0, 1], min_p in [0, 1). A top_k of 0, llama.cpp's "every token",
-//     is refused by name, as is one above 64: each listed model's card asks
-//     for 64 or fewer — Gemma 3 64, Qwen3 20 — and llama.cpp's default is
-//     40.
-//   - Writes the sampled record to `sampled`, read by the next step's
-//     gather and copied to the readback ring (below), and the 64 candidates
-//     stay in `candidates` for a test, or a future display of alternatives,
-//     to read.
+// Contract
+//   - check(settings): refuses, never clamps, naming the setting and its
+//     range: top_k outside 1 to kCandidates; temperature not finite, or
+//     below 0; top_p outside (0, 1]; min_p outside [0, 1). The runtime
+//     calls it before a turn begins and refuses the turn as Settings
+//     (runtime.h). A top_k of 0 is refused: it does not mean every token.
+//   - apply(settings, seed, step): writes the draw's fields of the step
+//     (kernels/interface.h, Step): the seed, low word first; top_k,
+//     temperature, top_p and min_p as given; and log_min_p, ln min_p in f32
+//     on the CPU, or 0 for a min_p of 0. Precondition: check(settings)
+//     passed. The runtime calls it once a turn; the fields then ride in the
+//     head every step writes.
+//   - draw_launch(candidates, sampled): the draw's one launch, a pure
+//     function of its arguments: over `candidates`, kCandidates (logit bits,
+//     token) pairs sorted largest first, into `sampled`, one SampledRecord.
+//     The settings, the seed and the position are the step's. It covers the
+//     last token alone (Rows::LastToken), so it runs only in a step that
+//     asks for logits. Preconditions, stated, not checked: `candidates`
+//     holds kCandidates pairs as top-k writes them, from a vocabulary of at
+//     least kCandidates tokens; `sampled` holds 16 bytes.
+//   - SampledRecord: the token drawn; `failed`; u, the uniform the draw
+//     used; a word of padding. 16 bytes, what the step reads back.
+//   - Determinism: the draw is a function of the candidates, the settings,
+//     the seed and the drawn token's position alone. The same bits on the
+//     same GPU and compiler; WGSL's exp may round differently on another,
+//     which moves a draw only where a cut or u's comparison falls within
+//     that rounding. Across GPUs, not verified.
+//   - Failure is visible: when the first candidate's logit is not finite
+//     (top-k ranks every NaN and +∞ first, topk.h), the draw writes token 0
+//     and sets `failed`, so the next step embeds a real token, and the
+//     runtime, reading the record a step later, ends the turn NonFinite
+//     (runtime.h). A drawn token is otherwise one of the candidates, below
+//     the vocabulary.
 //
-// What it asks of the other contracts:
-//   - kernels/interface.h: the step's head grows from 16 bytes to 48: after
-//     position, tokens and logits, `fed` — 1 when the step's one token is
-//     the last step's draw, read from `sampled` — then the seed's two words,
-//     top_k, temperature, top_p and min_p, and two of padding; the
-//     identifiers follow at 48. One declaration of it in WGSL,
-//     kernels/step.wgsl, composed before every kernel by the program, as a
-//     format's unpack is, in place of the five each kernel holds today. A
-//     decode step writes 48 bytes, where it wrote 32.
-//   - kernels/gather: with `fed`, row 0's identifier is `sampled`'s token,
-//     bound read-only; a draw's token is below the vocabulary by
-//     construction.
-//   - residency/plan.h: working buffers `partials_a`, 64 · ceil(V / 1,024)
-//     pairs of 8 bytes — 76 KB for Qwen3, 131 KB for Gemma 3 — and
-//     `partials_b`, 64 for each 1,024 of those — 5 KB and 8 KB —
-//     `candidates`, 512 bytes, and `sampled`, 16.
-//   - graph/graph.h: output() appends the selection and the draw after the
-//     head; all of them run only in a step that asks for logits.
-//   - kernels/program.h: a step that asks for logits copies `sampled` into
-//     one of two mappable readback slots, created at build, alternating,
-//     after its pass, and maps it once submitted; its callback carries the
-//     sampled record. Two steps may be outstanding — one running and the
-//     next queued — so the next is submitted before the last's record maps;
-//     WebGPU orders the step uniform's write after the submits before it, so
-//     one uniform buffer serves both. WebGPU does not order mappings of two
-//     buffers, so each slot carries its step's sequence number, and a record
-//     that maps before an earlier step's is held until that one has been
-//     delivered: callbacks reach the runtime in the order the steps were run.
-//     A third run waits for the first's callback, so a slot is unmapped
-//     before the copy that reuses it (GPU.7).
-//   - runtime/runtime.h: decode steps are submitted back to back, each
-//     `fed`; a step's token is known when its record maps, one step later.
-//     So when a token is a stop, or the turn is cancelled, the step already
-//     queued behind it runs anyway, about 1.7 ms, and its draw is
-//     discarded. It wrote the keys and values of its input — the stop
-//     token, or after a cancel a draw never accepted — at its position. The
-//     runtime advances the cache for every step it runs and keeps each
-//     position whose input token is accepted (runtime/turn.h): the stop
-//     token's, which the next turn's prompt holds there when its template
-//     closes the reply with it, and the diff truncates when it does not; and
-//     not a draw the turn discarded. A position truncated lies past the
-//     cache's length, and its high-water mark counts it (cache/kv.h):
-//     overwritten by the next token there, never read before it, and a
-//     sliding-window ring, whose slots exceed its window by a prefill block,
-//     loses no entry a query still reads. The runtime never queues a step at
-//     or past the context offered, where a full-attention layer, whose slots
-//     are the context, would wrap onto position 0; nor past a turn's token
-//     limit, which it knows ahead. This is the cache state the research
-//     warned a pipeline puts at risk, stated so the
-//     runtime's tests can hold it.
+// Algorithm, the draw (draw.wgsl)
+//   One workgroup of 64 invocations. k = min(top_k, 64); x_i is candidate
+//   i's logit, x_0 the first's.
+//   1. Side by side, each invocation i below k works candidate i, in f32:
+//      for a logit of −∞, every weight is 0 and the min-p test fails;
+//      otherwise its top-p weight exp(x_i − x_0), only when top_p < 1; its
+//      tempered weight exp((x_i − x_0) / temperature), only when
+//      temperature > 0; and its min-p test, min_p = 0 or x_i ≥ x_0 +
+//      log_min_p. Each goes to workgroup memory. Invocations at or past k
+//      read nothing. The last invocation computes u (below). A barrier.
+//   2. Only when top_p < 1: invocation 0 sums the k top-p weights in
+//      candidate order; a barrier; each invocation below k divides its
+//      weight by that total, the softmax at temperature 1; a barrier. At a
+//      top_p of 1 none of it runs: top-p keeps every candidate, and an f32
+//      softmax would round a far tail to zero and drop it.
+//   3. Invocation 0 alone, in candidate order: the tempered weights' running
+//      sums and, when top_p < 1, beside them the cumulative probability,
+//      stopping at the first candidate where it reaches top_p. The kept
+//      candidates are that prefix, at least one; otherwise all k.
+//   4. min-p: the survivors are the longest prefix of the kept, at least the
+//      first, whose candidates pass the test. Sorted largest first, those
+//      that pass are a prefix.
+//   5. Temperature 0 draws the first candidate. Otherwise, by inverse
+//      transform: the first survivor whose running sum exceeds u × the
+//      survivors' total, or, should rounding leave none, the last survivor.
+//   6. The record: the token, or 0 when failed; failed, 1 or 0; u's bits; 0.
+//   u: Philox4x32-10, keyed by the turn's 64-bit seed as two words, with
+//   the counter (position, 0, 0, 0), position being the drawn token's: the
+//   step's first position plus its tokens. So a token's draw is the same
+//   whether its prompt was prefilled in one step or resumed from the cache;
+//   a run replays from its seed, and any step replays alone. WGSL has no
+//   64-bit integer, so Philox's high products are formed from 16-bit
+//   halves. u is the first output word's top 23 bits × 2⁻²³, plus 2⁻²⁴:
+//   in [2⁻²⁴, 1 − 2⁻²⁴], every value exact in f32, never 0 or 1.
+//   Rounding points: each exponential, quotient, product and sum in f32 by
+//   WGSL's rules; x_0 + log_min_p once an invocation; the sums in candidate
+//   order, at most 64 terms, on one invocation; ln min_p once a turn, on the
+//   CPU. No bound on a survivor's share is derived here.
 //
-// What it costs, a sampled step: the draw is one launch, 1.5 µs. Each of the
-// first top_k invocations loads its candidate's logit and the first's, and
-// invocation 0 the chosen token: 8 × top_k + 4 bytes logically, of 4 ×
-// top_k + 4 distinct, which the GPU's caches serve — 164 and 84 at Qwen3's
-// top_k of 20, 516 and 260 at 64 — and it writes 16. Its work, in order:
-//   - side by side: each of the first top_k invocations loads its candidate
-//     and the first from device memory, computes its exponentials and its
-//     min-p test, and writes them to workgroup memory; the others, past
-//     top_k, do none of it, and wait at the barriers — a split by
-//     invocation, so on a SIMD group straddling top_k its idle lanes cost
-//     the group's issue slots, not its time; the last runs Philox's 10
-//     rounds and writes u;
-//   - a barrier; invocation 0 sums top-p's weights, at most top_k dependent
-//     adds, and writes the total;
-//   - a barrier; each of the first top_k invocations divides its own weight
-//     by it;
-//   - a barrier; invocation 0 runs the running sums, at most top_k
-//     iterations — the tempered weights' and, beside them, top-p's
-//     cumulative probability, stopping at top-p's cut — then the min-p scan
-//     and the draw's comparisons with u × the survivors' total, at most
-//     top_k iterations each, and writes the record.
-// Three barriers, and on invocation 0, in sequence, four loops of at most
-// top_k iterations — 256 at a top_k of 64, 80 at Qwen3's 20. At a top_p of
-// 1, top-p's weights, total, division and cumulative sum are not computed:
-// one barrier, and three loops.
-// Optimization (practice): only the first top_k candidates are read and
-// worked, and none of top-p's work is done where it would keep every
-// candidate. The branch on top_p is uniform; the one on top_k splits
-// invocations, which is cheaper than working candidates never read.
-// An estimate of its latency at the worst, a top_k of 64 and a top_p below
-// 1, on cores near 1.4 GHz from about 400 cycles for the loads, 50 a barrier
-// and 8 an iteration with its read, add or compare, and loop control: 2,598
-// cycles, 1.9 µs, leaving out the exponentials' and the divisions' latency,
-// each on the path between two barriers, and the issue slots Philox takes.
-// An estimate, partial, not a bound: the selection's stages and this are
-// measured together once they run, and that measure, not this, says what
-// share of a decode step they take.
-// The readback copies 16 bytes and maps them while the next step runs, so a
-// decode step's critical path no longer holds the map's round trip, 0.5 ms
-// median and 0.8 ms at p95 on the target. On the CPU, a token costs one
-// mapped read of 16 bytes and the runtime's work on it, a step behind.
-// Optimization (practice): the token drawn and kept on the GPU, the readback
-// a step behind, as vLLM samples on the device to avoid synchronizing with
-// the CPU (GDSA.21, GPU.1, GPU.7).
+// Design and cost
+//   Counted at policy.h's defaults (top_k 40, top_p 0.95, min_p 0.05,
+//   temperature 0.8), the settings every host passes, and at the largest
+//   top_k, 64.
+//   - Launches: one in a step that asks for logits, after selection's three
+//     (topk.h), about 1.5 µs (interface.h's estimate, not measured in
+//     Frizzle). No buffer write of its own: its constants, one word, are
+//     written once at load (kernels/program.h); its settings and seed are 28
+//     bytes of the 64-byte head every step writes (kernels/interface.h).
+//   - Device memory: each invocation below k loads its candidate's logit
+//     and the first's, and invocation 0 the chosen token: 8 × top_k + 4
+//     bytes logically, 4 × top_k + 4 distinct, which the GPU's caches serve
+//     — 324 and 164 at 40, 516 and 260 at 64 — and it writes 16.
+//   - Barriers and serial work: three barriers when top_p < 1, one at a
+//     top_p of 1. On invocation 0, one after another, four loops of at most
+//     top_k iterations — 160 at 40, 256 at 64 — or three at a top_p of 1.
+//   - An estimate of its latency at the worst, top_k 64 and top_p below 1,
+//     on cores near 1.4 GHz from about 400 cycles for the loads, 50 a
+//     barrier and 8 an iteration with its read, add or compare and loop
+//     control: 2,598 cycles, 1.9 µs, leaving out the exponentials' and the
+//     divisions' latency and the issue slots Philox's 10 rounds take. An
+//     estimate, partial, not a bound, not measured in Frizzle.
+//   - The split at k is by invocation, so a SIMD group straddling k idles
+//     its lanes past it; the branches on top_p and temperature are uniform,
+//     the step's settings, so every barrier is reached by all (GPU.4).
+//   - Readback: the record's 16 bytes are copied into one of two mappable
+//     slots and mapped while the next step runs (kernels/program.h); on the
+//     CPU a token costs one mapped read of 16 bytes and the runtime's work
+//     on it, a step behind (runtime.h). Read back before the next step could
+//     start, each token would wait a map's round trip, about 0.5 ms, an
+//     estimate, not measured in Frizzle, against a decode step's estimated
+//     1.8 ms of weight reads and 0.45 ms of dispatch overhead (interface.h).
+//   - Working buffers for Gemma 3 1B's vocabulary of 262,144, counted:
+//     `partials_a` 131,072 bytes and `partials_b` 8,192, selection's;
+//     `candidates`, 512; `sampled`, 16 (graph/graph.h).
+//   - Decode steps are submitted back to back, each fed. When a token is a
+//     stop, or the turn is cancelled, the step queued behind it still runs,
+//     and its draw is discarded; the cache keeps each position whose input
+//     token is accepted (runtime.h, turn.h). The discarded step's entries
+//     lie past the cache's length, counted by its high-water mark and
+//     overwritten in place by the next tokens there (cache/kv.h); no step
+//     is queued at the context offered (turn.h, Context).
+//   - Optimization (practice): only the first top_k candidates are read and
+//     worked, and none of top-p's work is done at a top_p of 1, where it
+//     would keep every candidate.
+//   - Optimization (practice): the token drawn and kept on the GPU, the
+//     readback a step behind (GPU.1, GPU.7).
+//   - Inverse transform spends one uniform a draw, where a random-key race
+//     spends one a candidate, up to 64, and gives no cumulative probability,
+//     which top-p needs (GDSA.21's caveats).
+//   - Lever not taken: the draw folded into selection's last pass, whose
+//     one workgroup already holds the 64 candidates: one launch fewer, about
+//     1.5 µs, and its candidate loads, at the cost of the sampling method
+//     living inside the selection kernel, so that a new method would change
+//     the selection (docs/architecture/change-axes.md: axis F apart from E).
 //
-// Levers not taken:
-//   - The draw folded into the selection's last pass, whose one workgroup
-//     already holds the 64 candidates: one launch fewer, about 1.5 µs, three
-//     calls out of the module — its pipeline, bind group and dispatch — and
-//     its candidate loads, 8 × top_k + 4 bytes logically, a sampled step —
-//     0.09% of
-//     a decode step — at the cost of the sampling method living inside the
-//     selection kernel, so that a new method would change the selection
-//     (docs/architecture/change-axes.md: axis F apart from E).
+// Verification
+//   No test checks the draw on its own: no CPU reference, no known-answer
+//   test of Philox, no test of draw frequencies, though GDSA.3 and GDSA.21
+//   ask for them; and none of check's refusals. The oracle compares the
+//   logits, which come before selection and the draw. Every reply the
+//   replay scenario compares is drawn here, and those replies are compared
+//   between runs of the engine from the same seed, never with a reference.
 //
-// Verification the implementation is held to:
-//   - On the GPU against a CPU reference of the same steps in f64, given
-//     the uniform the draw records: each of 1,000 draws over five settings —
-//     llama.cpp's defaults, the listed models' cards, and others at the
-//     truncations' edges — the reference's token, but for a draw within f32's
-//     rounding of a decision, which may number 1 in 100 at most; temperature
-//     zero, a top_k of 1, a top_p and a min_p that leave the first alone, each
-//     drawing the first candidate; and, for fixed logits, the frequencies of
-//     2,000 draws over consecutive positions within the 0.1% chi-squared
-//     bound of the reference's probabilities, no truncated candidate ever
-//     drawn (GDSA.21: test statistically, not by replay).
-//   - Philox4x32-10 on the CPU against Random123's published known-answer
-//     vectors, and the GPU's uniform bit for bit against it, across seeds and
-//     positions.
-//   - A replayed step draws the same token; a non-finite top candidate sets
-//     `failed`; check refuses each setting outside its range, naming it.
-//   - Through the forward pass: greedy decoding fed on the GPU gives the
-//     tokens read back by the same draw run a step at a time.
-//   - Through the runtime, the cache after a step is discarded. In each case
-//     below, the turn that follows gives the same bits — every logit it
-//     reads back, and the tokens it draws — as the same conversation run in
-//     a fresh upload with no step discarded, so a stale entry the discarded
-//     step left, or one it should have left and did not, shows as a
-//     difference (graph/graph.h: logits do not depend on how a prompt is
-//     stepped):
-//       - a stop token drawn by the first decode step, the queued step behind
-//         it discarded;
-//       - a stop token drawn one position before the context offered, where
-//         no step is queued behind it, and none is queued at the context's
-//         end;
-//       - a cancel while a step is queued behind the one running;
-//       - the next turn's prompt sharing the whole accepted history, so the
-//         cache is reused up to it and the discarded position is written
-//         again;
-//       - each of these on Gemma 3's sliding-window layers after the ring has
-//         wrapped, so the discarded step's slot held a position still in an
-//         earlier window.
-//     These are where pipelined engines have failed: vLLM's async scheduling
-//     in a request stopping with a step in flight while preempted, where one
-//     count served both for positions holding keys and values and for tokens
-//     to keep (vllm-project/vllm#58776); llama.cpp's speculative decoding,
-//     the nearest thing it has, removes a rejected draft's entries by
-//     position (llama_memory_seq_rm) and restores a checkpoint where it
-//     cannot. Here the cache keeps the two counts apart, written and length
-//     (cache/kv.h), and these cases hold them.
-//
-// Guidelines, by corpus:
+// Corpus guidance
 //   C++ Core Guidelines
-//     F.8    Prefer pure functions — the draw is a function of the
-//            candidates, the settings, the seed and the position.
-//     I.5    State preconditions — check, and the draw's.
+//     F.8    Prefer pure functions: draw_launch computes from its arguments,
+//            and the draw from the candidates, the settings, the seed and
+//            the position.
+//     I.5    State preconditions: apply's, draw_launch's, and check, which
+//            the runtime calls before a turn.
+//     ES.45  Avoid magic constants: the seed's word width (sampler.cpp)
+//            and the record's four words (SampledRecord) are spelled from
+//            their types.
 //   C++ performance guidelines
-//     GDSA.21 Draw categorical samples — by inverse transform here, its
-//            caveat for weights already computed.
-//     GDSA.3 Derive random numbers from (seed, stream, counter) — Philox,
-//            keyed by the seed, counted by position.
-//     GPU.1  Keep data on the device; every round trip needs a budget — the
-//            token stays on the GPU.
-//     GPU.7  Pipeline CPU and GPU work — the readback a step behind, in a
-//            ring of two slots.
+//     GDSA.21 Draw categorical samples by a one-pass random-key race: not
+//            taken, by its own caveats; one uniform a draw, and top-p needs
+//            the cumulative probability the race does not give.
+//     GDSA.3 Derive random numbers from (seed, stream, counter): Philox,
+//            keyed by the seed, counted by the drawn token's position; the
+//            transform from bits to u is the draw's own, exact in f32.
+//     GDSA.2 Declare each reduction's determinism level: the sums run on one
+//            invocation in candidate order, so the same bits run to run on
+//            one GPU; across GPUs, not verified.
+//     GPU.4  Keep SIMD-group control flow coherent: the settings' branches
+//            are uniform; the split at top_k is by invocation.
+//     GPU.1  Keep data on the device: the token stays on the GPU, and only
+//            its 16-byte record is read back.
+//     GPU.7  Pipeline CPU and GPU work: the readback a step behind, in two
+//            slots.
 
 // What the draw writes, and the readback carries.
 struct SampledRecord {
@@ -254,7 +190,7 @@ struct SampledRecord {
   float u;  // the uniform the draw used: a step replayed shows the same
   std::uint32_t padding;
 };
-static_assert(sizeof(SampledRecord) == 16);
+static_assert(sizeof(SampledRecord) == 4 * sizeof(std::uint32_t));
 
 // What check refuses, naming the setting and its range.
 struct SettingsResult {

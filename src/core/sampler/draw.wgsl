@@ -1,9 +1,16 @@
-// The draw (sampler/sampler.h): the next token from the candidates top-k
-// selection kept, sorted largest first. Invocation i works candidate i; the
-// last also runs Philox; invocation 0 alone takes the sums and running sums,
-// in candidate order.
+// Axis F: changes with a new sampling method.
 //
-// Bindings: 1 the constants, 2 the candidates, 3 the sampled record.
+// Contract, algorithm, cost and corpus guidance: sampler.h. This file
+// defines what that header states: the draw, the next token from the 64
+// candidates top-k selection kept, sorted largest first, by top-k, top-p,
+// min-p and temperature in that order, and an inverse transform of one
+// uniform. Invocation i works candidate i below top_k; the last also runs
+// Philox4x32-10 for the uniform; invocation 0 alone takes the sums and
+// running sums, in candidate order, and writes the record.
+//
+// Bindings: 0 the step (step.wgsl), its settings, seed and position; 1 the
+// constants; 2 the candidates; 3 the sampled record. workgroupBarrier, exp,
+// min, select and bitcast are WGSL built-ins.
 
 struct Draw {
     count: u32,   // the candidates, kCandidates
@@ -37,7 +44,7 @@ fn mulhi(a: u32, b: u32) -> u32 {
     return p11 + (p01 >> 16u) + (p10 >> 16u) + (mid >> 16u);
 }
 
-// Philox4x32-10 (Salmon et al., SC '11; Random123's constants).
+// Philox4x32-10: ten rounds of its two multipliers and key increments.
 fn philox(counter: vec4<u32>, key_in: vec2<u32>) -> vec4<u32> {
     var c = counter;
     var key = key_in;

@@ -1,7 +1,13 @@
+// Axis F: changes with a new sampling method.
+//
+// Contract, algorithm, cost and corpus guidance: sampler.h. This file
+// defines what that header states.
+
 #include "core/sampler/sampler.h"
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 #include "core/kernels/topk/topk.h"
 #include "frizzle/shaders_generated.h"
@@ -46,7 +52,8 @@ void apply(const policy::SamplingSettings& settings, policy::Seed seed,
            kernels::Step& step) {
   const auto bits = static_cast<std::uint64_t>(seed);
   step.seed[0] = static_cast<std::uint32_t>(bits);
-  step.seed[1] = static_cast<std::uint32_t>(bits >> 32);
+  step.seed[1] = static_cast<std::uint32_t>(
+      bits >> std::numeric_limits<std::uint32_t>::digits);
   step.top_k = settings.top_k;
   step.temperature = settings.temperature;
   step.top_p = settings.top_p;

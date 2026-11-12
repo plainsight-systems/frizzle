@@ -23,31 +23,33 @@ namespace frizzle::tokenizer::bpe {
 // capability table hands the runtime (kSentencePiece).
 //
 // It is BPE. The file lists no merges, only a score for each token, and
-// llama.cpp merges any two adjacent symbols whose text joined is a token,
+// the encode merges any two adjacent symbols whose text joined is a token,
 // highest score first, leftmost on a tie. The merges a vocabulary implies,
 // every split of a normal token into two normal tokens ranked by the score
 // of the token they make (sentencepiece_merges.h), give that search's
 // result through the ordinary merge step (merge.h), so they are derived once,
-// at load. Gemma 3's vocabulary implies 513,511. Charlotte (e003048) found
-// them the same rules, in the same order, as Hugging Face's merges for
-// Gemma 3, whose other 1,395 make runs of tabs, newlines and spaces, tokens
-// matched as special before anything merges; not re-checked in Frizzle.
+// at load. Gemma 3's vocabulary implies 513,511. None makes a run of tabs,
+// newlines or spaces: no normal token is one, counted; those runs are
+// user-defined tokens, matched as special before anything merges
+// (special.h).
 //
 // Contract
 //   load_sentencepiece_bpe(source, index, out): Ok with `out` loaded, or the
 //   first refusal, `out` untouched, in this order:
-//     - tokenizer.ggml.add_space_prefix: not declared, Unsupported (llama.cpp
-//       reads a missing key as true); not BOOL, WrongKeyType; true,
-//       Unsupported. The references place that space differently, llama.cpp
-//       after every special token and Hugging Face only at the start, so
-//       neither placement is chosen by a guess.
+//     - tokenizer.ggml.add_space_prefix: not declared, Unsupported, since a
+//       missing key leaves open whether a space is added; not BOOL,
+//       WrongKeyType; true, Unsupported. Where an added space would go, at
+//       the start of the text alone or after every special token as well,
+//       the file does not say, so a file that asks for one is refused
+//       rather than given a placement by a guess.
 //     - Every refusal of load_vocabulary (vocabulary.h).
 //     - tokenizer.ggml.scores: load.h's three key errors; a count other than
 //       the vocabulary's, CountMismatch.
 //     - Every refusal of implied_merges: InvalidScore, DuplicateMerge.
 //     - A one-character token that is not normal, control, user-defined or
-//       byte: Unsupported, naming it. The references would encode that
-//       character as the token; this would spell it in bytes.
+//       byte: Unsupported, naming it. The encode turns a character into a
+//       normal token or its bytes (step 5), so it would spell that
+//       character in bytes, never as the token.
 //     - A byte <0x00> to <0xFF> with no token of type Byte: MissingByte,
 //       naming it; byte tokens other than those 256: Unsupported.
 //     - Two special tokens spelled alike once spaces are ▁: Unsupported,
@@ -59,9 +61,8 @@ namespace frizzle::tokenizer::bpe {
 //   chat template writes it as text.
 //   decode(token, out): appends a normal token's text with each ▁ a space, a
 //   byte token's byte, any other token's text as written. A ▁ typed in the
-//   text comes back a space, as in SentencePiece and both references: the
-//   vocabulary cannot tell the two apart. Precondition: loaded, and the token
-//   below vocabulary().size().
+//   text comes back a space: the vocabulary cannot tell the two apart.
+//   Precondition: loaded, and the token below vocabulary().size().
 //   longest_cover(): the longest token text in the vocabulary, the most
 //   normalized bytes one token covers (tokenizer.h); 48 for Gemma 3, a normal
 //   token.
@@ -75,11 +76,9 @@ namespace frizzle::tokenizer::bpe {
 //   3. Special tokens are split out of that text, each spelled the same way
 //      (special.h), stopping past the limit's worth as TooManyTokens. So
 //      Gemma 3's user-defined runs of spaces match runs of ▁, whether the
-//      text held spaces or the character ▁ itself, as SentencePiece matches
-//      its user-defined pieces after spaces become ▁. Both references differ
-//      where ▁ is typed beside a space: llama.cpp spells those tokens in
-//      spaces and never matches a typed ▁, and Hugging Face matches typed
-//      runs only where they stand alone.
+//      text held spaces or the character ▁ itself: once spaces are ▁, the
+//      two are the same bytes. The tokenizer suite holds cases of a typed ▁
+//      beside and among spaces.
 //   4. admit over the specials and each ordinary segment's bytes, with
 //      longest_cover() (admission.h).
 //   5. In each ordinary segment, each character becomes its normal token, or,

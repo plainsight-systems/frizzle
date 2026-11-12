@@ -96,10 +96,10 @@ namespace frizzle::runtime {
 //     program and the cache around them (F.8).
 //   - A decoded token, on the CPU: one report from the program, the turn's
 //     constant work, at most kMaxStops comparisons, one run of the program —
-//     17 calls into WebGPU and 2 or 3 a launch, and 48 bytes written
-//     (program.h) — 4 bytes appended to the held tokens, and one token
-//     callback. Nothing waits on the GPU: the token is read a step behind,
-//     while the next step runs.
+//     17 calls into WebGPU and 2 or 3 a launch, and 64 bytes written
+//     (kernels/interface.h) — 4 bytes appended to the held tokens, and one
+//     token callback. Nothing waits on the GPU: the token is read a step
+//     behind, while the next step runs.
 //   - A turn, once: the diff, one comparison a held token, at most the
 //     context offered (cache/prefix.h); the cache's truncation, a visit to
 //     each layer, twice; the prompt's uncached identifiers copied once into
@@ -124,8 +124,7 @@ namespace frizzle::runtime {
 //     stop texts (policy/policy.h, stops.h); in diagnostic builds the
 //     program's launch count, the profiled step's bound; and the cache after
 //     a step queued behind a turn's end keeps each position whose input
-//     token is accepted (turn.h), where sampler/sampler.h said the queued
-//     step's position is truncated.
+//     token is accepted (turn.h).
 //   - Verification: the replay and edits scenario (tests/integration/replay/,
 //     tests/README.md) runs turns through the engine, edited and not,
 //     against a fresh engine's; the turn suite (tests/contracts/turn/)

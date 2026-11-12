@@ -1,3 +1,8 @@
+// Axis M: changes with a new stage in the generation loop.
+//
+// Contract, algorithm, cost and corpus guidance: stops.h. This file defines
+// what that header states.
+
 #include "core/runtime/stops.h"
 
 #include <algorithm>
@@ -14,8 +19,8 @@ StopSet::StopSet(std::span<const tokenizer::TokenId> tokens) noexcept
 }
 
 bool StopSet::contains(tokenizer::TokenId token) const noexcept {
-  return std::find(tokens_.begin(), tokens_.begin() + size_, token) !=
-         tokens_.begin() + size_;
+  const std::span<const tokenizer::TokenId> held = tokens();
+  return std::find(held.begin(), held.end(), token) != held.end();
 }
 
 std::span<const tokenizer::TokenId> StopSet::tokens() const noexcept {
@@ -24,7 +29,7 @@ std::span<const tokenizer::TokenId> StopSet::tokens() const noexcept {
 
 namespace {
 
-// The keys llama.cpp reads for its end-of-generation set.
+// The file's end-of-generation keys, each read where present.
 constexpr std::array<std::string_view, 3> kFileKeys{
     "tokenizer.ggml.eos_token_id",
     "tokenizer.ggml.eot_token_id",
@@ -41,8 +46,9 @@ StopsResult resolve_stops(const gguf::TensorIndex& index,
   // made.
   std::vector<tokenizer::TokenId> found;
   const auto add = [&](tokenizer::TokenId id) {
-    if (std::find(found.begin(), found.end(), id) == found.end())
+    if (std::find(found.begin(), found.end(), id) == found.end()) {
       found.push_back(id);
+    }
   };
   for (const std::string_view key : kFileKeys) {
     std::uint32_t id = 0;
@@ -65,9 +71,10 @@ StopsResult resolve_stops(const gguf::TensorIndex& index,
   }
   for (const std::string& text : policy_stops) {
     const std::optional<tokenizer::TokenId> id = vocabulary.find(text);
-    if (!id)
+    if (!id) {
       return {StopsError::NotAToken,
               "stop \"" + text + "\" is not a token of this vocabulary"};
+    }
     if (vocabulary.type(*id) != tokenizer::TokenType::Control) {
       return {StopsError::NotControl,
               "stop \"" + text + "\" is not a control token"};
