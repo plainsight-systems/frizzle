@@ -9,6 +9,10 @@
 //     before −v, 0 before −0); NaN never chosen unless the whole group is
 //     NaN, then the group's first; a short last group; a group that is not
 //     a whole number of at least 1 is refused;
+//   - a strip's group is the smallest whose marks fit its pixels, so there
+//     are never more marks than pixels, and never needlessly fewer; a width
+//     of 0 gives 1; widths and pixels that are not whole numbers, a width
+//     below 0 and pixels below 1 are refused;
 //   - the column's scale is the 99th percentile of every slot's finite
 //     magnitudes together, so it can differ from every layer's own; the
 //     largest when that is 0; 0 with no finite non-zero value; infinities
@@ -16,8 +20,8 @@
 //   - a strip's pixel i is heatOf the value mark i selected, at the column's
 //     scale, opaque; a mark outside the slot is refused.
 //
-// Not locked: GROUP's value, 12, which the view chooses; the colours
-// between the ramp's ends. Plain arrays, no browser.
+// Not locked: how the view measures a column's pixels (LayerMap.tsx); the
+// colours between the ramp's ends. Plain arrays, no browser.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -25,6 +29,7 @@ import { test } from "node:test";
 import { fold } from "../../../app/src/shape/fold.ts";
 import { type Palette, heatOf, paint } from "../../../app/src/shape/paint.ts";
 import {
+  groupFor,
   paintStrip,
   scaleAcross,
   strongestOfGroups,
@@ -94,6 +99,55 @@ test("a group that is not a whole number of at least 1 is refused", () => {
       () => strongestOfGroups(f32([1, 2]), group),
       RangeError,
       String(group),
+    );
+  }
+});
+
+test("a strip's group is the smallest whose marks fit its pixels", () => {
+  for (const [width, pixels, group] of [
+    [6_912, 275, 26], // 266 marks
+    [6_912, 550, 13], // 532 marks
+    [1_152, 69, 17], // 68 marks
+    [1_152, 138, 9], // 128 marks
+    [6_912, 6_912, 1],
+    [6_912, 10_000, 1],
+    [0, 5, 1],
+  ] as const) {
+    assert.equal(groupFor(width, pixels), group, `${width} in ${pixels}`);
+  }
+});
+
+test("never more marks than pixels, and a group one smaller would not fit", () => {
+  for (const width of [1, 2, 7, 96, 1_152, 6_912, 32_768]) {
+    for (let pixels = 1; pixels <= 1_200; pixels++) {
+      const group = groupFor(width, pixels);
+      const marks = strongestOfGroups(new Float32Array(width), group).length;
+      assert.ok(marks <= pixels, `${width} in ${pixels}: ${marks} marks`);
+      if (group > 1) {
+        assert.ok(
+          Math.ceil(width / (group - 1)) > pixels,
+          `${width} in ${pixels}: ${group - 1} would fit`,
+        );
+      }
+    }
+  }
+});
+
+test("a width or pixels that are not whole numbers in range are refused", () => {
+  for (const [width, pixels] of [
+    [6_912, 0],
+    [6_912, -1],
+    [6_912, 1.5],
+    [6_912, Number.NaN],
+    [6_912, Number.POSITIVE_INFINITY],
+    [-1, 10],
+    [1.5, 10],
+    [Number.NaN, 10],
+  ] as const) {
+    assert.throws(
+      () => groupFor(width, pixels),
+      RangeError,
+      `${width} in ${pixels}`,
     );
   }
 });

@@ -615,6 +615,7 @@ fieldset > div {
 .map-legend {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   margin-top: 4px;
   letter-spacing: 0;
@@ -625,6 +626,11 @@ fieldset > div {
   min-width: 24px;
   height: 6px;
   border-radius: 2px;
+}
+/* The column's group, a line of its own under the ramp. */
+.map-legend .map-group {
+  flex-basis: 100%;
+  white-space: nowrap;
 }
 .map-rows {
   margin-top: 6px;

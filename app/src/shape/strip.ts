@@ -19,6 +19,11 @@
 //     A group that is not a whole number of at least 1 throws a RangeError.
 //     The mark is a value the model made, chosen, never combined: no sum,
 //     mean or norm of the group.
+//   - groupFor(width, pixels): the smallest group whose marks fit in
+//     `pixels`: ceil(width / pixels), at least 1, so ceil(width / group) ≤
+//     pixels, and a group one smaller would not fit. A width of 0 gives 1.
+//     A width that is not a whole number of at least 0, or pixels that are
+//     not a whole number of at least 1, throw a RangeError.
 //   - scaleAcross(slots): the magnitude at which the heat is full, for one
 //     column of the Map, every layer's slot of that column together: the
 //     99th percentile of all their finite magnitudes (nearest rank, zeros
@@ -44,10 +49,15 @@
 // Design and cost
 //   - Strongest of a group, not every value: a strip is a row of a few
 //     hundred pixels wide, and the Map's question is which layer holds
-//     something strong. A group of 12 gives 576 marks for 6,912 neurons and
-//     96 for the embedding's 1,152 (views/deck/LayerMap.tsx). The strongest
-//     is selected, so every mark is one value the run computed, which the
-//     readout names by index; nothing is computed beside the model.
+//     something strong. The strongest is selected, so every mark is one
+//     value the run computed, which the readout names by index; nothing is
+//     computed beside the model.
+//   - The group sized to the strip's pixels (groupFor), not fixed: with
+//     more marks than pixels, a stretched canvas drops marks, the strongest
+//     among them. A strip 275 pixels wide holds 6,912 neurons in groups of
+//     26 (266 marks), 550 in groups of 13 (532); 1,152 dimensions in 69
+//     pixels in groups of 17 (68). The smallest group that fits, so a strip
+//     shows as much as its pixels can.
 //   - Magnitude, not sign, as the deck (paint.ts): either sign pushes as
 //     far, and a hot mark on the Map is a hot neuron on the deck. The sign
 //     is the readout's and the inspector's.
@@ -58,14 +68,13 @@
 //   - The 99th percentile, not the largest, for paint.ts's reason: a few
 //     huge outliers would leave every other mark dark. With it the
 //     strongest 1% of the column are at full heat.
-//   - Cost, counted for Gemma 3 1B, when the shown captures change, never a
-//     frame: sorts of 179,712 neuron magnitudes and three of 29,952 (26 ×
-//     1,152), one pass a slot, and 26 × (576 + 3 × 96) pixels, 89,856
-//     bytes, in new arrays.
+//   - Cost, counted for Gemma 3 1B: scaleAcross when the shown captures
+//     change, sorts of 179,712 neuron magnitudes and three of 29,952 (26 ×
+//     1,152); strongestOfGroups and paintStrip when they change or a
+//     column's pixels do, one pass a slot, 269,568 values, and at most 4
+//     bytes a pixel of every strip, in new arrays. Never a frame.
 
 import { type Palette, heatOf, scaleOf } from "./paint.ts";
-
-export const GROUP = 12;
 
 export function strongestOfGroups(
   values: Float32Array,
@@ -94,6 +103,20 @@ export function strongestOfGroups(
     marks[g] = kept === -1 ? first : kept;
   }
   return marks;
+}
+
+export function groupFor(width: number, pixels: number): number {
+  if (!Number.isInteger(width) || width < 0) {
+    throw new RangeError(
+      `a width of ${width}; it must be a whole number of at least 0`,
+    );
+  }
+  if (!Number.isInteger(pixels) || pixels < 1) {
+    throw new RangeError(
+      `${pixels} pixels; they must be a whole number of at least 1`,
+    );
+  }
+  return Math.max(1, Math.ceil(width / pixels));
 }
 
 export function scaleAcross(slots: readonly Float32Array[]): number {

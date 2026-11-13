@@ -115,14 +115,15 @@ deck.
             0 ▬▬▬▬ s      0 ▬▬▬▬ s          0 ▬▬▬▬▬▬▬▬▬▬ s          0 ▬▬▬▬ s
 Layer 0     ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
 Layer 1 ●2  ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
-…           96 marks      96 marks          576 marks               96 marks
+…           a mark a group, each group sized so every mark has a pixel
 Layer 25
 ```
 
 | Rule | Why |
 | --- | --- |
 | Columns in the order a layer computes them; the residual is the stream coming in, layer 0's the embedding | What is captured, named as it is |
-| A mark a group of 12, the group's strongest value, either sign | Every mark is one value the run made, chosen, never summed or averaged; the reading names its index |
+| A mark a group, the group's strongest value, either sign | Every mark is one value the run made, chosen, never summed or averaged; the reading names its index |
+| Each column's group the smallest that gives every mark a physical pixel, stated under its heading | A stretched strip with more marks than pixels drops some, the strongest among them; a finer screen shows more |
 | Heat by size, the deck's ramp | A hot mark on the Map is a hot neuron on the deck |
 | One scale a column across all layers, its 99th-percentile magnitude, in the column's legend | The Map compares layers; each column its own, since the residual's sizes are not the neurons' |
 | Click a neuron mark to select it; click elsewhere in a row for its layer | The inspector beside shows it; residual dimensions are not editable |
