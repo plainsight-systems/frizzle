@@ -13,10 +13,13 @@
 //     another word" | "Waiting" | "None: the reply failed" | "None:
 //     {failure}" (an inspection) | "Not captured: the run was cancelled" |
 //     "Not read back: {reason}".
+//   - neuronsOf's "taken" carries the whole store (protocol/messages.ts,
+//     Captures), which the Map reads too (LayerMap.tsx); the deck reads each
+//     layer's neurons slot.
 //   - cardsOf(neurons): null without captures; otherwise one Card per
-//     slot, in layer order, holding the slot's values (a view of the
-//     neurons, not a copy), its grid (shape/fold.ts) and its pixels and
-//     scale (shape/paint.ts, theme/palette.ts).
+//     layer, in layer order, holding its neurons slot's values (a view of
+//     the store's words, not a copy), its grid (shape/fold.ts) and its
+//     pixels and scale (shape/paint.ts, theme/palette.ts).
 //   - facesOf(cards, pins, which): the pixels each card shows. For the
 //     reply, each pinned neuron's cell takes the heat of the value its pin
 //     will send (session/pins.ts, sentBy, against the card's own value), at
@@ -101,12 +104,9 @@ export function neuronsOf(run: Run | null, which: Which): Neurons {
 export function cardsOf(neurons: Neurons): readonly Card[] | null {
   if (neurons.kind !== "taken") return null;
   const { captures } = neurons;
-  return captures.slots.map((slot) => {
+  return captures.layers.map(({ neurons: slot }) => {
     const grid = fold(slot.width);
-    const values = captures.neurons.subarray(
-      slot.first,
-      slot.first + slot.width,
-    );
+    const values = captures.words.subarray(slot.first, slot.first + slot.width);
     return { values, grid, painted: paint(values, grid, DECK_PALETTE) };
   });
 }
@@ -140,7 +140,7 @@ export type Valued =
 export function valueAt(neurons: Neurons, ref: NeuronRef): Valued {
   if (neurons.kind === "none") return { kind: "none", text: neurons.why };
   const { captures } = neurons;
-  const slot = captures.slots[ref.layer];
+  const slot = captures.layers[ref.layer]?.neurons;
   if (slot === undefined || ref.neuron >= slot.width) {
     return {
       kind: "none",
@@ -149,6 +149,6 @@ export function valueAt(neurons: Neurons, ref: NeuronRef): Valued {
   }
   return {
     kind: "value",
-    value: captures.neurons[slot.first + ref.neuron] ?? Number.NaN,
+    value: captures.words[slot.first + ref.neuron] ?? Number.NaN,
   };
 }

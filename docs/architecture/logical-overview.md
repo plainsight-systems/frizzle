@@ -232,23 +232,25 @@ flowchart TD
   and the weights') that read the step and stop, about 80 µs a token; once a
   run, 3.2 MiB copied on the GPU and one readback.
 
-How a run's neurons reach the page, once a run, with its answer. The rest of
-the store is read back with them and stays in the engine.
+How a run's captures reach the page, once a run, with its answer: the whole
+store, with every layer's slots.
 
 ```mermaid
 flowchart LR
   S["engine<br/>the store read back<br/>(capture/reader.h)"]
-  B["bindings.cpp<br/>answer JSON with slots;<br/>neurons sliced out of the heap,<br/>same call"]
-  E["engine.ts<br/>captures checked:<br/>taken fills its slots,<br/>or fails by name"]
-  W["worker.ts<br/>done, the neurons'<br/>buffer transferred"]
+  B["bindings.cpp<br/>answer JSON with each layer's<br/>six slots and the position;<br/>the store sliced out of the heap,<br/>same call"]
+  E["engine.ts<br/>captures checked:<br/>every slot inside the words,<br/>or fails by name"]
+  W["worker.ts<br/>done, the store's<br/>buffer transferred"]
   C["client.ts<br/>passed through<br/>untouched"]
-  P["session and page<br/>a pin's value looked up:<br/>slot.first + neuron"]
+  P["session and page<br/>a value looked up by its slot:<br/>slot.first + index"]
   S -->|"span, valid in the callback"| B -->|"one copy"| E --> W -->|"no copy"| C --> P
 ```
 
 One copy in all, out of the module's memory: the worker hands the buffer to
-the page, and the page reads it where it lies. All 26 layers' neurons, 702
-KiB, cross on every run, so switching layers needs no request.
+the page, and the page reads it where it lies. The whole store, 3.2 MiB for
+Gemma 3 1B, crosses on every run and inspection, so switching layers or views
+needs no request. The page reads values only by the slots the module sent;
+the layout is the engine's.
 
 ## The loop
 

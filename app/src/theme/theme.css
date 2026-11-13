@@ -33,8 +33,10 @@
  *     replies (each word a button set in the text as text, underlined on
  *     hover, the pressed one ringed; the branch point a bar in --accent;
  *     the text past it, and a steered reply's kept text, faded; a word
- *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the inspector's
- *     segmented choice, ranked list, neuron card and Go to.
+ *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the Map's
+ *     reading, headings, legends and rows (two columns under 900px), the
+ *     workbench's view switch, the inspector's segmented choice, ranked list,
+ *     neuron card and Go to.
  *   - Contrast: --ink and --muted on --page and --panel meet WCAG AA for
  *     body text (4.5:1); --muted is not used below 12px.
  *   - Reduced motion: no transition here moves anything; the deck's slide
@@ -572,6 +574,97 @@ fieldset > div {
   width: 180px;
   height: 8px;
   border-radius: 2px;
+}
+
+/* The Map (views/deck/LayerMap.tsx), after the concept's
+   (docs/design/concepts/explore.html) */
+.view-switch {
+  flex: none;
+  border: 1px solid var(--rule);
+}
+.view-switch label {
+  padding: 4px 12px;
+}
+.map-column h2 output {
+  margin-left: 0.75rem;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.map-reading {
+  margin: 0 0 8px;
+  min-height: 1.6em;
+  font: 12px var(--mono);
+}
+.map-heads,
+.map-row {
+  display: grid;
+  grid-template-columns:
+    130px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 4fr)
+    minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.map-heads {
+  padding: 0 6px;
+  font: 10px var(--mono);
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.map-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.map-legend .ramp {
+  flex: 1;
+  min-width: 24px;
+  height: 6px;
+  border-radius: 2px;
+}
+.map-rows {
+  margin-top: 6px;
+}
+.map-row {
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.map-row:hover {
+  background: var(--panel);
+}
+.map-row.front {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.map-row button {
+  padding: 2px 6px;
+  text-align: left;
+  font: 12px var(--mono);
+  border-color: transparent;
+  background: none;
+}
+.map-pinned {
+  color: var(--edit);
+}
+.map-row canvas {
+  display: block;
+  width: 100%;
+  height: 16px;
+  image-rendering: pixelated;
+  border-radius: 2px;
+}
+@media (max-width: 900px) {
+  .map-heads,
+  .map-row {
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+  .map-wide {
+    display: none;
+  }
 }
 
 /* The inspector */

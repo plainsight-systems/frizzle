@@ -14,7 +14,7 @@
 //     by name at stage "template"; Engine.generate with the kept tokens,
 //     the edits, the seed and maxTokens, streaming "text" with each token's
 //     identifier; done with its answer, captures and
-//     all, the neurons' buffer transferred to the page, not copied
+//     all, the store's buffer transferred to the page, not copied
 //     (messages.ts). A generation cancelled before it started is done with
 //     end "cancelled" and captures "not-taken": it ran nothing.
 //   - cancel {target}: a load still downloading is aborted, answered
@@ -114,12 +114,12 @@ async function answer(request: Exclude<Request, CancelRequest>): Promise<void> {
       post({ kind: "done", id: request.id, value: await load(request.id) });
     } else {
       const value = await generate(request);
-      // A run's neurons go to the page as they are: made for this answer
+      // A run's store goes to the page as it is: made for this answer
       // (engine/engine.ts), and kept by nobody here.
       const c = value.captures;
       post(
         { kind: "done", id: request.id, value },
-        c.kind === "taken" ? [c.neurons.buffer as ArrayBuffer] : [],
+        c.kind === "taken" ? [c.words.buffer as ArrayBuffer] : [],
       );
     }
   } catch (error) {

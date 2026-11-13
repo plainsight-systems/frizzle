@@ -112,8 +112,9 @@
 //   - A reply's tokens are collected as they stream, its text shown while
 //     it runs; the tokens enter the state once, when it is done, so a long
 //     reply does not copy its token list on every token.
-//   - Captures: the reply's own, an inspection's and the branch's, 702 KiB
-//     each for Gemma 3 1B; a new run replaces all three.
+//   - Captures: the reply's own, an inspection's and the branch's, the
+//     whole store, 3.2 MiB each for Gemma 3 1B, 9.6 MiB at most; a new run
+//     replaces all three.
 //   - A rejection that is not the worker's (WorkerError) or a supersede
 //     shows as failed at stage "page", with its message, never silently.
 

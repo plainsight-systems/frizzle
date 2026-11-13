@@ -28,8 +28,9 @@
 //     Pure. The store is two regions:
 //       1. Every layer's neurons, in layer order, layer l's slot after the
 //          earlier layers', its feed-forward width long: `neuron_words` in
-//          all. Kept first and contiguous, so a host that sends the
-//          neurons alone sends one range (wasm/bindings.cpp).
+//          all, first and contiguous. The browser host sends the whole
+//          store with every slot (wasm/bindings.cpp), so no reader depends
+//          on this region's place.
 //       2. Then, for each layer in order, its residual, attention_added and
 //          mlp_added (the embedding width each), its weights (query heads ×
 //          keys) and its stats (query heads × 2: m then l a head), in that

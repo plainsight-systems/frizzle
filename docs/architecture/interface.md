@@ -22,7 +22,9 @@ approved concepts in `docs/design/concepts/`.
 └──────────────────────────────────┴───────────────────────────────────┘
 
 ┌─ the workbench, a layer over the whole window ───────────────────────┐
-│ the layer deck                           │ the inspector             │
+│ ← Close  prompt › where   View: (Deck) Map   pins as chips    [Run]  │
+├──────────────────────────────────────────┬───────────────────────────┤
+│ the layer deck, or the Map               │ the inspector             │
 │ one card per layer, front card = layer l │ Neurons from: Reply or    │
 │ 96 × 72 neurons, heat by size            │   Steered                 │
 │ legend: the front layer's scale          │ the strongest in layer l  │
@@ -102,8 +104,33 @@ flowchart TD
 | A pinned cell on the reply's card shows the value it will send | A pin answers on the grid at once; the steered reply's card shows what its run used |
 | Sizes in megabytes, values rounded for reading | Human units; the exact value is in the inspector's data |
 
-The deck and the inspector read the same snapshot as the conversation; the
-only thing they change in the session is the pins held for the next run.
+## The Map
+
+The workbench's other view, in the deck's place, beside the inspector: every
+layer at the branch point, one row a layer, from the same captures as the
+deck.
+
+```text
+            Residual in   Attention added   MLP neurons, 6,912     MLP added
+            0 ▬▬▬▬ s      0 ▬▬▬▬ s          0 ▬▬▬▬▬▬▬▬▬▬ s          0 ▬▬▬▬ s
+Layer 0     ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
+Layer 1 ●2  ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
+…           96 marks      96 marks          576 marks               96 marks
+Layer 25
+```
+
+| Rule | Why |
+| --- | --- |
+| Columns in the order a layer computes them; the residual is the stream coming in, layer 0's the embedding | What is captured, named as it is |
+| A mark a group of 12, the group's strongest value, either sign | Every mark is one value the run made, chosen, never summed or averaged; the reading names its index |
+| Heat by size, the deck's ramp | A hot mark on the Map is a hot neuron on the deck |
+| One scale a column across all layers, its 99th-percentile magnitude, in the column's legend | The Map compares layers; each column its own, since the residual's sizes are not the neurons' |
+| Click a neuron mark to select it; click elsewhere in a row for its layer | The inspector beside shows it; residual dimensions are not editable |
+| No pin preview | Every mark is a captured value |
+
+The deck, the Map and the inspector read the same snapshot as the
+conversation; the only thing they change in the session is the pins held
+for the next run.
 The workbench gives the deck the focus on opening, so the wheel and keys
 work without a first click.
 

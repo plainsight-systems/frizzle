@@ -20,19 +20,23 @@
 //     RangedEdit); maxTokens 0 inspects. onToken receives each emitted
 //     token, its identifier and the text it completes, possibly ""; resolves
 //     with the module's answer (messages.ts's Generated), the reply's
-//     identifiers, its tail (bindings.cpp) and its captures included: "taken" with the slots from the answer and the neurons that
-//     came in the same call (bindings.cpp), "not-taken", or "unread" with
-//     the module's reason. An answer that says "taken" without neurons, or
-//     with neurons that do not fill its slots, rejects as a broken module,
-//     at stage "generate", rather than resolving with captures that are not
-//     there. Rejects with its refusal or failure otherwise. One turn at a
-//     time, as the engine allows.
+//     identifiers, its tail (bindings.cpp) and its captures included:
+//     "taken" with each layer's slots, keys and query heads and the input's
+//     position from the answer, and the store's words that came in the same
+//     call (bindings.cpp); "not-taken"; or "unread" with the module's
+//     reason. A "taken" answer rejects as a broken module, at stage
+//     "generate", rather than resolving with captures that are not there,
+//     when: no words came; their count is not the answer's "words"; it has
+//     no layers; a layer lacks one of its six slots, or its keys or query
+//     heads; or a slot is not whole numbers or ends past the words. Rejects
+//     with its refusal or failure otherwise. One turn at a time, as the
+//     engine allows.
 //   - cancel(): the running turn ends, answered "cancelled".
 //
 // Algorithm, a call
 //   Each call into the module gets a request number and a pending promise;
-//   frizzleOnAnswer(request, json, neurons?) settles it, with the neurons
-//   when the module sent them; frizzleOnText(request, text, token) streams
+//   frizzleOnAnswer(request, json, words?) settles it, with the store's
+//   words when the module sent them; frizzleOnText(request, text, token) streams
 //   into it. Bytes for a call are copied into the module's memory
 //   through a view made just then, and freed when the call returns, the
 //   module having read them (bindings.cpp).
@@ -46,9 +50,16 @@
 //     engine's to refuse (Kept).
 //   - A load is 2 + ceil(size / 16 MiB) calls, plus one if the front is
 //     short; nothing crosses between page and worker but progress.
-//   - The neurons arrive as a Float32Array the module sliced out of its
+//   - The store arrives as a Float32Array the module sliced out of its
 //     heap for this answer (bindings.cpp): this file's to hand on, not a
-//     view of the heap, so it survives the heap growing.
+//     view of the heap, so it survives the heap growing. Checking its slots
+//     is 26 × 6 comparisons a run; nothing is copied.
+//   - Not tested: the crossing from bindings.cpp to here has no end-to-end
+//     test since the browser scenario was dropped (tests/README.md); the
+//     store's layout is locked in the engine (the kernels suite), and the
+//     check above refuses an answer whose slots do not fit its words, but
+//     nothing checks that each slot the module names is the one layout()
+//     made.
 //   - The module and a promise per call: request 0 is the device's answer;
 //     every other call takes the next number.
 //   - Only what Gemma 3 uses: no preflight, media, companions, embedding
@@ -57,7 +68,12 @@
 import createModule, { type FrizzleModule } from "@frizzle/engine";
 
 import type { Edit, RangedEdit } from "../../engine/edits.ts";
-import type { Captures, Generated } from "../../protocol/messages.ts";
+import type {
+  Captures,
+  Generated,
+  LayerSlots,
+  Slot,
+} from "../../protocol/messages.ts";
 import type { ChatTemplate } from "../template/template.ts";
 
 const FRONT_BYTES = 16 * 2 ** 20;
@@ -81,20 +97,20 @@ interface Answer {
 }
 
 declare global {
-  // The module calls these by name (bindings.cpp); a run's neurons ride
+  // The module calls these by name (bindings.cpp); a run's store rides
   // with its answer.
   var frizzleOnAnswer: (
     request: number,
     answer: Answer,
-    neurons?: Float32Array,
+    words?: Float32Array,
   ) => void;
   var frizzleOnText: (request: number, text: string, token: number) => void;
 }
 
-// An answer, and the neurons the module sent with it, if any.
+// An answer, and the store's words the module sent with it, if any.
 interface Answered {
   readonly answer: Answer;
-  readonly neurons: Float32Array | undefined;
+  readonly words: Float32Array | undefined;
 }
 
 export class EngineError extends Error {
@@ -133,10 +149,10 @@ export class Engine {
     const engine = new Engine(await createModule());
     // The module answers through these, by name (bindings.cpp); it calls
     // neither before frizzle_start.
-    globalThis.frizzleOnAnswer = (request, answer, neurons) => {
+    globalThis.frizzleOnAnswer = (request, answer, words) => {
       const settle = engine.#answers.get(request);
       engine.#answers.delete(request);
-      settle?.({ answer, neurons });
+      settle?.({ answer, words });
     };
     globalThis.frizzleOnText = (request, text, token) =>
       engine.#texts.get(request)?.(token, text);
@@ -237,26 +253,28 @@ export class Engine {
         i * EDIT_WORDS,
       );
     });
-    const { answer, neurons } = await this.#withBytes(bytes, (textPointer) =>
-      this.#withBytes(new Uint8Array(keptWords.buffer), (keptPointer) =>
-        this.#withBytes(new Uint8Array(words.buffer), (editsPointer) =>
-          this.#call(
-            (request) =>
-              this.#module._frizzle_generate(
-                request,
-                textPointer,
-                bytes.length,
-                keptPointer,
-                kept.length,
-                editsPointer,
-                edits.length,
-                seed,
-                maxTokens,
-              ),
-            onToken,
+    const { answer, words: store } = await this.#withBytes(
+      bytes,
+      (textPointer) =>
+        this.#withBytes(new Uint8Array(keptWords.buffer), (keptPointer) =>
+          this.#withBytes(new Uint8Array(words.buffer), (editsPointer) =>
+            this.#call(
+              (request) =>
+                this.#module._frizzle_generate(
+                  request,
+                  textPointer,
+                  bytes.length,
+                  keptPointer,
+                  kept.length,
+                  editsPointer,
+                  edits.length,
+                  seed,
+                  maxTokens,
+                ),
+              onToken,
+            ),
           ),
         ),
-      ),
     );
     const done = settled("generate", answer);
     return {
@@ -266,7 +284,7 @@ export class Engine {
       reusedTokens: Number(done["reusedTokens"]),
       reply: replyOf(done["reply"], Number(done["tokens"])),
       tail: String(done["tail"] ?? ""),
-      captures: capturesOf(done["captures"], neurons),
+      captures: capturesOf(done["captures"], store),
     };
   }
 
@@ -290,7 +308,7 @@ export class Engine {
     return answered.finally(() => this.#texts.delete(request));
   }
 
-  // A call whose answer carries no neurons: a load stage's.
+  // A call whose answer carries no store: a load stage's.
   async #ask(start: (request: number) => void): Promise<Answer> {
     return (await this.#call(start)).answer;
   }
@@ -330,15 +348,19 @@ function read(
   return bytes;
 }
 
-// The answer's "captures", with the neurons that came beside it, as
-// messages.ts's Captures; a "taken" without neurons that fill its slots is
-// a broken module, refused by name, never captures that are not there.
-function capturesOf(
-  field: unknown,
-  neurons: Float32Array | undefined,
-): Captures {
+// The answer's "captures", with the store's words that came beside it, as
+// messages.ts's Captures; a "taken" whose slots do not fit its words is a
+// broken module, refused by name, never captures that are not there (the
+// header's generate).
+function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
   const c = field as
-    | { status?: string; slots?: [number, number][]; reason?: string }
+    | {
+        status?: string;
+        words?: unknown;
+        position?: unknown;
+        layers?: unknown;
+        reason?: string;
+      }
     | undefined;
   switch (c?.status) {
     case "not-taken":
@@ -346,24 +368,26 @@ function capturesOf(
     case "unread":
       return { kind: "unread", reason: String(c.reason ?? "") };
     case "taken": {
-      const slots = (c.slots ?? []).map(([first, width]) => ({ first, width }));
-      const words = slots.reduce(
-        (end, s) => Math.max(end, s.first + s.width),
-        0,
-      );
-      if (
-        neurons === undefined ||
-        slots.length === 0 ||
-        neurons.length !== words
-      ) {
-        throw new EngineError(
+      const broken = (why: string): EngineError =>
+        new EngineError(
           "generate",
-          `the module said its captures were taken but sent ${
-            neurons === undefined ? "no neurons" : `${neurons.length} words`
-          } for ${slots.length} slots of ${words} words`,
+          `the module said its captures were taken but ${why}`,
         );
+      if (words === undefined) throw broken("sent no words");
+      if (words.length !== c.words) {
+        throw broken(`sent ${words.length} words for ${String(c.words)}`);
       }
-      return { kind: "taken", slots, neurons };
+      if (!Array.isArray(c.layers) || c.layers.length === 0) {
+        throw broken("named no layers");
+      }
+      const position = c.position;
+      if (!isWhole(position)) {
+        throw broken(`named no position (${String(position)})`);
+      }
+      const layers = c.layers.map((layer: unknown, l) =>
+        layerOf(layer, words.length, (why) => broken(`layer ${l} ${why}`)),
+      );
+      return { kind: "taken", layers, words, position };
     }
     default:
       throw new EngineError(
@@ -371,6 +395,52 @@ function capturesOf(
         `the module's answer has no captures it names (${String(c?.status)})`,
       );
   }
+}
+
+// One layer of the answer's "captures": its six slots, each a pair [first,
+// width] of whole numbers ending within the store's `size` words, and its
+// keys and query heads, whole numbers; anything else is `broken`.
+function layerOf(
+  field: unknown,
+  size: number,
+  broken: (why: string) => EngineError,
+): LayerSlots {
+  const layer = (field ?? {}) as Record<string, unknown>;
+  const slot = (
+    name: Exclude<keyof LayerSlots, "keys" | "queryHeads">,
+  ): Slot => {
+    const pair = layer[name];
+    if (!Array.isArray(pair) || pair.length !== 2) {
+      throw broken(`has no ${name} slot`);
+    }
+    const [first, width] = pair as unknown[];
+    if (!isWhole(first) || !isWhole(width)) {
+      throw broken(`has a ${name} slot that is not whole numbers`);
+    }
+    if (first + width > size) {
+      throw broken(`has a ${name} slot ending at ${first + width} of ${size}`);
+    }
+    return { first, width };
+  };
+  const count = (name: "keys" | "queryHeads"): number => {
+    const value = layer[name];
+    if (!isWhole(value)) throw broken(`has no ${name}`);
+    return value;
+  };
+  return {
+    neurons: slot("neurons"),
+    residual: slot("residual"),
+    attentionAdded: slot("attentionAdded"),
+    mlpAdded: slot("mlpAdded"),
+    weights: slot("weights"),
+    stats: slot("stats"),
+    keys: count("keys"),
+    queryHeads: count("queryHeads"),
+  };
+}
+
+function isWhole(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 // The answer's "reply": one identifier an emitted token. One missing, or a

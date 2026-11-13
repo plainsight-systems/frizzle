@@ -55,14 +55,15 @@
 //     U+FFFD for a character the turn stopped inside, else "" (generator.h);
 //     and "captures" is
 //     the engine's Captured (runtime/engine.h), as it gave it:
-//       {"status": "taken", "slots": [[first, width], ...]}, one pair a
-//         layer, its neurons slot, with the neurons themselves crossing in
-//         the same call as the answer: frizzleOnAnswer(request, answer,
-//         neurons), `neurons` a Float32Array of the store's neuron region,
-//         every layer's neurons slot, bit for bit (capture/capture.h,
-//         region 1). The store's other captures do not cross: the page
-//         has nothing to show them in, and sending 2.5 MiB more a run for
-//         nothing to read is not worth it;
+//       {"status": "taken", "words", "position", "layers": [{"neurons",
+//         "residual", "attentionAdded", "mlpAdded", "weights", "stats",
+//         "keys", "queryHeads"}, ...]}: one object a layer, in layer order,
+//         each slot a pair [first, width] in 32-bit words, exactly
+//         capture::layout()'s (capture/capture.h); "words" the store's
+//         size; "position" the input's last position, which the weights
+//         count their keys back from. The store itself crosses whole in the
+//         same call as the answer: frizzleOnAnswer(request, answer, words),
+//         `words` a Float32Array of every word of the store, bit for bit;
 //       {"status": "not-taken"}: the turn was cancelled, so there are none;
 //       {"status": "unread", "reason"}: the read back failed, named by
 //         residency::Mapped ("cancelled", "device-lost", "unexplained",
@@ -95,12 +96,20 @@
 //     token but its text and identifier. The reply's identifiers in the
 //     answer, about six bytes a token in JSON: a 4,000-token reply is about
 //     24 KB, once.
-//   - The neurons, 702 KiB for Gemma 3 1B, cross once a run, in the
-//     answer's own call (WASM.2): the engine's span is valid only during
-//     its callback, so they are copied out of the heap there, by a slice of
-//     a view made at that moment and not kept (WASM.1). One copy, bits
-//     intact: a typed array's slice copies bytes, never values. Slots are
-//     26 pairs in the JSON, so the worker never reckons a layer's place.
+//   - The store, 839,120 words, 3.2 MiB, for Gemma 3 1B, crosses once a
+//     run and once an inspection, in the answer's own call (WASM.2): the
+//     engine's span is valid only during its callback, so it is copied out
+//     of the heap there, by a slice of a view made at that moment and not
+//     kept (WASM.1). One copy, bits intact: a typed array's slice copies
+//     bytes, never values. The slots are 26 × 6 pairs in the JSON, about
+//     4 KB, so the page never reckons a layer's place.
+//   - Whole, not by the slots the page draws: one range and one slice, and
+//     every capture is on the page for whatever reads it next. The cost is
+//     the attention weights, 569,344 words, 2.2 MiB, which nothing on the
+//     page draws yet (the slice plan's omissions): WASM.2's caveat, batch to
+//     the working set, weighed against a crossing that changes again when
+//     something does draw them. Counted, not measured: about 3.2 MiB copied
+//     a run where 702 KiB was.
 //   - Session state at namespace scope, which I.1 cautions against: the
 //     module has one engine, as a page has one, and every function names
 //     what it reads; nothing outside this file sees it.
@@ -113,10 +122,10 @@
 //            answer are stated above; the namespace-scope state is named.
 //   C++ performance guidelines
 //     WASM.1 Size linear memory, and never hold a view across growth: the
-//            neurons are sliced out of a view made in the call that uses
-//            it.
+//            store is sliced out of a view made in the call that uses it.
 //     WASM.2 Batch work across the JS boundary: a phase a crossing; the
-//            neurons ride with the answer, one crossing a run.
+//            store rides with the answer, one crossing a run. Its caveat,
+//            batch to the working set, is weighed above for the weights.
 //     WASM.9 Stream in bounded chunks: one chunk buffer, reused.
 
 #include <emscripten.h>
@@ -147,13 +156,13 @@
 EM_JS_DEPS(frizzle_bindings, "$UTF8ToString");
 EM_JS(void, frizzle_answer, (std::uint32_t request, const char* json),
       { globalThis.frizzleOnAnswer(request, JSON.parse(UTF8ToString(json))); });
-// An answer with a run's neurons: sliced out of a view made now, so the
-// copy is the worker's and survives the heap growing (the header, WASM.1).
-EM_JS(void, frizzle_answer_neurons,
-      (std::uint32_t request, const char* json, const float* neurons,
+// An answer with a run's store: sliced out of a view made now, so the copy
+// is the worker's and survives the heap growing (the header, WASM.1).
+EM_JS(void, frizzle_answer_store,
+      (std::uint32_t request, const char* json, const float* words,
        std::uint32_t count),
       {
-        const first = neurons >> 2;
+        const first = words >> 2;
         globalThis.frizzleOnAnswer(request, JSON.parse(UTF8ToString(json)),
                                    HEAPF32.slice(first, first + count));
       });
@@ -361,18 +370,32 @@ std::string_view name(frizzle::residency::Mapped mapped) {
   return "unknown";
 }
 
+// A slot as the pair [first, width] (the header's frizzle_generate).
+std::string slot_json(const frizzle::capture::Slot& slot) {
+  return "[" + std::to_string(slot.first) + "," + std::to_string(slot.width) +
+         "]";
+}
+
 // The answer's "captures" (the header's frizzle_generate).
 std::string captures_json(const runtime::Captured& captured) {
   switch (captured.status) {
     case runtime::CaptureStatus::Taken: {
-      std::string slots;
-      // Each layer's neurons slot: the region that crosses (the header).
+      std::string layers;
       for (const frizzle::capture::LayerSlots& l : captured.layout->layers) {
-        if (!slots.empty()) slots += ',';
-        slots += "[" + std::to_string(l.neurons.first) + "," +
-                 std::to_string(l.neurons.width) + "]";
+        if (!layers.empty()) layers += ',';
+        layers += "{\"neurons\":" + slot_json(l.neurons) +
+                  ",\"residual\":" + slot_json(l.residual) +
+                  ",\"attentionAdded\":" + slot_json(l.attention_added) +
+                  ",\"mlpAdded\":" + slot_json(l.mlp_added) +
+                  ",\"weights\":" + slot_json(l.weights) +
+                  ",\"stats\":" + slot_json(l.stats) +
+                  ",\"keys\":" + std::to_string(l.keys) +
+                  ",\"queryHeads\":" + std::to_string(l.query_heads) + "}";
       }
-      return "{\"status\":\"taken\",\"slots\":[" + slots + "]}";
+      return "{\"status\":\"taken\",\"words\":" +
+             std::to_string(captured.words.size()) +
+             ",\"position\":" + std::to_string(captured.position) +
+             ",\"layers\":[" + layers + "]}";
     }
     case runtime::CaptureStatus::NotTaken:
       return "{\"status\":\"not-taken\"}";
@@ -410,12 +433,9 @@ void on_end(const runtime::TurnResult& result,
       ",\"captures\":" + captures_json(captured) + "}";
   reply.clear();
   if (captured.status == runtime::CaptureStatus::Taken) {
-    // The store's first region, every layer's neurons; the rest crosses in
-    // slice 4, step 6 (the header).
-    const std::span<const float> neurons =
-        captured.words.first(captured.layout->neuron_words);
-    frizzle_answer_neurons(request, json.c_str(), neurons.data(),
-                           static_cast<std::uint32_t>(neurons.size()));
+    // The whole store, in the answer's call (the header).
+    frizzle_answer_store(request, json.c_str(), captured.words.data(),
+                         static_cast<std::uint32_t>(captured.words.size()));
     return;
   }
   answer(request, json);

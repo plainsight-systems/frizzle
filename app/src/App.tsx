@@ -13,7 +13,7 @@
 //       layer    the workbench (views/deck/), a dialog over the whole
 //                window, opened from the prompt's "Open neurons" or a
 //                reply's "Neurons" button, showing that side's neurons at
-//                the branch point.
+//                the branch point, on the layer deck or the Map.
 //                While it is open the page behind it is inert. Close or Esc
 //                closes it; its Run runs and closes it, so the replies show
 //                as they stream.
@@ -27,7 +27,8 @@
 //     are decimal and whole (shape/numbers.ts).
 //   - Held here, so they last while the workbench is closed and reopened:
 //     the message and seed as typed, the side whose neurons are shown,
-//     the front layer, and the selection: one or more neurons of one layer
+//     the workbench's view, the deck at first (views/deck/Workbench.tsx,
+//     View), the front layer, and the selection: one or more neurons of one layer
 //     (Selection), which is brought to the front when selected. The pins
 //     are the session's.
 //   - The session, and the worker behind it, are made once by main.tsx,
@@ -47,7 +48,7 @@ import { useState, useSyncExternalStore } from "react";
 import type { Edit } from "./engine/edits.ts";
 import type { DeviceState, ModelState, Session } from "./session/session.ts";
 import { megabytes } from "./shape/numbers.ts";
-import { Workbench } from "./views/deck/Workbench.tsx";
+import { type View, Workbench } from "./views/deck/Workbench.tsx";
 import type { Which } from "./views/deck/cards.ts";
 import { parseSeed } from "./views/prompt/fields.ts";
 import { PromptView } from "./views/prompt/PromptView.tsx";
@@ -74,6 +75,7 @@ export function App({ session }: { readonly session: Session }) {
   const [seedText, setSeedText] = useState("1");
   const [open, setOpen] = useState(false);
   const [which, setWhich] = useState<Which>("reply");
+  const [view, setView] = useState<View>("deck");
   const [front, setFront] = useState(0);
   const [selection, setSelection] = useState<Selection | null>(null);
   const { device, model } = state;
@@ -145,6 +147,8 @@ export function App({ session }: { readonly session: Session }) {
           onFront={setFront}
           selection={selection}
           onSelect={select}
+          view={view}
+          onView={setView}
         />
       )}
     </div>

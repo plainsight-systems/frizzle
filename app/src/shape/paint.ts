@@ -28,6 +28,9 @@
 //     Infinities and NaNs never enter fullAt.
 //   - palette.heat is at least two colours, evenly spaced from no push to
 //     full; fewer throws a RangeError.
+//   - scaleOf(values): fullAt's rule above, for any values; exported so the
+//     Map's column scale (shape/strip.ts, scaleAcross) is this rule, not a
+//     copy of it.
 //   - heatOf(v, fullAt, palette): the colour paint gives a neuron of value v
 //     in a slot whose scale is fullAt, by the rules above.
 //   - overlay(painted, grid, cells, palette): a copy of painted.pixels with
@@ -139,7 +142,7 @@ export function overlay(
 }
 
 // The header's Algorithm, step 1.
-function scaleOf(values: Float32Array): number {
+export function scaleOf(values: Float32Array): number {
   const magnitudes = Float32Array.from(
     values.filter((v) => Number.isFinite(v)),
     Math.abs,

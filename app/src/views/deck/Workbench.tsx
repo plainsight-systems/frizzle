@@ -1,29 +1,36 @@
 // Axis H (view): the MLP workbench, a layer over the whole window: a bar
-// with the prompt, the branch point, the pins and Run; under it the layer
-// deck and the inspector beside it, over one side's neurons at the branch
-// point, one front layer and one selected neuron (docs/design/concepts/deck.html, the reviewed concept).
+// with the prompt, the branch point, the view, the pins and Run; under it
+// the layer deck or the Map, and the inspector beside either, over one
+// side's captures at the branch point, one front layer and one selected
+// neuron (docs/design/concepts/deck.html, the reviewed concept; the Map
+// from docs/design/concepts/explore.html).
 //
 // Contract
 //   - Workbench({session, state, message, canRun, onRun, onClose, which,
-//     onWhich, front, onFront, selection, onSelect}): a dialog "Neuron
+//     onWhich, front, onFront, selection, onSelect, view, onView}): a dialog "Neuron
 //     workbench", modal. When it opens, the focus goes to the deck's cards
 //     when there are any, so the wheel and the keys work on them without a
 //     click first (a click there would pick a neuron); otherwise to the
-//     dialog.
+//     dialog. A deck the view switch mounts leaves the focus on the switch.
 //   - The bar: the prompt it works on (the run's message, or the message
-//     typed when there is no run yet) › "MLP neurons" and where: "at the
+//     typed when there is no run yet) › "MLP neurons" on the deck, "Every
+//     layer" on the Map, and where: "at the
 //     reply's start" (point 0) or "after “{word}”", the word the point
 //     falls in up to the point (session/branch.ts, beforePoint), trimmed;
-//     the pins held, as
+//     a group "View" of two radios, "Deck" and "Map", `view` chosen
+//     (onView); the pins held, as
 //     chips (PinChips.tsx: showing one selects its neurons here); button "Run"
 //     (onRun, which also closes the workbench); button "Close", and Esc,
 //     which close it without running (onClose). No Stop here: Stop is
 //     beside the prompt's Run (PromptView.tsx), reached once this closes.
-//   - The deck (Deck.tsx) and the inspector (Inspector.tsx), on the side
+//   - The deck (Deck.tsx), or the Map (LayerMap.tsx) when `view` is
+//     "map", and the inspector (Inspector.tsx) beside it, on the side
 //     `which` (cards.ts, neuronsOf), or the reply's while the run has no
 //     steered reply (none yet, or one just accepted), whose radio is then
-//     disabled, the front layer `front`, the neurons in `selection`; all
-//     three are the frame's (App.tsx), so they last between visits.
+//     disabled, the front layer `front`, the neurons in `selection`; these
+//     three and the view are the frame's (App.tsx), so they last between
+//     visits. The Map is given the same captures and front layer as the
+//     deck, and selects as the deck does, so switching keeps the place.
 //     Selecting brings the selection's layer to the front (onSelect does
 //     both).
 //   - Pinning is the session's (session.pin, session.unpin): what is pinned
@@ -35,9 +42,11 @@
 //     the deck shows, with what the pins will send (cards.ts, facesOf),
 //     each time the pins change too.
 //   - Mounted only while open: the deck's WebGL context and textures exist
-//     only then.
+//     only then. The deck and the Map are mounted one at a time, so the
+//     Map holds no WebGL context, and opening on the Map gives the focus to
+//     the dialog.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Selection } from "../../App.tsx";
 import { beforePoint } from "../../session/branch.ts";
@@ -45,7 +54,11 @@ import type { Run, Session, SessionState } from "../../session/session.ts";
 import { PinChips } from "../prompt/PinChips.tsx";
 import { Deck } from "./Deck.tsx";
 import { Inspector } from "./Inspector.tsx";
+import { LayerMap } from "./LayerMap.tsx";
 import { type Which, cardsOf, facesOf, neuronsOf } from "./cards.ts";
+
+// Which view the workbench shows beside the inspector.
+export type View = "deck" | "map";
 
 export function Workbench(props: {
   readonly session: Session;
@@ -60,15 +73,19 @@ export function Workbench(props: {
   readonly onFront: (layer: number) => void;
   readonly selection: Selection | null;
   readonly onSelect: (chosen: Selection) => void;
+  readonly view: View;
+  readonly onView: (view: View) => void;
 }) {
   const { session, state, message, canRun, onRun, onClose } = props;
-  const { onWhich, front, onFront, selection, onSelect } = props;
+  const { onWhich, front, onFront, selection, onSelect, view, onView } = props;
   // The steered side exists only with a steered reply.
   const which: Which =
     props.which === "steered" && (state.run?.branch ?? null) === null
       ? "reply"
       : props.which;
   const dialog = useRef<HTMLDivElement>(null);
+  // Once the view switch is used, a deck it mounts leaves the focus there.
+  const [switched, setSwitched] = useState(false);
   const neurons = neuronsOf(state.run, which);
   const captures = neurons.kind === "taken" ? neurons.captures : null;
   const cards = useMemo(
@@ -113,8 +130,29 @@ export function Workbench(props: {
         </button>
         <p className="prompt-summary">
           <span>{prompt === "" ? "No prompt yet" : `“${prompt}”`}</span>
-          <span className="muted"> › MLP neurons {pointText(state.run)}</span>
+          <span className="muted">
+            {" "}
+            › {view === "map" ? "Every layer" : "MLP neurons"}{" "}
+            {pointText(state.run)}
+          </span>
         </p>
+        <fieldset className="segmented view-switch">
+          <legend>View</legend>
+          {(["deck", "map"] as const).map((v) => (
+            <label key={v} className={view === v ? "on" : undefined}>
+              <input
+                type="radio"
+                name="workbench-view"
+                checked={view === v}
+                onChange={() => {
+                  setSwitched(true);
+                  onView(v);
+                }}
+              />
+              {v === "deck" ? "Deck" : "Map"}
+            </label>
+          ))}
+        </fieldset>
         <PinChips session={session} pins={state.pins} onPick={onSelect} />
         <button
           type="button"
@@ -126,18 +164,28 @@ export function Workbench(props: {
         </button>
       </header>
       <div className="workbench-body">
-        <Deck
-          neurons={neurons}
-          cards={cards}
-          faces={faces}
-          previewing={which === "reply"}
-          layer={layer}
-          onLayer={onFront}
-          pins={state.pins}
-          selection={selection}
-          onSelect={onSelect}
-          autoFocus
-        />
+        {view === "map" ? (
+          <LayerMap
+            neurons={neurons}
+            pins={state.pins}
+            layer={layer}
+            onLayer={onFront}
+            onSelect={onSelect}
+          />
+        ) : (
+          <Deck
+            neurons={neurons}
+            cards={cards}
+            faces={faces}
+            previewing={which === "reply"}
+            layer={layer}
+            onLayer={onFront}
+            pins={state.pins}
+            selection={selection}
+            onSelect={onSelect}
+            autoFocus={!switched}
+          />
+        )}
         <Inspector
           session={session}
           state={state}

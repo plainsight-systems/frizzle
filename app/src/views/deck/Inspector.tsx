@@ -1,5 +1,5 @@
 // Axis H (view): the inspector, the workbench's right column. Which
-// side's neurons the deck shows, at the branch point; the strongest
+// side's neurons the deck or the Map shows, at the branch point; the strongest
 // neurons in the front layer; the selection: one neuron, with its value in
 // the reply and the steered reply, or
 // many, with how many are pinned; Set, Scale × and Zero for what is

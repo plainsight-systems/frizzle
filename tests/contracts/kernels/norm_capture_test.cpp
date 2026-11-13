@@ -17,8 +17,9 @@
 //     every ported kernel (tests/README.md).
 //   - That the graph gives each norm the right layer's slots, so the store
 //     holds layer l's residual where layout() says: no test names it on
-//     its own; the replay scenario's inspection compares whole stores, and
-//     these captures do not cross to the page.
+//     its own; the replay scenario's inspection compares whole stores.
+//     They cross to the page with the store (wasm/bindings.cpp), but no
+//     end-to-end test reads them there.
 //   - The identity "X before plus y is X written" holds where the target's
 //     compiler does not fuse the post-norm's last multiply into the add;
 //     WGSL does not say it may not. Checked here on the target, as the
