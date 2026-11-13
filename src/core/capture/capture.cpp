@@ -61,9 +61,12 @@ Layout layout(const model::ModelDescription& model) {
     LayerSlots& s = out.layers[i];
     s.keys = std::min(l.attention_window, model.trained_context);
     s.query_heads = l.query_heads;
+    s.window = l.attention_window;
+    s.full_attention = l.attention_window >= model.trained_context;
     s.residual = take(width);
     s.attention_added = take(width);
     s.mlp_added = take(width);
+    s.query = take(std::uint64_t{l.query_heads} * l.head_dimension);
     s.weights = take(std::uint64_t{l.query_heads} * s.keys);
     s.stats = take(std::uint64_t{l.query_heads} * 2);
   }

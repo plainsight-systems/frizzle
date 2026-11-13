@@ -185,6 +185,14 @@ std::uint32_t Generator::cached() const noexcept {
   return state_->runtime ? state_->runtime->cached() : 0;
 }
 
+std::span<const tokenizer::TokenId> Generator::input() const noexcept {
+  return state_->tokens;
+}
+
+const tokenizer::Tokenizer& Generator::tokenizer() const noexcept {
+  return *state_->tokenizer;
+}
+
 #if FRIZZLE_DIAGNOSTICS_ENABLED
 bool Generator::observe_steps(StepObserver observer, void* userdata) noexcept {
   return state_->runtime && state_->runtime->observe_steps(observer, userdata);

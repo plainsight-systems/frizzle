@@ -39,6 +39,8 @@
 #include "core/runtime/runtime.h"
 #include "core/runtime/stops.h"
 #include "core/sampler/sampler.h"
+#include "core/tokenizer/detokenizer.h"
+#include "core/tokenizer/tokenizer.h"
 #include "core/tokenizer/vocabulary.h"
 
 namespace frizzle::runtime {
@@ -104,6 +106,11 @@ struct GenerateCall {
   TurnResult result{};
   std::string message;
   std::string tail;
+  // The input's types and texts, built once the store is read, held until
+  // the callback returns (engine.h, Captured).
+  std::vector<tokenizer::TokenType> input_types;
+  std::string text_pool;
+  std::vector<std::uint32_t> text_offsets;
 };
 
 // --- Names, for refusals and failures ------------------------------------
@@ -417,6 +424,23 @@ void on_captures_read(residency::Mapped outcome, std::span<const float> words,
     // The step that ends the prompt's last row: the prompt's last position
     // (a turn's prompt is never empty, runtime.h).
     captured.position = call->result.prompt - 1;
+    // The input up to it: the generator's, the turn's prompt, which no
+    // prepare has replaced while the engine runs (engine.h, step 7).
+    const std::span<const tokenizer::TokenId> whole = s.generator->input();
+    if (whole.size() != call->result.prompt) {
+      std::abort();  // the turn's prompt is the prepared input: broken
+    }
+    const std::span<const tokenizer::TokenId> input = whole;
+    const tokenizer::Tokenizer& tokenizer = s.generator->tokenizer();
+    call->input_types.reserve(input.size());
+    for (const tokenizer::TokenId token : input) {
+      call->input_types.push_back(tokenizer.vocabulary().type(token));
+    }
+    tokenizer::texts(tokenizer, input, call->text_pool, call->text_offsets);
+    captured.input = input;
+    captured.input_types = call->input_types;
+    captured.text_pool = call->text_pool;
+    captured.text_offsets = call->text_offsets;
   }
   call->result.message = call->message;
   call->result.tail = call->tail;

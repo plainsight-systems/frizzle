@@ -2,7 +2,11 @@
 //
 // Contract locked: text tokenizes to the reference token IDs for Gemma 3's
 // vocabulary, and the IDs decode back to the same text, whole and a token at
-// a time through the stream the generator uses.
+// a time through the stream the generator uses. A turn's input as text
+// (detokenizer.h, texts): one text a token in one pool, n + 1 offsets from
+// the pool's size before, each token's text the characters the stream
+// gives it, so whole characters, and the texts joined the case's text; an
+// empty input appends nothing and gives one offset.
 //
 // Inputs, both committed, so the suite needs no model:
 // tests/fixtures/tokenizer/gemma-3-1b-it-q4_0.gguf, the pinned model's
@@ -35,6 +39,7 @@
 #include "core/gguf/byte_source.h"
 #include "core/gguf/index.h"
 #include "core/gguf/reader.h"
+#include "core/tokenizer/detokenizer.h"
 #include "core/tokenizer/unicode.h"
 #include "core/tokenizer/vocabulary.h"
 #include "support/files.h"
@@ -145,4 +150,54 @@ TEST_CASE("Gemma 3 decodes every reference's token IDs back to its text") {
     CHECK(whole == expected);
     CHECK(streamed == expected);
   }
+}
+
+TEST_CASE(
+    "a turn's input as text: one pool, a text a token, as the stream gives "
+    "it") {
+  const std::unique_ptr<Tokenizer> tokenizer = gemma();
+  for (const EncodeCase& c : kCases) {
+    CAPTURE(c.name);
+    std::vector<TokenId> tokens;
+    tokens.reserve(c.ids.size());
+    for (const std::uint32_t id : c.ids) {
+      tokens.push_back(static_cast<TokenId>(id));
+    }
+    // The pool keeps what it held: the texts go after it.
+    const std::string before = "kept";
+    std::string pool = before;
+    std::vector<std::uint32_t> offsets = {7, 7, 7};  // replaced, not added to
+    frizzle::tokenizer::texts(*tokenizer, tokens, pool, offsets);
+    REQUIRE(offsets.size() == tokens.size() + 1);
+    CHECK(offsets.front() == before.size());
+    CHECK(offsets.back() == pool.size());
+    CHECK(pool.substr(0, before.size()) == before);
+    // Each token's text is what a stream from empty gives it, in order, the
+    // last's with what finishing adds.
+    frizzle::tokenizer::Utf8Stream stream;
+    for (std::size_t i = 0; i < tokens.size(); ++i) {
+      CAPTURE(i);
+      REQUIRE(offsets[i] <= offsets[i + 1]);
+      std::string bytes;
+      tokenizer->decode(tokens[i], bytes);
+      std::string expected;
+      stream.push(bytes, expected);
+      if (i + 1 == tokens.size()) (void)stream.finish(expected);
+      const std::string_view text = std::string_view(pool).substr(
+          offsets[i], offsets[i + 1] - offsets[i]);
+      CHECK(text == expected);
+      CHECK(well_formed(text));
+    }
+    CHECK(pool.substr(before.size()) == decoded_text(c.text));
+  }
+}
+
+TEST_CASE("an empty input appends nothing and gives one offset") {
+  const std::unique_ptr<Tokenizer> tokenizer = gemma();
+  std::string pool = "kept";
+  std::vector<std::uint32_t> offsets = {1, 2};
+  frizzle::tokenizer::texts(*tokenizer, {}, pool, offsets);
+  CHECK(pool == "kept");
+  REQUIRE(offsets.size() == 1);
+  CHECK(offsets.front() == 4);
 }

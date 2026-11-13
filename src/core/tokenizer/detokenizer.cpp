@@ -6,6 +6,10 @@
 #include "core/tokenizer/detokenizer.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "core/tokenizer/vocabulary.h"
 
@@ -36,6 +40,24 @@ std::string_view Detokenizer::finish() {
   text_.clear();
   (void)stream_.finish(text_);
   return text_;
+}
+
+void texts(const Tokenizer& tokenizer, std::span<const TokenId> tokens,
+           std::string& pool, std::vector<std::uint32_t>& offsets) {
+  offsets.clear();
+  offsets.reserve(tokens.size() + 1);
+  offsets.push_back(static_cast<std::uint32_t>(pool.size()));
+  Utf8Stream stream;
+  std::string bytes;
+  for (const TokenId token : tokens) {
+    bytes.clear();
+    tokenizer.decode(token, bytes);
+    stream.push(bytes, pool);
+    offsets.push_back(static_cast<std::uint32_t>(pool.size()));
+  }
+  // What finishing gives (U+FFFD for pending bytes) is the last token's.
+  (void)stream.finish(pool);
+  offsets.back() = static_cast<std::uint32_t>(pool.size());
 }
 
 }  // namespace frizzle::tokenizer

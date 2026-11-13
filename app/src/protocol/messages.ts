@@ -33,8 +33,12 @@
 //                  edits in force there, as the engine read it back
 //                  (runtime/engine.h, capture/capture.h): every layer's
 //                  neurons, residual coming in, what attention and the MLP
-//                  added, attention weights and their statistics. They
-//                  come once, with the answer, never on their own.
+//                  added, Q as attention read it, attention weights and
+//                  their statistics, and the layer's attention window and
+//                  kind; with them the input those captures read, a token
+//                  a position up to the captures', each its identifier,
+//                  type and text. They come once, with the answer, never
+//                  on their own.
 //       cancel     {target}: end the request `target` early: a load while
 //                  it downloads (once it streams into the engine it runs to
 //                  its end), a generation running, or either not yet
@@ -44,7 +48,7 @@
 //
 // Design
 //   - Plain data only, so a message is structured-cloned unchanged. The one
-//     typed array, a run's store (839,120 words, 3.2 MiB, for Gemma 3 1B),
+//     typed array, a run's store (865,744 words, 3.3 MiB, for Gemma 3 1B),
 //     is transferred, not copied: the worker made it for this message and
 //     keeps no hold on it (worker.ts).
 //   - The page reads every value by the slots the module sent, never by a
@@ -109,10 +113,33 @@ export interface LayerSlots {
   readonly residual: Slot; // embedding width, coming into the layer
   readonly attentionAdded: Slot; // embedding width
   readonly mlpAdded: Slot; // embedding width
+  readonly query: Slot; // queryHeads × head dimension; head h at h × d
   readonly weights: Slot; // queryHeads × keys; head h, key i at h × keys + i
   readonly stats: Slot; // queryHeads × 2; head h's maximum at 2h, sum 2h + 1
   readonly keys: number;
   readonly queryHeads: number;
+  readonly window: number; // the layer's attention window, in tokens
+  readonly full: boolean; // full attention: the window spans the trained context
+}
+
+// A token's type, as the vocabulary names it (tokenizer/vocabulary.h).
+export type TokenType =
+  | "normal"
+  | "unknown"
+  | "control"
+  | "user-defined"
+  | "unused"
+  | "byte"
+  | "undefined";
+
+// One token of the input the captures read (runtime/engine.h, Captured):
+// its text the characters it completes, "" for a token that only begins a
+// character; a control token's text is the template's spelling of it,
+// which the page never shows as text (its type says so).
+export interface InputToken {
+  readonly id: number;
+  readonly type: TokenType;
+  readonly text: string;
 }
 
 // A run's captures, as the engine gave them (runtime/engine.h, Captured).
@@ -127,6 +154,9 @@ export type Captures =
       // keys back from: key i is at position − min(position + 1, keys) + 1
       // + i (capture/weights.h).
       readonly position: number;
+      // The input up to `position`, position + 1 tokens, in order; the
+      // token at a key's position is input[position].
+      readonly input: readonly InputToken[];
     }
   | { readonly kind: "not-taken" } // the turn was cancelled
   | { readonly kind: "unread"; readonly reason: string }; // the read back failed

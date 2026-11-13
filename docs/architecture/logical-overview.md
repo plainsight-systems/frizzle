@@ -133,6 +133,7 @@ flowchart TD
   X(["◉ residual, the last row of X<br/>written by the norm"])
   QKV["Q, K, V matmul"]
   R["QK-norm, RoPE,<br/>cache write"]
+  Q(["◉ Q, after QK-norm and RoPE<br/>copied"])
   A["Attention"]
   AW(["◉ scores, maximum and sum<br/>written by attention;<br/>the weights launch turns them into weights"])
   O["Out projection<br/>post-norm, add into X,<br/>FFN norm"]
@@ -140,7 +141,7 @@ flowchart TD
   GU["Gate · up matmul<br/>writes the neurons"]
   E(["✎ neurons<br/>then ◉ neurons, copied"])
   D["Down projection<br/>added into X by the next layer's norm<br/>(the last layer's by the final norm)"]
-  N1 --> MA --> X --> QKV --> R --> A --> AW --> O --> AA --> GU --> E --> D
+  N1 --> MA --> X --> QKV --> R --> Q --> A --> AW --> O --> AA --> GU --> E --> D
 ```
 
 Each capture is written at its point into the capture store, a slot per
@@ -150,6 +151,7 @@ from is reused (`capture/capture.h`).
 | Captured value | Written by | Why there |
 | --- | --- | --- |
 | Neurons | A copy launch of its own, after the edit | An edited stage is captured after its edit: the screen shows what the model used |
+| Q, after QK-norm and RoPE | The same copy launch, after rope | It is the Q attention dots with each key; the rope launch overwrites the projection in place |
 | Residual, what each block adds | The norm kernel | The added vector exists only in its registers |
 | Attention scores, maximum and sum | The attention kernel, for the last row | Only it has the scores |
 | Attention weights | A launch after attention (`capture/weights.h`) | The raw scores, in log2 units, cannot be read; the weights differ from the factors the model applied by rounding only |
@@ -163,13 +165,17 @@ outputs, on the GPU in the same step, from the attention kernel's scores.
 | Residual, 1,152 | 4.5 KiB |
 | What the attention adds, 1,152 | 4.5 KiB |
 | What the feed-forward adds, 1,152 | 4.5 KiB |
+| Q, 4 heads × 256 | 4 KiB |
 | Attention weights, 4 heads × keys | 8 KiB for a 512-key window; 512 KiB for a global layer, sized to the trained 32,768 |
 | Each head's softmax maximum and sum | 32 B |
-| **The store, 26 layers** | **3.2 MiB, 2 MiB of it the 4 global layers' weights** |
+| **The store, 26 layers** | **3.3 MiB, 2 MiB of it the 4 global layers' weights** |
 
 That is a small fraction of one decode step's reads, the 722 MB of weights.
 The unedited values are the store from the run without edits, which the app
-keeps.
+keeps. With the store, the engine reports each layer's attention window and
+whether it is full attention, and the input the captures read: every token
+up to the captured position, its identifier, type and text, so the page can
+name the token each attention weight is on.
 
 ## Edits
 
@@ -207,7 +213,7 @@ flowchart TD
   end
   EXIT["ffn.edit holds the pins;<br/>ffn.capture reads fed, stops"]
   END{"how the turn ended"}
-  READ["Reader::read<br/>one copy, one mapping, 3.2 MiB"]
+  READ["Reader::read<br/>one copy, one mapping, 3.3 MiB"]
   T(["on_end: reply's end + Taken captures"])
   N(["on_end: reply's end + NotTaken"])
   U(["on_end: reply's end + Unread, why"])
@@ -228,18 +234,18 @@ flowchart TD
   shown an earlier run's captures as this run's.
 - The turn's own result is reported as it was in every case: a capture never
   turns a reply into a failure, or a failure into a reply.
-- Cost, estimated and not measured: 52 dispatches a decode step (the copy's
-  and the weights') that read the step and stop, about 80 µs a token; once a
-  run, 3.2 MiB copied on the GPU and one readback.
+- Cost, estimated and not measured: 78 dispatches a decode step (the two
+  copies' and the weights') that read the step and stop, about 120 µs a
+  token; once a run, 3.3 MiB copied on the GPU and one readback.
 
 How a run's captures reach the page, once a run, with its answer: the whole
-store, with every layer's slots.
+store, with every layer's slots and attention, and the input's tokens.
 
 ```mermaid
 flowchart LR
   S["engine<br/>the store read back<br/>(capture/reader.h)"]
-  B["bindings.cpp<br/>answer JSON with each layer's<br/>six slots and the position;<br/>the store sliced out of the heap,<br/>same call"]
-  E["engine.ts<br/>captures checked:<br/>every slot inside the words,<br/>or fails by name"]
+  B["bindings.cpp<br/>answer JSON with each layer's<br/>seven slots, window and kind,<br/>the position and the input's tokens;<br/>the store sliced out of the heap,<br/>same call"]
+  E["engine.ts<br/>captures checked:<br/>every slot inside the words,<br/>position + 1 tokens,<br/>or fails by name"]
   W["worker.ts<br/>done, the store's<br/>buffer transferred"]
   C["client.ts<br/>passed through<br/>untouched"]
   P["session and page<br/>a value looked up by its slot:<br/>slot.first + index"]
@@ -247,7 +253,7 @@ flowchart LR
 ```
 
 One copy in all, out of the module's memory: the worker hands the buffer to
-the page, and the page reads it where it lies. The whole store, 3.2 MiB for
+the page, and the page reads it where it lies. The whole store, 3.3 MiB for
 Gemma 3 1B, crosses on every run and inspection, so switching layers or views
 needs no request. The page reads values only by the slots the module sent;
 the layout is the engine's.

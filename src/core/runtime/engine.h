@@ -15,6 +15,8 @@
 #include "core/policy/policy.h"
 #include "core/residency/mapping.h"
 #include "core/runtime/generator.h"
+#include "core/tokenizer/tokenizer.h"
+#include "core/tokenizer/vocabulary.h"
 
 namespace frizzle::runtime {
 
@@ -86,12 +88,18 @@ namespace frizzle::runtime {
 //       position, with the edits in force there (capture/capture.h): its
 //       neurons after the edits, the residual coming into it, what its
 //       attention and feed-forward blocks added, and its attention weights
-//       and their statistics. With them, the store's layout and the
-//       position, which the weights count their keys back from. Or why
-//       there are none:
+//       and their statistics, and Q as attention read it. With them, the
+//       store's layout (each layer's window and kind among it), the
+//       position, which the weights count their keys back from, and the
+//       input: every token the turn read up to that position, position + 1
+//       of them, the text's then the kept ones, each its identifier, its
+//       type (tokenizer/vocabulary.h) and its text (tokenizer/
+//       detokenizer.h, texts), so a host can name the token a weight is on.
+//       Or why there are none:
 //         - Taken: the turn ended Stop, Limit or Context, so its step that
 //           ends the prompt ran, and the store was read back whole; the
-//           words are this run's, valid only during the call.
+//           words and the input are this run's, valid only during the
+//           call.
 //         - NotTaken: the turn was Cancelled or failed. The step that ends
 //           the prompt may not have run, so the store may still hold an
 //           earlier run's captures; it is not read, and nothing is reported.
@@ -173,10 +181,14 @@ namespace frizzle::runtime {
 //   6. Stream each emitted token. When the turn ends with the cache
 //      emptied, drop the held edits with it.
 //   7. If it ended Stop, Limit or Context, read the capture store back
-//      (Reader::read), after every step the turn submitted. Then call back
-//      once with how it ended and what was captured. The engine stays
-//      running until then, so no turn starts while the store is read, and
-//      the turn's message and tail are copied to outlive the read.
+//      (Reader::read), after every step the turn submitted. Once it is read,
+//      the input: the generator's (generator.h, input), the turn's prompt,
+//      each token's type from the vocabulary and the texts in one pool
+//      (tokenizer/detokenizer.h, texts), held by the call until its
+//      callback returns. Then call back once with how it ended and what was
+//      captured. The engine stays running until then, so no turn starts
+//      while the store is read and no prepare replaces the input, and the
+//      turn's message and tail are copied to outlive the read.
 //
 // Design and cost
 //   - The engine makes the composition once, as a class every host shares,
@@ -220,8 +232,10 @@ namespace frizzle::runtime {
 //     queue write (GPU.1): nothing a token. The edit kernel and the capture
 //     launch run in every scoring step (edit/edit_kernel.h,
 //     capture/capture.h). A run that ends Stop, Limit or Context adds one
-//     read back of the store, 3.2 MiB for Gemma 3 1B, before its end is
-//     reported (capture/reader.h).
+//     read back of the store, 3.3 MiB for Gemma 3 1B, before its end is
+//     reported (capture/reader.h), and its input's types and texts: a pass
+//     over the input, its texts in one pool (tokenizer/detokenizer.h), a
+//     few bytes a token, up to the context offered, once a run.
 //   - Captures cross with the result, not in a call of their own: a host
 //     gets them exactly once, with the run they belong to, and never asks
 //     for "the last run's" (logical-overview.md, invariant 5).
@@ -325,6 +339,14 @@ struct Captured {
   const capture::Layout* layout = nullptr;
   std::span<const float> words;
   std::uint32_t position = 0;
+  // For Taken: the input up to `position`, position + 1 tokens (generate,
+  // above), valid only during the callback, and only until the callback
+  // calls generate, whose prepare replaces the input `input` views. Token
+  // i's text is text_pool[text_offsets[i], text_offsets[i + 1]).
+  std::span<const tokenizer::TokenId> input;
+  std::span<const tokenizer::TokenType> input_types;
+  std::string_view text_pool;
+  std::span<const std::uint32_t> text_offsets;  // input.size() + 1
 };
 
 using RunEndCallback = void (*)(const TurnResult& result,

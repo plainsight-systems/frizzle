@@ -56,12 +56,18 @@
 //     and "captures" is
 //     the engine's Captured (runtime/engine.h), as it gave it:
 //       {"status": "taken", "words", "position", "layers": [{"neurons",
-//         "residual", "attentionAdded", "mlpAdded", "weights", "stats",
-//         "keys", "queryHeads"}, ...]}: one object a layer, in layer order,
+//         "residual", "attentionAdded", "mlpAdded", "query", "weights",
+//         "stats", "keys", "queryHeads", "window", "full"}, ...], "input":
+//         [[id, "type", "text"], ...]}: one object a layer, in layer order,
 //         each slot a pair [first, width] in 32-bit words, exactly
-//         capture::layout()'s (capture/capture.h); "words" the store's
-//         size; "position" the input's last position, which the weights
-//         count their keys back from. The store itself crosses whole in the
+//         capture::layout()'s (capture/capture.h), "window" its attention
+//         window in tokens and "full" true or false, whether it is full
+//         attention; "words" the store's size; "position" the input's last
+//         position, which the weights count their keys back from; "input"
+//         position + 1 tokens, in order, each its identifier, its type
+//         ("normal", "unknown", "control", "user-defined", "unused", "byte"
+//         or "undefined", vocabulary.h's) and its text (runtime/engine.h,
+//         Captured), escaped. The store itself crosses whole in the
 //         same call as the answer: frizzleOnAnswer(request, answer, words),
 //         `words` a Float32Array of every word of the store, bit for bit;
 //       {"status": "not-taken"}: the turn was cancelled, so there are none;
@@ -96,19 +102,24 @@
 //     token but its text and identifier. The reply's identifiers in the
 //     answer, about six bytes a token in JSON: a 4,000-token reply is about
 //     24 KB, once.
-//   - The store, 839,120 words, 3.2 MiB, for Gemma 3 1B, crosses once a
+//   - The store, 865,744 words, 3.3 MiB, for Gemma 3 1B, crosses once a
 //     run and once an inspection, in the answer's own call (WASM.2): the
 //     engine's span is valid only during its callback, so it is copied out
 //     of the heap there, by a slice of a view made at that moment and not
 //     kept (WASM.1). One copy, bits intact: a typed array's slice copies
-//     bytes, never values. The slots are 26 × 6 pairs in the JSON, about
-//     4 KB, so the page never reckons a layer's place.
+//     bytes, never values. The slots are 26 × 7 pairs in the JSON, about
+//     5 KB, so the page never reckons a layer's place.
+//   - The input in the same JSON, a triple a token: about 20 bytes a token
+//     for ordinary text, 60 KB for a 3,000-token conversation, and at the
+//     context offered, 32,768 tokens, under 1 MB, once a run. Each text
+//     goes through quoted(), which escapes the template's newlines and
+//     every other control character.
 //   - Whole, not by the slots the page draws: one range and one slice, and
 //     every capture is on the page for whatever reads it next. The cost is
 //     the attention weights, 569,344 words, 2.2 MiB, which nothing on the
 //     page draws yet (the slice plan's omissions): WASM.2's caveat, batch to
 //     the working set, weighed against a crossing that changes again when
-//     something does draw them. Counted, not measured: about 3.2 MiB copied
+//     something does draw them. Counted, not measured: about 3.3 MiB copied
 //     a run where 702 KiB was.
 //   - Session state at namespace scope, which I.1 cautions against: the
 //     module has one engine, as a page has one, and every function names
@@ -151,6 +162,7 @@
 #include "core/residency/mapping.h"
 #include "core/runtime/engine.h"
 #include "core/runtime/runtime.h"
+#include "core/tokenizer/vocabulary.h"
 
 // Answers and text, to the worker (app/src/worker/engine/engine.ts).
 EM_JS_DEPS(frizzle_bindings, "$UTF8ToString");
@@ -376,6 +388,41 @@ std::string slot_json(const frizzle::capture::Slot& slot) {
          "]";
 }
 
+// A token's type as the answer names it (the header's frizzle_generate).
+std::string_view name(frizzle::tokenizer::TokenType type) noexcept {
+  switch (type) {
+    case frizzle::tokenizer::TokenType::Normal:
+      return "normal";
+    case frizzle::tokenizer::TokenType::Unknown:
+      return "unknown";
+    case frizzle::tokenizer::TokenType::Control:
+      return "control";
+    case frizzle::tokenizer::TokenType::UserDefined:
+      return "user-defined";
+    case frizzle::tokenizer::TokenType::Unused:
+      return "unused";
+    case frizzle::tokenizer::TokenType::Byte:
+      return "byte";
+    case frizzle::tokenizer::TokenType::Undefined:
+      return "undefined";
+  }
+  return "undefined";
+}
+
+// The captures' "input": a triple a token, [id, "type", "text"].
+std::string input_json(const runtime::Captured& captured) {
+  std::string out = "[";
+  for (std::size_t i = 0; i < captured.input.size(); ++i) {
+    if (i > 0) out += ',';
+    const std::uint32_t from = captured.text_offsets[i];
+    const std::uint32_t to = captured.text_offsets[i + 1];
+    out += "[" + std::to_string(static_cast<std::uint32_t>(captured.input[i])) +
+           "," + quoted(name(captured.input_types[i])) + "," +
+           quoted(captured.text_pool.substr(from, to - from)) + "]";
+  }
+  return out + "]";
+}
+
 // The answer's "captures" (the header's frizzle_generate).
 std::string captures_json(const runtime::Captured& captured) {
   switch (captured.status) {
@@ -387,15 +434,19 @@ std::string captures_json(const runtime::Captured& captured) {
                   ",\"residual\":" + slot_json(l.residual) +
                   ",\"attentionAdded\":" + slot_json(l.attention_added) +
                   ",\"mlpAdded\":" + slot_json(l.mlp_added) +
+                  ",\"query\":" + slot_json(l.query) +
                   ",\"weights\":" + slot_json(l.weights) +
                   ",\"stats\":" + slot_json(l.stats) +
                   ",\"keys\":" + std::to_string(l.keys) +
-                  ",\"queryHeads\":" + std::to_string(l.query_heads) + "}";
+                  ",\"queryHeads\":" + std::to_string(l.query_heads) +
+                  ",\"window\":" + std::to_string(l.window) +
+                  ",\"full\":" + (l.full_attention ? "true" : "false") + "}";
       }
       return "{\"status\":\"taken\",\"words\":" +
              std::to_string(captured.words.size()) +
              ",\"position\":" + std::to_string(captured.position) +
-             ",\"layers\":[" + layers + "]}";
+             ",\"layers\":[" + layers + "],\"input\":" + input_json(captured) +
+             "}";
     }
     case runtime::CaptureStatus::NotTaken:
       return "{\"status\":\"not-taken\"}";

@@ -186,6 +186,16 @@ class Generator {
   // The positions the cache holds (runtime.h); 0 once destroyed.
   [[nodiscard]] std::uint32_t cached() const noexcept;
 
+  // The input the last prepare made, the text's tokens then the kept ones,
+  // valid until the next prepare; through the turn it started and its end,
+  // the turn's prompt, position for position (runtime.h). Empty before any.
+  // A refused prepare may leave it empty or as it was, so it is the turn's
+  // prompt only from a successful prepare until the next prepare.
+  [[nodiscard]] std::span<const tokenizer::TokenId> input() const noexcept;
+
+  // The model's tokenizer, alive while the generator is.
+  [[nodiscard]] const tokenizer::Tokenizer& tokenizer() const noexcept;
+
 #if FRIZZLE_DIAGNOSTICS_ENABLED
   // The runtime's step observer (runtime.h): false, changing nothing,
   // while a turn runs.

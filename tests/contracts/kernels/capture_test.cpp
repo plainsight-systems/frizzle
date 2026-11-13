@@ -9,14 +9,19 @@
 // the prompt, and nothing outside its slot in any step. The store is read
 // back through the reader, whose words are the store's bits. layout() puts
 // every layer's neurons first, each layer's after the earlier layers', its
-// own width long; then each layer's residual, two additions, weights and
-// stats in that order, the weights min(window, trained context) keys a
-// head (changed in slice 4, step 5, with the store's contract).
+// own width long; then each layer's residual, two additions, query (query
+// heads × head dimension), weights and stats in that order, the weights
+// min(window, trained context) keys a head; and states each layer's window
+// and whether it is full attention, its window at least the trained
+// context (changed in slice 4, step 5, and slice 5, step 1, with the
+// store's contract). The copy is the one launch the graph uses for both
+// the neurons and Q; only the source differs.
 //
 // What it does not check, and what does:
 //   - That the graph places the launch after the edit launch, so a pinned
-//     neuron is captured as set: the browser scenario's read-back (slice 4,
-//     step 2), which reads each pin's captured value from the page.
+//     neuron is captured as set, and Q's after the rope launch, so Q is
+//     rotated: no test. The browser scenario that read pins back is
+//     dropped, and no test runs the graph and reads a slot.
 //   - That the captured values are the model's: the oracle, indirectly; the
 //     activation the copy reads is the one the down projection reads, whose
 //     logits it compares with llama.cpp's.
@@ -27,13 +32,14 @@
 //     cannot be made to fail a mapping on demand.
 //
 // Inputs, all made here: a 3-layer description of feed-forward widths 200,
-// 136 and 264, an embedding width of 8, 2 query heads, windows 16, 64 and
-// 16 and a trained context of 40, so the middle layer's keys are the
-// trained context's; an activation of 3 rows of layer 1's 136 words; a store of
-// layout()'s 828 words, filled first with a pattern that no activation word
-// shares; a program of one launch, layer 1's, over a plan of those two
-// working buffers. The activation holds a NaN with a payload, both
-// infinities, a negative zero and a subnormal in its last row. No model file.
+// 136 and 264, an embedding width of 8, 2 query heads of dimension 4,
+// windows 16, 64 and 16 and a trained context of 40, so the middle layer's
+// keys are the trained context's and it is full attention; an activation of
+// 3 rows of layer 1's 136 words; a store of layout()'s 852 words, filled first
+// with a pattern that no activation word shares; a program of one launch, layer
+// 1's, over a plan of those two working buffers. The activation holds a NaN
+// with a payload, both infinities, a negative zero and a subnormal in its last
+// row. No model file.
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -92,6 +98,7 @@ frz::model::ModelDescription description() {
     frz::model::LayerDescription layer{};
     layer.feed_forward_width = kWidths.at(l);
     layer.query_heads = 2;
+    layer.head_dimension = 4;
     layer.attention_window = kWindows.at(l);
     model.layers.push_back(layer);
   }
@@ -352,27 +359,39 @@ TEST_CASE("layout puts every layer's neurons first, then each layer's rest") {
   slot(at(2).neurons, 336, 264);
   CHECK(l.neuron_words == 600);
   // Region 2, a layer at a time: residual, the two additions (the
-  // embedding width each), weights (heads × keys), stats (heads × 2).
+  // embedding width each), query (heads × head dimension), weights (heads ×
+  // keys), stats (heads × 2).
   slot(at(0).residual, 600, 8);
   slot(at(0).attention_added, 608, 8);
   slot(at(0).mlp_added, 616, 8);
-  slot(at(0).weights, 624, 32);
-  slot(at(0).stats, 656, 4);
-  slot(at(1).residual, 660, 8);
-  slot(at(1).attention_added, 668, 8);
-  slot(at(1).mlp_added, 676, 8);
-  slot(at(1).weights, 684, 80);  // keys: the trained context's 40, not 64
-  slot(at(1).stats, 764, 4);
-  slot(at(2).residual, 768, 8);
-  slot(at(2).attention_added, 776, 8);
-  slot(at(2).mlp_added, 784, 8);
-  slot(at(2).weights, 792, 32);
-  slot(at(2).stats, 824, 4);
+  slot(at(0).query, 624, 8);
+  slot(at(0).weights, 632, 32);
+  slot(at(0).stats, 664, 4);
+  slot(at(1).residual, 668, 8);
+  slot(at(1).attention_added, 676, 8);
+  slot(at(1).mlp_added, 684, 8);
+  slot(at(1).query, 692, 8);
+  slot(at(1).weights, 700, 80);  // keys: the trained context's 40, not 64
+  slot(at(1).stats, 780, 4);
+  slot(at(2).residual, 784, 8);
+  slot(at(2).attention_added, 792, 8);
+  slot(at(2).mlp_added, 800, 8);
+  slot(at(2).query, 808, 8);
+  slot(at(2).weights, 816, 32);
+  slot(at(2).stats, 848, 4);
   CHECK(at(0).keys == 16);
   CHECK(at(1).keys == 40);
   CHECK(at(2).keys == 16);
   CHECK(at(1).query_heads == 2);
-  CHECK(l.words == 828);
+  // Each layer's attention as its record states it: the middle layer's
+  // window of 64 spans the trained context, so it reads back to position 0.
+  CHECK(at(0).window == 16);
+  CHECK(at(1).window == 64);
+  CHECK(at(2).window == 16);
+  CHECK_FALSE(at(0).full_attention);
+  CHECK(at(1).full_attention);
+  CHECK_FALSE(at(2).full_attention);
+  CHECK(l.words == 852);
 }
 
 TEST_CASE("a prefill step that ends the prompt copies its last row") {

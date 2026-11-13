@@ -45,11 +45,11 @@
 //   - One copy and one mapping a run, after the turn (GPU.1): the store is
 //     final output, read once, never inside the step loop. Its cost is
 //     a readback's fixed wait, about 0.5 ms (an estimate, not measured in
-//     Frizzle), and 3.2 MiB moved twice (GPU to the mapping, the mapping to
+//     Frizzle), and 3.3 MiB moved twice (GPU to the mapping, the mapping to
 //     the host copy), counted, not measured.
 //   - Its own buffer, not the program's readback slots: those carry each
 //     step's 16-byte draw record and are kMaxReadback, 16 bytes
-//     (kernels/program.h); widening them would copy 3.2 MiB every step.
+//     (kernels/program.h); widening them would copy 3.3 MiB every step.
 //   - The words cross as floats copied by memcpy, which keeps every bit;
 //     the host decides what to show.
 //

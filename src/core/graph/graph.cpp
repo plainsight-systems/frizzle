@@ -321,6 +321,11 @@ GraphResult Builder::attention(std::uint32_t layer) {
        cache_format_}));
   named(*out_, at, "attention.rope", layer);
 
+  // Q as attention reads it, `query`'s last row after rope (graph.h).
+  at = out_->size();
+  out_->push_back(capture::capture_launch(b.query, b.captures, slots.query));
+  named(*out_, at, "attention.capture", layer);
+
   for (kernels::Launch& a :
        kernels::attention_launches({l,
                                     model_->attention_scale,

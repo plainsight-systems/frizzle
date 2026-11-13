@@ -21,14 +21,19 @@
 //     token, its identifier and the text it completes, possibly ""; resolves
 //     with the module's answer (messages.ts's Generated), the reply's
 //     identifiers, its tail (bindings.cpp) and its captures included:
-//     "taken" with each layer's slots, keys and query heads and the input's
-//     position from the answer, and the store's words that came in the same
-//     call (bindings.cpp); "not-taken"; or "unread" with the module's
-//     reason. A "taken" answer rejects as a broken module, at stage
-//     "generate", rather than resolving with captures that are not there,
-//     when: no words came; their count is not the answer's "words"; it has
-//     no layers; a layer lacks one of its six slots, or its keys or query
-//     heads; or a slot is not whole numbers or ends past the words. Rejects
+//     "taken" with each layer's slots, keys, query heads, window and kind,
+//     the input's position and its tokens from the answer, and the store's
+//     words that came in the same call (bindings.cpp); "not-taken"; or
+//     "unread" with the module's reason. A "taken" answer rejects as a
+//     broken module, at stage "generate", rather than resolving with
+//     captures that are not there, when: no words came; their count is not
+//     the answer's "words"; it has no layers or no position; a layer lacks
+//     one of its seven slots, its keys or query heads (whole numbers), its
+//     window (a whole number of at least 1), or its kind (true or false); a slot is not
+//     whole numbers or ends past the words; the input is not position + 1
+//     tokens; or a token is not [identifier, type, text], its identifier a
+//     whole number, its type one of messages.ts's TokenType, its text a
+//     string. Rejects
 //     with its refusal or failure otherwise. One turn at a time, as the
 //     engine allows.
 //   - cancel(): the running turn ends, answered "cancelled".
@@ -53,7 +58,8 @@
 //   - The store arrives as a Float32Array the module sliced out of its
 //     heap for this answer (bindings.cpp): this file's to hand on, not a
 //     view of the heap, so it survives the heap growing. Checking its slots
-//     is 26 × 6 comparisons a run; nothing is copied.
+//     is 26 × 7 comparisons a run, and the input a pass over its tokens;
+//     the store is not copied.
 //   - Not tested: the crossing from bindings.cpp to here has no end-to-end
 //     test since the browser scenario was dropped (tests/README.md); the
 //     store's layout is locked in the engine (the kernels suite), and the
@@ -71,8 +77,10 @@ import type { Edit, RangedEdit } from "../../engine/edits.ts";
 import type {
   Captures,
   Generated,
+  InputToken,
   LayerSlots,
   Slot,
+  TokenType,
 } from "../../protocol/messages.ts";
 import type { ChatTemplate } from "../template/template.ts";
 
@@ -359,6 +367,7 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
         words?: unknown;
         position?: unknown;
         layers?: unknown;
+        input?: unknown;
         reason?: string;
       }
     | undefined;
@@ -387,7 +396,8 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
       const layers = c.layers.map((layer: unknown, l) =>
         layerOf(layer, words.length, (why) => broken(`layer ${l} ${why}`)),
       );
-      return { kind: "taken", layers, words, position };
+      const input = inputOf(c.input, position, broken);
+      return { kind: "taken", layers, words, position, input };
     }
     default:
       throw new EngineError(
@@ -397,9 +407,10 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
   }
 }
 
-// One layer of the answer's "captures": its six slots, each a pair [first,
-// width] of whole numbers ending within the store's `size` words, and its
-// keys and query heads, whole numbers; anything else is `broken`.
+// One layer of the answer's "captures": its seven slots, each a pair
+// [first, width] of whole numbers ending within the store's `size` words;
+// its keys and query heads, whole numbers; its window, a whole number of at
+// least 1; its kind, true or false. Anything else is `broken`.
 function layerOf(
   field: unknown,
   size: number,
@@ -407,7 +418,7 @@ function layerOf(
 ): LayerSlots {
   const layer = (field ?? {}) as Record<string, unknown>;
   const slot = (
-    name: Exclude<keyof LayerSlots, "keys" | "queryHeads">,
+    name: Exclude<keyof LayerSlots, "keys" | "queryHeads" | "window" | "full">,
   ): Slot => {
     const pair = layer[name];
     if (!Array.isArray(pair) || pair.length !== 2) {
@@ -422,21 +433,63 @@ function layerOf(
     }
     return { first, width };
   };
-  const count = (name: "keys" | "queryHeads"): number => {
+  const count = (name: "keys" | "queryHeads" | "window", least = 0): number => {
     const value = layer[name];
-    if (!isWhole(value)) throw broken(`has no ${name}`);
+    if (!isWhole(value) || value < least) throw broken(`has no ${name}`);
     return value;
   };
+  const full = layer["full"];
+  if (typeof full !== "boolean") throw broken("has no full");
   return {
     neurons: slot("neurons"),
     residual: slot("residual"),
     attentionAdded: slot("attentionAdded"),
     mlpAdded: slot("mlpAdded"),
+    query: slot("query"),
     weights: slot("weights"),
     stats: slot("stats"),
     keys: count("keys"),
     queryHeads: count("queryHeads"),
+    window: count("window", 1),
+    full,
   };
+}
+
+const TOKEN_TYPES: ReadonlySet<string> = new Set<TokenType>([
+  "normal",
+  "unknown",
+  "control",
+  "user-defined",
+  "unused",
+  "byte",
+  "undefined",
+]);
+
+// The answer's "input": position + 1 triples [identifier, type, text], the
+// identifier a whole number, the type a TokenType, the text a string;
+// anything else is `broken`.
+function inputOf(
+  field: unknown,
+  position: number,
+  broken: (why: string) => EngineError,
+): readonly InputToken[] {
+  if (!Array.isArray(field) || field.length !== position + 1) {
+    throw broken(
+      `sent ${Array.isArray(field) ? field.length : "no"} input tokens for position ${position}`,
+    );
+  }
+  return field.map((token: unknown, i): InputToken => {
+    const [id, type, text] = Array.isArray(token) ? (token as unknown[]) : [];
+    if (
+      !isWhole(id) ||
+      typeof type !== "string" ||
+      !TOKEN_TYPES.has(type) ||
+      typeof text !== "string"
+    ) {
+      throw broken(`sent input token ${i} that is not [id, type, text]`);
+    }
+    return { id, type: type as TokenType, text };
+  });
 }
 
 function isWhole(value: unknown): value is number {

@@ -24,8 +24,9 @@ namespace frizzle::graph {
 // scale.
 // The edit point (✎, docs/architecture/file-mapping.md) is here, in the
 // feed-forward block, and the capture points (◉): the neurons just after
-// the edit, and the residual, what each block adds and the attention
-// weights at the norms and the attention that already hold them.
+// the edit, Q just after rope, and the residual, what each block adds and
+// the attention weights at the norms and the attention that already hold
+// them.
 //
 // Contract
 //   - Builder appends a step's launches to `out`, block by block, in the
@@ -68,6 +69,14 @@ namespace frizzle::graph {
 //   - The capture launch follows it in every layer: in the step that ends
 //     the prompt it copies the activation's last row, as edited, into the
 //     layer's neurons slot of `captures` (capture/capture.h).
+//   - A second capture launch follows the rope launch in every layer: in
+//     the step that ends the prompt it copies `query`'s last row, Q after
+//     QK-norm and RoPE, into the layer's query slot. The QKV product, rope
+//     and attention all lay `query`'s rows out at the layer's own width,
+//     query heads × head dimension (kernels/matmul/matmul.h, kernels/rope/
+//     rope.h); the widest layer's only sizes the buffer. So the copy, which
+//     reads rows of the slot's width, the layer's, reads the layer's last
+//     row in any layer; for Gemma 3 1B every layer's is 1,024.
 //   - The other captures, written where their values already are
 //     (capture/capture.h), in the step that ends the prompt only, at its
 //     last row:
@@ -82,14 +91,15 @@ namespace frizzle::graph {
 //         weights launch, after the combine, turning them into weights
 //         (capture/weights.h).
 //     So every word of `captures` is written in that step: each layer's
-//     neurons, residual, two additions, weights and stats, the last
+//     neurons, residual, two additions, query, weights and stats, the last
 //     layer's feed-forward addition by the final norm.
 //   - No capture writes a buffer the model reads, and none changes what a
 //     launch computes, so the graph computes what it computed without
 //     them.
 //   - Names: every launch carries its role and layer (kernels/interface.h),
 //     for a profile: "embed"; "attention.norm", "attention.qkv",
-//     "attention.rope", "attention.scores", "attention.combine",
+//     "attention.rope", "attention.capture", "attention.scores",
+//     "attention.combine",
 //     "attention.weights", "attention.output"; "ffn.norm", "ffn.gate_up",
 //     "ffn.edit", "ffn.capture", "ffn.down"; and "output.norm", "output.head",
 //     "output.select", "output.draw", which belong to no layer.
@@ -115,6 +125,9 @@ namespace frizzle::graph {
 //          `query`, `key` and `value` (kernels/matmul/matmul.h).
 //       3. QK-norm, RoPE, and the key and value
 //          appended to the layer's cache (kernels/rope/rope.h).
+//      3a. The capture: `query`'s last row into the layer's query slot of
+//          `captures`, in the step that ends the prompt
+//          (capture/capture.h).
 //       4. Attention over the layer's cache into `attention`, and its
 //          combine (kernels/attention/attention.h); both capture into the
 //          layer's weights and stats slots.
@@ -157,28 +170,28 @@ namespace frizzle::graph {
 //     about 1.5 µs a dispatch, an estimate, not measured in Frizzle.
 //     Rebuilding the graph for each edit set, or folding the edit into
 //     gate·up's epilogue, were the alternatives (edit/edit_kernel.h).
-//   - The capture launch is the graph's own too, always present: one a
-//     layer, over the last token, after the edit launch. It adds 26 more
-//     dispatches in each scoring step for Gemma 3 1B, which in decode read
-//     one word and stop: about 40 µs a token at the same estimate, not
-//     measured. The weights launch adds 26 more a scoring step, the same
-//     again. `captures` is one working buffer of every slot, 3.2 MiB,
-//     planned in decoder_working_set. The alternatives are in
-//     capture/capture.h.
+//   - The capture launches are the graph's own too, always present: two a
+//     layer, over the last token, one after the edit launch, one after
+//     rope. They add 52 more dispatches in each scoring step for Gemma 3
+//     1B, which in decode read one word and stop: about 80 µs a token at
+//     the same estimate, not measured. The weights launch adds 26 more a
+//     scoring step, about 40 µs. `captures` is one working buffer of every
+//     slot, 3.3 MiB, planned in decoder_working_set. The alternatives are
+//     in capture/capture.h.
 //   - Counted from the launchers' code for Gemma 3 1B at Q4_0 with an F16
-//     cache, not from a run: a decode step dispatches 11 launches a layer —
-//     the attention norm, the one QKV product, rope, attention, the weights
-//     launch, the output projection, the feed-forward norm, gate and up,
-//     the edit, the capture, down — and 12 where the layer's key chunks
-//     split, its combine; with the embedding's 3, one a piece of the table,
-//     and the output block's 8 — the final norm, the head's 3 pieces,
-//     selection's 3 passes, the draw — 297 a step, 323 when every layer's
-//     combine runs, as it does past position 63 (GPU.6). At about 1.5 µs a
-//     dispatch (an estimate, not measured in Frizzle), 0.45 to 0.48 ms of
-//     GPU time. A prefill step runs each product's tile and split launches
-//     for its token count instead (kernels/matmul/matmul.h), not counted
-//     here. Pipelines, bind groups and launch constants are made once, at
-//     load (kernels/program.h).
+//     cache, not from a run: a decode step dispatches 12 launches a layer —
+//     the attention norm, the one QKV product, rope, Q's capture,
+//     attention, the weights launch, the output projection, the
+//     feed-forward norm, gate and up, the edit, the neurons' capture, down
+//     — and 13 where the layer's key chunks split, its combine; with the
+//     embedding's 3, one a piece of the table, and the output block's 8 —
+//     the final norm, the head's 3 pieces, selection's 3 passes, the draw —
+//     323 a step, 349 when every layer's combine runs, as it does past
+//     position 63 (GPU.6). At about 1.5 µs a dispatch (an estimate, not
+//     measured in Frizzle), 0.48 to 0.52 ms of GPU time. A prefill step runs
+//     each product's tile and split launches for its token count instead
+//     (kernels/matmul/matmul.h), not counted here. Pipelines, bind groups and
+//     launch constants are made once, at load (kernels/program.h).
 //   - Optimization (practice): logits only for a step whose last token is
 //     sampled, the only logits the sampler reads.
 //     A prefill step that does not end the prompt skips every launch over
@@ -199,9 +212,9 @@ namespace frizzle::graph {
 //            blocks, and its interface is architecture.h's function
 //            pointer.
 //   C++ performance guidelines
-//     GPU.6  Batch tiny GPU work: 11 dispatches a layer in the count
-//            above, the edit, capture and weights launches' tiny ones
-//            among them, the edit's fused alternative named.
+//     GPU.6  Batch tiny GPU work: 12 dispatches a layer in the count
+//            above, the edit, two capture and weights launches' tiny ones
+//            among them, the edit's and Q's fused alternatives named.
 //     GDSA.6 Count passes over global memory: the head's read, and the
 //            other launches over the last token alone, skipped where no
 //            token is scored.
@@ -247,7 +260,7 @@ struct GraphResult {
 // `edit_table`, one row of 2 × layers + 3 × edit::kMaxEdits u32 words, the
 // run's edits (edit/edit.h), 48 KiB for Gemma 3 1B; and `captures`, one row
 // of capture::layout's words, every layer's captures at the last prompt
-// position (capture/capture.h), 3.2 MiB for Gemma 3 1B. Every product's
+// position (capture/capture.h), 3.3 MiB for Gemma 3 1B. Every product's
 // launches take that gate and that buffer (kernels/matmul/matmul.h). A decoder
 // keeps a KV cache. Which buffers a graph binds is the graph's to say, and
 // where they lie the planner's (docs/architecture/change-axes.md).

@@ -17,11 +17,18 @@
 //   - attention_added and mlp_added: what each block adds into the
 //     residual, its output after its post-norm, exactly the vector the
 //     norm kernel adds (kernels/norm/norm.h);
+//   - query: each query head's Q as attention read it, after QK-norm and
+//     RoPE, head-major, the head dimension a head (this file's copy launch,
+//     from the query buffer after the rope launch, kernels/rope/rope.h;
+//     slice 5, step 1);
 //   - weights: each query head's attention weights over the keys it read,
 //     head-major, `keys` a head (capture/weights.h);
 //   - stats: each query head's softmax maximum and sum, the fold's
 //     (kernels/attention/attention.h), which the weights were divided by.
-// Q, in the plan with the pass map, is not captured.
+// With each layer's slots, its attention: the window it reads over, and
+// whether it is full attention, its window reaching the whole trained
+// context (model/model_description.h), so a reader is told the layer's kind,
+// never left to reckon it from `keys`.
 //
 // Contract
 //   - layout(model): where every slot lies in the store, in 32-bit words.
@@ -32,29 +39,35 @@
 //          store with every slot (wasm/bindings.cpp), so no reader depends
 //          on this region's place.
 //       2. Then, for each layer in order, its residual, attention_added and
-//          mlp_added (the embedding width each), its weights (query heads ×
-//          keys) and its stats (query heads × 2: m then l a head), in that
-//          order, each after the last.
+//          mlp_added (the embedding width each), its query (query heads ×
+//          head dimension), its weights (query heads × keys) and its stats
+//          (query heads × 2: m then l a head), in that order, each after the
+//          last.
+//     Each layer's window is its attention_window, and full_attention is
+//     whether that is at least the trained context: then every position a
+//     query can be at reads back to position 0. Gemma 3 1B's 4 global
+//     layers' windows are the trained context, 32,768.
 //     keys = min(attention_window, trained_context): the most keys a query
 //     of the layer reads in any context the plan can offer, so the store is
 //     sized from the model alone, before the plan picks its context, as the
 //     attention's partial buffers are (graph/graph.h).
 //     A store past 2³² words, 16 GiB, which no plan could place, aborts:
 //     a slot's first word is a u32 constant of the launches that write it.
-//     For Gemma 3 1B (26 layers, width 1,152, 4 query heads, windows 512
-//     and, in 4 global layers, the trained 32,768):
+//     For Gemma 3 1B (26 layers, width 1,152, 4 query heads of 256, windows
+//     512 and, in 4 global layers, the trained 32,768):
 //       neurons  26 × 6,912                         179,712 words
 //       residual and the two additions 26 × 3 × 1,152 89,856
+//       query    26 × 4 × 256                        26,624
 //       weights  22 × 4 × 512 + 4 × 4 × 32,768      569,344
 //       stats    26 × 8                                 208
-//       the store                                   839,120 words, 3.2 MiB
+//       the store                                   865,744 words, 3.3 MiB
 //   - capture_launch(source, store, slot): a launch that copies one row of
 //     `slot.width` words, binding the source (binding 2) and the store
 //     (binding 3). In the step that ends the prompt, and only there, it
 //     copies the source's last row into the slot, word for word: the bits
 //     of every value, NaN, infinity, negative zero and subnormals included.
 //     It writes nothing outside the slot, and in any other step nothing at
-//     all. The graph uses it for the neurons alone.
+//     all. The graph uses it for the neurons and for Q.
 //   - "The step that ends the prompt": the step that asks for logits with
 //     its tokens given, not fed from the last draw (kernels/interface.h,
 //     Step: logits 1, fed 0). The turn loop has exactly one a turn, the last
@@ -69,7 +82,9 @@
 //     run's.
 //   - The graph places the neurons' copy after the layer's edit launch and
 //     before its down projection, so an edited neuron is captured with the
-//     value it was set to: what the model used.
+//     value it was set to: what the model used. It places Q's copy after
+//     the layer's rope launch and before its attention, so Q is the one
+//     attention dots with each key.
 //   - Preconditions of capture_launch: `slot` is one of layout()'s for the
 //     model the graph is built for; the source's rows are the slot's width;
 //     the store is layout()'s total words.
@@ -108,14 +123,16 @@
 //     multiple of 256 bytes, which a slot need not be.
 //   - Cost, counted for Gemma 3 1B (not measured):
 //       - The step that ends the prompt: the neurons' 26 copies, 702 KiB;
-//         the norms' writes, 351 KiB; the scores' and weights' 2.2 MiB,
-//         most of it the global layers' zeros past the prompt. Once a run.
-//       - Every decode step: the copy's 26 dispatches and the weights' 26
-//         (capture/weights.h), each reading the step and stopping: 52 at
-//         about 1.5 µs a dispatch (an estimate, not measured in Frizzle),
-//         about 80 µs a token. The norm and attention kernels add a test of
-//         the step to launches that run anyway.
-//       - Memory: 3.2 MiB on the device for the store, and the reader's
+//         Q's 26, 104 KiB; the norms' writes, 351 KiB; the scores' and
+//         weights' 2.2 MiB, most of it the global layers' zeros past the
+//         prompt. Once a run.
+//       - Every decode step: the copy's 52 dispatches, the neurons' and
+//         Q's, and the weights' 26 (capture/weights.h), each reading the
+//         step and stopping: 78 at about 1.5 µs a dispatch (an estimate,
+//         not measured in Frizzle), about 120 µs a token. The norm and
+//         attention kernels add a test of the step to launches that run
+//         anyway.
+//       - Memory: 3.3 MiB on the device for the store, and the reader's
 //         (capture/reader.h).
 //   - Alternatives considered:
 //       - Fold the neurons' copy into the edit kernel, which runs at the
@@ -123,8 +140,13 @@
 //         with two axes, edits (Q) and captures (O).
 //       - A launch the schedule skips in fed steps: no dispatch in decode.
 //         But a new kind of geometry in the ported schedule and program
-//         (axis D), to save about 80 µs a token, and speed is not this
+//         (axis D), to save about 120 µs a token, and speed is not this
 //         demo's aim.
+//       - Fold Q's copy into the rope launch, which holds the row, as the
+//         norm folds the residual's: 26 dispatches a decode step fewer,
+//         about 40 µs a token. But the rope kernel would gain a capture,
+//         written and tested anew, where the copy is this file's kernel,
+//         already tested, at the cost the neurons' already pay.
 //       - Size the global layers' weights to the context the plan offers,
 //         not the trained context: smaller for a small offered context,
 //         but the store would be sized after the plan fits the context,
@@ -136,8 +158,9 @@
 // Corpus guidance
 //   C++ performance guidelines
 //     GPU.6  Batch tiny GPU work: the launches are tiny and run in every
-//            scoring step; their cost is counted above, and the residual's
-//            folded into the norm that already holds it.
+//            scoring step; their cost is counted above, the residual's
+//            folded into the norm that already holds it, Q's not folded
+//            into rope, for the reason given.
 //     GPU.1  Keep data on the device: the copies stay on the GPU inside the
 //            pass; the store crosses to the CPU once a run, at its end
 //            (capture/reader.h).
@@ -179,10 +202,13 @@ struct LayerSlots {
   Slot residual;         // embedding width
   Slot attention_added;  // embedding width
   Slot mlp_added;        // embedding width
+  Slot query;            // query heads × head dimension; head h at h × d
   Slot weights;          // query heads × keys; head h, key i at h × keys + i
   Slot stats;            // query heads × 2; head h's m at 2h, its l at 2h + 1
   std::uint32_t keys;    // min(attention_window, trained_context)
   std::uint32_t query_heads;
+  std::uint32_t window;  // attention_window, in tokens
+  bool full_attention;   // window >= trained_context
 };
 
 struct Layout {
