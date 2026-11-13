@@ -94,9 +94,10 @@
 //     drawn here: one row a layer has no room for 4 heads over up to
 //     32,768 keys, and showing them is not this slice's (the slice plan's
 //     omissions).
-//   - Global and local layers are not marked: the page would have to
-//     reckon it from each layer's key count, which the concept's made-up
-//     data did and the captures do not state.
+//   - Global and local layers are not marked. The captures state each
+//     layer's kind since slice 5 (LayerSlots, window and full), and the
+//     pass map's head says it; marking it here too is not done unless
+//     asked (research/slices/5-pass-map/plan.md).
 //   - 104 canvases, drawn when the captures or a column's pixels change,
 //     and the strip pass of shape/strip.ts; while a window is resized, a
 //     pass each time a column's pixels change. No WebGL, so the deck's

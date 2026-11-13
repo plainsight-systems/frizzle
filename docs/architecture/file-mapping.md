@@ -102,6 +102,8 @@ views/prompt/          H(view)   the prompt, both replies, the pin chips
 views/deck/            H(view)   the MLP workbench: Workbench.tsx, Deck.tsx
                                  (the layer deck), LayerMap.tsx (the Map),
                                  Inspector.tsx, cards.ts
+views/pass-map/        H(view)   PassMap.tsx, the workbench's third view: one
+                                 layer's pass, isometric
 theme/                 H(theme)  night glass: theme.css (tokens, the page's elements),
                                  palette.ts (the deck's colours), fonts/ (Plex, kept)
 session/               H(session) session.ts (the page's state), pins.ts (the pin set:
@@ -111,8 +113,10 @@ shape/                 H(shape)  fold.ts (a slot into the deck's grid, a box of 
                                  back to neurons), paint.ts (a slot into pixels, a heat
                                  map of size, and overlays), rank.ts (the
                                  strongest), strip.ts (a slot into one of the
-                                 Map's strips, a column's scale), numbers.ts
-                                 (MB, values for reading)
+                                 Map's strips, a column's scale), pass.ts (a
+                                 layer's stages, widths and slots), tokens.ts
+                                 (the input's tokens read one at a time),
+                                 numbers.ts (MB, values for reading)
 engine/edits.ts        Q         the edit kinds, as sent
 protocol/              R         messages, ids, the page's client, starting the worker;
                                  the captures as the page receives them (messages.ts)

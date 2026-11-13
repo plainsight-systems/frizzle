@@ -13,7 +13,8 @@
 //       layer    the workbench (views/deck/), a dialog over the whole
 //                window, opened from the prompt's "Open neurons" or a
 //                reply's "Neurons" button, showing that side's neurons at
-//                the branch point, on the layer deck or the Map.
+//                the branch point, on the layer deck, the Map or the pass
+//                map.
 //                While it is open the page behind it is inert. Close or Esc
 //                closes it; its Run runs and closes it, so the replies show
 //                as they stream.

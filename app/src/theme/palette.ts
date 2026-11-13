@@ -17,6 +17,11 @@
 //   - RING_PIN and RING_SELECTED: the rings round a pinned and a selected
 //     neuron, as CSS colours, in hues the ramp never passes through, so a
 //     ring is never read as heat.
+//   - PASS_EDGE and PASS_OUTLINE: on the pass map
+//     (views/pass-map/PassMap.tsx), the edge of a captured stage's rows,
+//     the card's rule, and the outline of a stage not captured, lighter, so
+//     a stage drawn without values is seen as a shape and never as a dark
+//     strip of values.
 //
 // Design
 //   - The card and its dim cell are from the reviewed concept (docs/design/
@@ -43,3 +48,5 @@ export const CARD = "#121b2c";
 export const CARD_RULE = "#2b3a55";
 export const RING_PIN = "#7fd6ff";
 export const RING_SELECTED = "#f4f1ea";
+export const PASS_EDGE = CARD_RULE;
+export const PASS_OUTLINE = "#56657d";

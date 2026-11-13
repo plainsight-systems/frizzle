@@ -35,8 +35,9 @@
  *     the text past it, and a steered reply's kept text, faded; a word
  *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the Map's
  *     reading, headings, legends and rows (two columns under 900px), the
- *     workbench's view switch, the inspector's segmented choice, ranked list,
- *     neuron card and Go to.
+ *     workbench's view switch, the pass map's head, reading, scene on
+ *     --night, stage and key labels and legend, the inspector's segmented
+ *     choice, ranked list, neuron card and Go to.
  *   - Contrast: --ink and --muted on --page and --panel meet WCAG AA for
  *     body text (4.5:1); --muted is not used below 12px.
  *   - Reduced motion: no transition here moves anything; the deck's slide
@@ -421,6 +422,9 @@ fieldset > div {
   inset: 0;
   z-index: 10;
   display: grid;
+  /* One column the window's width: a long prompt in the bar is cut with
+     an ellipsis, never widens the column past the window. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--page);
   outline: 0;
@@ -673,6 +677,90 @@ fieldset > div {
   .map-row .map-wide {
     display: none;
   }
+}
+
+/* The pass map (views/pass-map/PassMap.tsx), after the concept's
+   (docs/design/concepts/matrices.html) */
+.pass-column {
+  display: flex;
+  flex-direction: column;
+}
+.pass-column h2 output {
+  margin-left: 0.75rem;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.pass-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font: 12px var(--mono);
+}
+.pass-head button {
+  padding: 2px 10px;
+  font: 13px var(--mono);
+}
+.pass-layer {
+  min-width: 5.5em;
+  text-align: center;
+  font: 15px var(--serif);
+}
+.pass-reading {
+  margin: 8px 0;
+  min-height: 1.6em;
+  font: 12px var(--mono);
+}
+.pass-scene {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  overflow: hidden;
+  user-select: none;
+  background: var(--night);
+  border-radius: 4px;
+  outline-offset: 2px;
+}
+.pass-scene:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.pass-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.pass-label,
+.pass-key {
+  position: absolute;
+  white-space: nowrap;
+  font: 11px/1.3 var(--mono);
+  color: var(--muted);
+}
+.pass-label {
+  transform: translate(-50%, 0);
+  text-align: center;
+}
+.pass-label b {
+  font-weight: 500;
+  color: var(--ink);
+}
+.pass-label.not b {
+  color: var(--muted);
+}
+.pass-key {
+  transform: translate(0, -50%);
+  color: var(--ink);
+}
+.pass-key.control {
+  color: var(--muted);
+}
+/* A stage's scale in the legend, never split across lines. */
+.pass-scale {
+  white-space: nowrap;
+}
+.pass-scale b {
+  font-weight: 500;
 }
 
 /* The inspector */

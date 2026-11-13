@@ -1,9 +1,10 @@
 // Axis H (view): the MLP workbench, a layer over the whole window: a bar
 // with the prompt, the branch point, the view, the pins and Run; under it
-// the layer deck or the Map, and the inspector beside either, over one
-// side's captures at the branch point, one front layer and one selected
-// neuron (docs/design/concepts/deck.html, the reviewed concept; the Map
-// from docs/design/concepts/explore.html).
+// the layer deck, the Map or the pass map, and the inspector beside each,
+// over one side's captures at the branch point, one front layer and one
+// selected neuron (docs/design/concepts/deck.html, the reviewed concept;
+// the Map from docs/design/concepts/explore.html; the pass map from
+// docs/design/concepts/matrices.html).
 //
 // Contract
 //   - Workbench({session, state, message, canRun, onRun, onClose, which,
@@ -14,23 +15,29 @@
 //     dialog. A deck the view switch mounts leaves the focus on the switch.
 //   - The bar: the prompt it works on (the run's message, or the message
 //     typed when there is no run yet) › "MLP neurons" on the deck, "Every
-//     layer" on the Map, and where: "at the
+//     layer" on the Map, "Layer {l}'s pass" on the pass map, and where: "at the
 //     reply's start" (point 0) or "after “{word}”", the word the point
 //     falls in up to the point (session/branch.ts, beforePoint), trimmed;
-//     a group "View" of two radios, "Deck" and "Map", `view` chosen
-//     (onView); the pins held, as
+//     a group "View" of three radios, "Deck", "Map" and "Pass", `view`
+//     chosen (onView); the pins held, as
 //     chips (PinChips.tsx: showing one selects its neurons here); button "Run"
 //     (onRun, which also closes the workbench); button "Close", and Esc,
 //     which close it without running (onClose). No Stop here: Stop is
 //     beside the prompt's Run (PromptView.tsx), reached once this closes.
 //   - The deck (Deck.tsx), or the Map (LayerMap.tsx) when `view` is
-//     "map", and the inspector (Inspector.tsx) beside it, on the side
+//     "map", or the pass map (views/pass-map/PassMap.tsx) when it is
+//     "pass", and the inspector (Inspector.tsx) beside it, on the side
 //     `which` (cards.ts, neuronsOf), or the reply's while the run has no
 //     steered reply (none yet, or one just accepted), whose radio is then
 //     disabled, the front layer `front`, the neurons in `selection`; these
 //     three and the view are the frame's (App.tsx), so they last between
 //     visits. The Map is given the same captures and front layer as the
 //     deck, and selects as the deck does, so switching keeps the place.
+//     The pass map is given them too; its ‹ › step the front layer
+//     (onFront), and clicking one of its neurons selects that neuron
+//     alone and switches the view to the deck (onSelect, then onView),
+//     the deck taking the focus, as the pass map's scene that had it is
+//     gone (so Esc and the deck's keys work without a click).
 //     Selecting brings the selection's layer to the front (onSelect does
 //     both).
 //   - Pinning is the session's (session.pin, session.unpin): what is pinned
@@ -42,15 +49,17 @@
 //     the deck shows, with what the pins will send (cards.ts, facesOf),
 //     each time the pins change too.
 //   - Mounted only while open: the deck's WebGL context and textures exist
-//     only then. The deck and the Map are mounted one at a time, so the
-//     Map holds no WebGL context, and opening on the Map gives the focus to
-//     the dialog.
+//     only then. The deck, the Map and the pass map are mounted one at a
+//     time, so at most one WebGL context exists (the deck's or the pass
+//     map's), and opening on the Map or the pass map gives the focus to the
+//     dialog.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Selection } from "../../App.tsx";
 import { beforePoint } from "../../session/branch.ts";
 import type { Run, Session, SessionState } from "../../session/session.ts";
+import { PassMap } from "../pass-map/PassMap.tsx";
 import { PinChips } from "../prompt/PinChips.tsx";
 import { Deck } from "./Deck.tsx";
 import { Inspector } from "./Inspector.tsx";
@@ -58,7 +67,25 @@ import { LayerMap } from "./LayerMap.tsx";
 import { type Which, cardsOf, facesOf, neuronsOf } from "./cards.ts";
 
 // Which view the workbench shows beside the inspector.
-export type View = "deck" | "map";
+export type View = "deck" | "map" | "pass";
+
+const VIEW_NAMES: Readonly<Record<View, string>> = {
+  deck: "Deck",
+  map: "Map",
+  pass: "Pass",
+};
+
+// What the bar says the view shows.
+function barText(view: View, layer: number): string {
+  switch (view) {
+    case "deck":
+      return "MLP neurons";
+    case "map":
+      return "Every layer";
+    case "pass":
+      return `Layer ${layer}'s pass`;
+  }
+}
 
 export function Workbench(props: {
   readonly session: Session;
@@ -132,13 +159,12 @@ export function Workbench(props: {
           <span>{prompt === "" ? "No prompt yet" : `“${prompt}”`}</span>
           <span className="muted">
             {" "}
-            › {view === "map" ? "Every layer" : "MLP neurons"}{" "}
-            {pointText(state.run)}
+            › {barText(view, layer)} {pointText(state.run)}
           </span>
         </p>
         <fieldset className="segmented view-switch">
           <legend>View</legend>
-          {(["deck", "map"] as const).map((v) => (
+          {(["deck", "map", "pass"] as const).map((v) => (
             <label key={v} className={view === v ? "on" : undefined}>
               <input
                 type="radio"
@@ -149,7 +175,7 @@ export function Workbench(props: {
                   onView(v);
                 }}
               />
-              {v === "deck" ? "Deck" : "Map"}
+              {VIEW_NAMES[v]}
             </label>
           ))}
         </fieldset>
@@ -164,7 +190,19 @@ export function Workbench(props: {
         </button>
       </header>
       <div className="workbench-body">
-        {view === "map" ? (
+        {view === "pass" ? (
+          <PassMap
+            neurons={neurons}
+            layer={layer}
+            onLayer={onFront}
+            onOpenNeuron={(l, neuron) => {
+              onSelect({ layer: l, neurons: [neuron] });
+              // The deck takes the focus: the scene that had it unmounts.
+              setSwitched(false);
+              onView("deck");
+            }}
+          />
+        ) : view === "map" ? (
           <LayerMap
             neurons={neurons}
             pins={state.pins}
