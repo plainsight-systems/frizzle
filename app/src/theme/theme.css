@@ -662,7 +662,9 @@ fieldset > div {
   .map-row {
     grid-template-columns: 90px minmax(0, 1fr);
   }
-  .map-wide {
+  /* As specific as .map-row canvas, which it must override. */
+  .map-heads .map-wide,
+  .map-row .map-wide {
     display: none;
   }
 }
