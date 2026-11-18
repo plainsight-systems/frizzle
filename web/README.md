@@ -24,5 +24,8 @@ what they need.
   shortcode for a screenshot with its caption.
 - `assets/site.css`: the site's look.
 
+`.github/workflows/site.yml` builds and checks the site on every pull request
+and publishes it to GitHub Pages from `main`, at the address in `hugo.toml`.
+
 Everything under `content/`, `layouts/` and `assets/` is public. The site
 has no client-side script of its own, no analytics and no cookies.

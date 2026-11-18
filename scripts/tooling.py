@@ -67,7 +67,7 @@ def find_hugo():
     binary = shutil.which(os.environ.get('HUGO') or 'hugo')
     if binary:
         result = subprocess.run([binary, 'version'], stdin=subprocess.DEVNULL, capture_output=True, text=True)
-        if result.returncode == 0 and re.search(r'\bv' + re.escape(HUGO_VERSION) + r'\+extended\b', result.stdout):
+        if result.returncode == 0 and re.search(r'\bv' + re.escape(HUGO_VERSION) + r'(-[0-9a-f]+)?\+extended\b', result.stdout):
             return binary
     raise ValueError(f'Hugo {HUGO_VERSION} extended is required; select it with HUGO. '
                      'No tool was installed or substituted.')

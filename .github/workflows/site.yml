@@ -1,0 +1,76 @@
+# Axis U: publishes the project site (web/README.md).
+#
+# Contract
+#   - On a pull request into main: builds the engine, the app and the site,
+#     and runs the Site build scenario. Nothing is published.
+#   - On a push to main, or by hand: the same, then the site goes to GitHub
+#     Pages at its custom domain. A build that fails publishes nothing.
+#   - Every tool at its pin: actions by commit, Node from app/.nvmrc, the
+#     packages from the lockfile, Hugo by version and SHA-256, the engine in
+#     the emsdk image scripts/tooling.py names. Only the deploy job may write
+#     to Pages.
+name: Publish site
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.5'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: app/.nvmrc
+      - name: Install the app's packages
+        run: npm ci
+        working-directory: app
+      - name: Install Hugo at its pin
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/hugo.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/gohugoio/hugo/releases/download/v0.154.2/hugo_extended_0.154.2_linux-amd64.tar.gz
+          echo "a064c1da02dc20d7d7758c966f4f2afe9384924b70d8a1d4925acba528cbfe14  $archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/hugo"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/hugo" hugo
+          echo "$RUNNER_TEMP/hugo" >> "$GITHUB_PATH"
+      - name: Run the Site build scenario
+        run: python3 scripts/check.py site
+      - name: Build the site
+        run: python3 scripts/site.py build
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: .cache/site/public
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
