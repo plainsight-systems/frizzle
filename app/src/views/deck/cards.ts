@@ -14,7 +14,7 @@
 //     {failure}" (an inspection) | "Not captured: the run was cancelled" |
 //     "Not read back: {reason}".
 //   - neuronsOf's "taken" carries the whole store (protocol/messages.ts,
-//     Captures), which the Map reads too (LayerMap.tsx); the deck reads each
+//     Captures), which the Ride reads too (views/ride/Ride.tsx); the deck reads each
 //     layer's neurons slot.
 //   - cardsOf(neurons): null without captures; otherwise one Card per
 //     layer, in layer order, holding its neurons slot's values (a view of

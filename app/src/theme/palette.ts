@@ -17,11 +17,10 @@
 //   - RING_PIN and RING_SELECTED: the rings round a pinned and a selected
 //     neuron, as CSS colours, in hues the ramp never passes through, so a
 //     ring is never read as heat.
-//   - PASS_EDGE and PASS_OUTLINE: on the pass map
-//     (views/pass-map/PassMap.tsx), the edge of a captured stage's rows,
-//     the card's rule, and the outline of a stage not captured, lighter, so
-//     a stage drawn without values is seen as a shape and never as a dark
-//     strip of values.
+//   - RIDE: the Ride's scene (views/ride/scene.ts), as CSS colours: the
+//     banner's night, its road and panes, amber for a word the reply goes
+//     on to write and for a positive neuron, cool blue for a negative one,
+//     and the coach's cream, as in docs/assets/frizzle-readme.png.
 //
 // Design
 //   - The card and its dim cell are from the reviewed concept (docs/design/
@@ -48,5 +47,42 @@ export const CARD = "#121b2c";
 export const CARD_RULE = "#2b3a55";
 export const RING_PIN = "#7fd6ff";
 export const RING_SELECTED = "#f4f1ea";
-export const PASS_EDGE = CARD_RULE;
-export const PASS_OUTLINE = "#56657d";
+export const RIDE = {
+  skyTop: "#070c16",
+  skyLow: "#16233a",
+  star: "#efe6cf",
+  moon: "#efe0b8",
+  moonShade: "#0b1321",
+  dusk: "242,160,70", // the glow at the road's end, as r,g,b
+  ridgeFar: "#101a2c",
+  ridgeNear: "#0b1422",
+  groundTop: "#10192a",
+  groundLow: "#060a12",
+  road: "#202a3c",
+  roadEdge: "#8a7443",
+  roadLine: "#e2d3aa",
+  glass: "135,165,200", // r,g,b
+  glassFocus: "13,21,36", // r,g,b
+  paneEdge: "239,230,207", // r,g,b
+  word: "238,230,211", // r,g,b
+  wordLit: "#ffd27e",
+  glow: "#f2b54f",
+  positive: "242,181,79", // r,g,b
+  negative: "143,183,232", // r,g,b
+  pin: "#ffcf73",
+  dialLight: "#f0d591",
+  dialDark: "#6e5220",
+  dialInk: "#241a08",
+  coachTop: "#f1e5c6",
+  coachMiddle: "#dfcfa6",
+  coachLow: "#a98f60",
+  coachLine: "#5f4b2a",
+  coachRack: "#8a6f43",
+  coachGlass: "#17233a",
+  coachLit: "rgba(255,207,115,.33)",
+  coachFrame: "#d9c79c",
+  coachStripe: "#7a2d1f",
+  coachTyre: "#10131a",
+  coachLamp: "#ff5a3a",
+  headlamp: "255,214,140", // r,g,b
+} as const;

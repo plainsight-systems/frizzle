@@ -155,9 +155,12 @@ from is reused (`capture/capture.h`).
 | Residual, what each block adds | The norm kernel | The added vector exists only in its registers |
 | Attention scores, maximum and sum | The attention kernel, for the last row | Only it has the scores |
 | Attention weights | A launch after attention (`capture/weights.h`) | The raw scores, in log2 units, cannot be read; the weights differ from the factors the model applied by rounding only |
+| Readout: the likeliest next tokens after each layer | The final norm, head and top-k run again on the residual, at the prompt's end alone (`capture/capture.h`) | What the Ride shows; the last layer's is the step's own candidates |
 
-The attention weights are the one value formed beside the model's own
-outputs, on the GPU in the same step, from the attention kernel's scores.
+Two captured values are formed beside the model's own outputs, on the GPU in
+the same step: the attention weights, from the attention kernel's scores,
+and the readouts of layers 0 to 24, which ask what the model would say if it
+stopped there. Neither changes what it computes.
 
 | Per layer, at f32 | Size |
 | --- | --- |

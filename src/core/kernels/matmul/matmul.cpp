@@ -144,7 +144,7 @@ void add_launches(const MatmulLaunch& m, const Binding& weights,
                 m.rows,
                 std::move(decode_overrides)};
   decode.entry_point = entry.decode;
-  if (m.rows == Rows::LastToken) {
+  if (m.rows != Rows::EveryToken) {
     out.push_back(std::move(decode));  // the head: every regime
     return;
   }

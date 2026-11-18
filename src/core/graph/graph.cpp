@@ -264,6 +264,29 @@ void Builder::product(const residency::WeightView& weight,
                                   kernels::kSplitGate, buffers_.range_sums));
 }
 
+void Builder::readout(std::uint32_t layer) {
+  const Buffers& b = buffers_;
+  const std::size_t at = out_->size();
+  kernels::NormLaunch norm{&view(model_->output_norm),
+                           nullptr,
+                           false,
+                           b.output,
+                           b.hidden,
+                           b.normed,
+                           model_->norm_epsilon,
+                           kernels::Rows::PromptEnd};
+  norm.capture = {b.captures, std::nullopt, std::nullopt};
+  out_->push_back(kernels::norm_launch(norm));
+  product(view(model_->output_head.value_or(model_->token_embedding)), b.normed,
+          b.logits, kernels::Rows::PromptEnd);
+  append(*out_, kernels::topk_launches(b.logits, model_->vocabulary_size,
+                                       b.partials_a, b.partials_b, b.candidates,
+                                       kernels::Rows::PromptEnd));
+  out_->push_back(capture::readout_launch(b.candidates, b.captures,
+                                          slots_.at(layer).readout));
+  named(*out_, at, "readout", layer);
+}
+
 void Builder::embed(float scale) {
   const std::size_t at = out_->size();
   append(*out_,
@@ -313,6 +336,9 @@ GraphResult Builder::attention(std::uint32_t layer) {
                      kernels::Rows::EveryToken},
                     kernels::kSplitGate, b.range_sums));
   named(*out_, at, "attention.qkv", layer);
+
+  // `normed` is done with until the feed-forward norm rewrites it (graph.h).
+  if (layer > 0) readout(layer - 1);
 
   at = out_->size();
   out_->push_back(kernels::rope_launch(
@@ -438,6 +464,11 @@ GraphResult Builder::output() {
          kernels::topk_launches(b.logits, model_->vocabulary_size, b.partials_a,
                                 b.partials_b, b.candidates));
   named(*out_, at, "output.select");
+  // The last layer's readout is the model's own selection.
+  at = out_->size();
+  out_->push_back(
+      capture::readout_launch(b.candidates, b.captures, slots_.back().readout));
+  named(*out_, at, "output.readout");
   at = out_->size();
   out_->push_back(sampler::draw_launch(b.candidates, b.sampled));
   named(*out_, at, "output.draw");

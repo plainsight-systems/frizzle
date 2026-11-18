@@ -347,7 +347,18 @@ struct Captured {
   std::span<const tokenizer::TokenType> input_types;
   std::string_view text_pool;
   std::span<const std::uint32_t> text_offsets;  // input.size() + 1
+  // For Taken: each layer's kGuesses most likely next tokens, best first
+  // (its readout's first pairs, capture/capture.h), layer l's at
+  // l × kGuesses, each with its own text as a token alone: token i's is
+  // guess_pool[guess_offsets[i], guess_offsets[i + 1]). Valid only during
+  // the callback.
+  std::span<const tokenizer::TokenId> guesses;
+  std::string_view guess_pool;
+  std::span<const std::uint32_t> guess_offsets;  // guesses.size() + 1
 };
+
+// The readout's tokens a layer that Captured names with their text.
+inline constexpr std::size_t kGuesses = 3;
 
 using RunEndCallback = void (*)(const TurnResult& result,
                                 const Captured& captured, void* userdata);

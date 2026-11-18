@@ -12,23 +12,21 @@
 //                reply to steer from and the steered reply side by side.
 //       layer    the workbench (views/deck/), a dialog over the whole
 //                window, opened from the prompt's "Open neurons" or a
-//                reply's "Neurons" button, showing that side's neurons at
-//                the branch point, on the layer deck, the Map or the pass
-//                map.
+//                reply's "Ride" button, at the branch point, on the Ride
+//                or the layer deck.
 //                While it is open the page behind it is inert. Close or Esc
 //                closes it; its Run runs and closes it, so the replies show
-//                as they stream.
+//                as they stream; the Ride's steer runs and leaves it open.
 //   - status "WebGPU": "Waiting for the GPU" | "Ready: {adapter}" |
 //     "Failed: {error}".
 //   - status "Model": "Not loaded" | "Starting" | "Downloading: {done} of
 //     {total} MB" | "Loading: {done} of {total} MB", each with a progress
-//     bar | "Ready: downloaded {n} MB, {c} tokens of context", n in a <data
-//     value> holding the exact bytes | "Ready: kept from an earlier visit,
-//     {c} tokens of context" | "Failed at {stage}: {message}". Megabytes
-//     are decimal and whole (shape/numbers.ts).
+//     bar | "{name} · {c} tokens of context" once ready, the name the pin's
+//     (config/model.json) | "Failed at {stage}: {message}". Megabytes are
+//     decimal and whole (shape/numbers.ts).
 //   - Held here, so they last while the workbench is closed and reopened:
 //     the message and seed as typed, the side whose neurons are shown,
-//     the workbench's view, the deck at first (views/deck/Workbench.tsx,
+//     the workbench's view, the Ride at first (views/deck/Workbench.tsx,
 //     View), the front layer, and the selection: one or more neurons of one layer
 //     (Selection), which is brought to the front when selected. The pins
 //     are the session's.
@@ -46,6 +44,7 @@
 
 import { useState, useSyncExternalStore } from "react";
 
+import pin from "../../config/model.json" with { type: "json" };
 import type { Edit } from "./engine/edits.ts";
 import type { DeviceState, ModelState, Session } from "./session/session.ts";
 import { megabytes } from "./shape/numbers.ts";
@@ -76,7 +75,7 @@ export function App({ session }: { readonly session: Session }) {
   const [seedText, setSeedText] = useState("1");
   const [open, setOpen] = useState(false);
   const [which, setWhich] = useState<Which>("reply");
-  const [view, setView] = useState<View>("deck");
+  const [view, setView] = useState<View>("ride");
   const [front, setFront] = useState(0);
   const [selection, setSelection] = useState<Selection | null>(null);
   const { device, model } = state;
@@ -85,10 +84,10 @@ export function App({ session }: { readonly session: Session }) {
     (model.kind === "idle" || model.kind === "failed");
   const seed = parseSeed(seedText);
   const canRun = model.kind === "ready" && seed.ok;
-  const run = () => {
+  const run = (stay = false) => {
     if (!canRun || !seed.ok) return;
     session.run(message, seed.value);
-    setOpen(false);
+    if (!stay) setOpen(false);
   };
   const select = (chosen: Selection) => {
     setSelection(chosen);
@@ -130,7 +129,7 @@ export function App({ session }: { readonly session: Session }) {
           canLoad={canLoad}
           onLoad={() => session.load()}
           canRun={canRun}
-          onRun={run}
+          onRun={() => run()}
           onOpen={openOn}
         />
       </div>
@@ -177,15 +176,7 @@ function modelText(model: ModelState) {
     case "loading":
       return `${model.kind === "downloading" ? "Downloading" : "Loading"}: ${megabytes(model.done).replace(" MB", "")} of ${megabytes(model.total)}`;
     case "ready":
-      return model.downloaded === null ? (
-        `Ready: kept from an earlier visit, ${COUNT.format(model.contextTokens)} tokens of context`
-      ) : (
-        <>
-          Ready: downloaded{" "}
-          <data value={model.downloaded}>{megabytes(model.downloaded)}</data>,{" "}
-          {COUNT.format(model.contextTokens)} tokens of context
-        </>
-      );
+      return `${pin.name} · ${COUNT.format(model.contextTokens)} tokens of context`;
     case "failed":
       return `Failed at ${model.failure.stage}: ${model.failure.message}`;
   }

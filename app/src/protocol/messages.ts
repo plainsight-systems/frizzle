@@ -48,7 +48,7 @@
 //
 // Design
 //   - Plain data only, so a message is structured-cloned unchanged. The one
-//     typed array, a run's store (865,744 words, 3.3 MiB, for Gemma 3 1B),
+//     typed array, a run's store (869,072 words, 3.3 MiB, for Gemma 3 1B),
 //     is transferred, not copied: the worker made it for this message and
 //     keeps no hold on it (worker.ts).
 //   - The page reads every value by the slots the module sent, never by a
@@ -116,6 +116,9 @@ export interface LayerSlots {
   readonly query: Slot; // queryHeads × head dimension; head h at h × d
   readonly weights: Slot; // queryHeads × keys; head h, key i at h × keys + i
   readonly stats: Slot; // queryHeads × 2; head h's maximum at 2h, sum 2h + 1
+  // 2 × 64: candidate i's logit bits at 2i, its token at 2i + 1, best first:
+  // the words most likely next if the model stopped after this layer.
+  readonly readout: Slot;
   readonly keys: number;
   readonly queryHeads: number;
   readonly window: number; // the layer's attention window, in tokens
@@ -142,6 +145,12 @@ export interface InputToken {
   readonly text: string;
 }
 
+// One of a layer's most likely next tokens, its text as a token alone.
+export interface Guess {
+  readonly id: number;
+  readonly text: string;
+}
+
 // A run's captures, as the engine gave them (runtime/engine.h, Captured).
 // For "taken", every slot lies inside `words` (worker/engine/engine.ts
 // refuses an answer where one does not).
@@ -157,6 +166,8 @@ export type Captures =
       // The input up to `position`, position + 1 tokens, in order; the
       // token at a key's position is input[position].
       readonly input: readonly InputToken[];
+      // Each layer's most likely next tokens, best first, a list a layer.
+      readonly guesses: readonly (readonly Guess[])[];
     }
   | { readonly kind: "not-taken" } // the turn was cancelled
   | { readonly kind: "unread"; readonly reason: string }; // the read back failed

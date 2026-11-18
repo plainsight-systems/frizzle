@@ -19,32 +19,34 @@ namespace frizzle::kernels {
 // Contract
 //   - Schedules(launches): plans from every launch's geometry, in the
 //     graph's order. Pure: no GPU object, no failure.
-//   - of(tokens, logits): the indices, ascending, of every launch whose
-//     token range holds `tokens` and, where `logits` is false, that does
-//     not cover the last token alone. The span is valid while the
-//     Schedules lives.
+//   - of(tokens, logits, ends_prompt): the indices, ascending, of every
+//     launch whose token range holds `tokens`, leaving out one over the
+//     last token alone where `logits` is false and one over the prompt's
+//     end where `ends_prompt` is false. The span is valid while the
+//     Schedules lives. So a decode step never walks the readouts.
 //   - Invariant: for every step, the list holds every launch
 //     workgroups_for gives workgroups, in order, and only launches whose
 //     token range and rows allow the step. A listed launch may still get
 //     none: a combine in a step that does not split its key chunks, the one
 //     thing that depends on the step's position.
-//   - Precondition of of(): tokens >= 1. Not checked: below the first
-//     bound there is no interval.
+//   - Preconditions of of(): tokens >= 1; ends_prompt only with logits. Not
+//     checked: below the first bound there is no interval.
 //
 // Algorithm
 //   1. Bounds: 1, every launch's least token count above 1, and every
 //      launch's most + 1 that fits in 32 bits; sorted, duplicates removed.
 //      Between two bounds, every launch runs at all of the interval or at
 //      none of it.
-//   2. For each interval, at its least token count: the list without
-//      logits, of the launches whose range holds it and that do not cover
-//      the last token alone; and the list with logits, of every launch
-//      whose range holds it. Interval i's lists sit at 2i and 2i + 1.
+//   2. For each interval, at its least token count, three lists of the
+//      launches whose range holds it: without logits, those over every
+//      token; with logits, those and the ones over the last token; ending
+//      the prompt, every one. Interval i's lists sit at 3i, 3i + 1 and
+//      3i + 2.
 //   3. of(): the interval is the last bound not above `tokens`, found by
-//      binary search; return its list for `logits`.
+//      binary search; return its list for the step's kind.
 //
 // Design and cost
-//   - Counted: at most 2 × launches + 1 bounds, two lists an interval, each
+//   - Counted: at most 2 × launches + 1 bounds, three lists an interval, each
 //     at most the launches; built once, at build. A step searches the
 //     bounds and walks its list, where it would walk every launch; the
 //     calls out of the module are unchanged. The bounds are the matrix
@@ -73,8 +75,8 @@ class Schedules {
 
   // The launches a step of `tokens` can dispatch, in order. Precondition:
   // tokens >= 1.
-  [[nodiscard]] std::span<const std::uint32_t> of(std::uint32_t tokens,
-                                                  bool logits) const noexcept;
+  [[nodiscard]] std::span<const std::uint32_t> of(
+      std::uint32_t tokens, bool logits, bool ends_prompt) const noexcept;
 
  private:
   std::vector<std::uint32_t>

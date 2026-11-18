@@ -1,5 +1,5 @@
 // Axis H (view): the inspector, the workbench's right column. Which
-// side's neurons the deck or the Map shows, at the branch point; the strongest
+// side's neurons the deck shows, at the branch point; the strongest
 // neurons in the front layer; the selection: one neuron, with its value in
 // the reply and the steered reply, or
 // many, with how many are pinned; Set, Scale × and Zero for what is
@@ -37,8 +37,8 @@
 //     (session.pinAll, session.unpinAll). The pins are held for the next
 //     run (the prompt shows them). How many a run takes is the engine's to
 //     say (4,096, edit.h): past it, Run fails by name (session/pins.ts).
-//   - Without a selection: "Click a neuron on the deck, drag across
-//     several, or go to one by number."
+//   - Without a selection: "Click a light on the ride or a neuron on the
+//     deck, drag across several, or go to one by number."
 //
 // Design
 //   - The values are read from each side's neurons at the branch point
@@ -103,8 +103,8 @@ export function Inspector(props: {
       )}
       {selection === null ? (
         <p className="hint">
-          Click a neuron on the deck, drag across several, or go to one by
-          number.
+          Click a light on the ride or a neuron on the deck, drag across
+          several, or go to one by number.
         </p>
       ) : selection.neurons.length === 1 ? (
         <NeuronCard

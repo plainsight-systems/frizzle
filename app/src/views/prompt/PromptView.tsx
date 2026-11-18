@@ -16,7 +16,7 @@
 //         aria-describedby
 //       the pins held, as chips (PinChips.tsx); a chip's "Show …" opens
 //         the workbench on its neurons
-//       button "Open neurons": opens the workbench (onOpen)
+//       button "Open the ride": opens the workbench (onOpen)
 //       until the model is ready, button "Load model" in Run's place,
 //         enabled when canLoad (onLoad), and beside it the model's size
 //         (config/model.json) before it starts, then the load's progress in
@@ -47,7 +47,7 @@
 //         would run to the end of the context is never a dead end
 //       button "Accept": enabled once the steered reply is done, stopped
 //         included; makes it the reply (session.accept)
-//       button "Neurons in the reply", button "Neurons in the steered
+//       button "Ride the reply" and "Ride the steered
 //         reply" (once the run has a steered reply): open the workbench on
 //         that side's neurons at the branch point
 //   - Once a word is chosen, the branch point shows as a mark in the reply
@@ -206,7 +206,7 @@ export function PromptView(props: {
             />
           </label>
           <button type="button" onClick={() => onOpen()}>
-            Open neurons
+            Open the ride
           </button>
           <span className="hint">
             {pins.length === 0
@@ -382,10 +382,10 @@ function ReplyColumn(props: {
         <button
           type="button"
           className="neurons"
-          aria-label="Neurons in the reply"
+          aria-label="Ride the reply"
           onClick={() => onOpen("reply")}
         >
-          Neurons ↗
+          Ride ↗
         </button>
       )}
     </section>
@@ -499,10 +499,10 @@ function SteeredColumn(props: {
         <button
           type="button"
           className="neurons"
-          aria-label="Neurons in the steered reply"
+          aria-label="Ride the steered reply"
           onClick={() => onOpen("steered")}
         >
-          Neurons ↗
+          Ride ↗
         </button>
       )}
     </section>

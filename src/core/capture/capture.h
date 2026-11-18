@@ -24,7 +24,15 @@
 //   - weights: each query head's attention weights over the keys it read,
 //     head-major, `keys` a head (capture/weights.h);
 //   - stats: each query head's softmax maximum and sum, the fold's
-//     (kernels/attention/attention.h), which the weights were divided by.
+//     (kernels/attention/attention.h), which the weights were divided by;
+//   - readout: the words most likely to come next if the model stopped
+//     after this layer: the residual stream as the layer leaves it, through
+//     the model's final norm, output head and top-k selection, the
+//     selection's kCandidates (logit, token) pairs, best first. Layer l's is
+//     made in layer l + 1, from the X its first norm added; the last
+//     layer's is the step's own candidates, what the model really draws
+//     from. Only that one is something the model computes for itself: the
+//     others are a side reading (graph/graph.h).
 // With each layer's slots, its attention: the window it reads over, and
 // whether it is full attention, its window reaching the whole trained
 // context (model/model_description.h), so a reader is told the layer's kind,
@@ -41,8 +49,9 @@
 //       2. Then, for each layer in order, its residual, attention_added and
 //          mlp_added (the embedding width each), its query (query heads ×
 //          head dimension), its weights (query heads × keys) and its stats
-//          (query heads × 2: m then l a head), in that order, each after the
-//          last.
+//          (query heads × 2: m then l a head) and its readout (2 ×
+//          kCandidates: logit bits then token a pair), in that order, each
+//          after the last.
 //     Each layer's window is its attention_window, and full_attention is
 //     whether that is at least the trained context: then every position a
 //     query can be at reads back to position 0. Gemma 3 1B's 4 global
@@ -60,7 +69,8 @@
 //       query    26 × 4 × 256                        26,624
 //       weights  22 × 4 × 512 + 4 × 4 × 32,768      569,344
 //       stats    26 × 8                                 208
-//       the store                                   865,744 words, 3.3 MiB
+//       readout  26 × 128                             3,328
+//       the store                                   869,072 words, 3.3 MiB
 //   - capture_launch(source, store, slot): a launch that copies one row of
 //     `slot.width` words, binding the source (binding 2) and the store
 //     (binding 3). In the step that ends the prompt, and only there, it
@@ -68,6 +78,10 @@
 //     of every value, NaN, infinity, negative zero and subnormals included.
 //     It writes nothing outside the slot, and in any other step nothing at
 //     all. The graph uses it for the neurons and for Q.
+//   - readout_launch(candidates, store, slot): the same copy from the first
+//     row of `candidates`, one row of kReadoutWords, a launch over the
+//     prompt's end (kernels/interface.h, Rows::PromptEnd): it is not
+//     dispatched in any other step.
 //   - "The step that ends the prompt": the step that asks for logits with
 //     its tokens given, not fed from the last draw (kernels/interface.h,
 //     Step: logits 1, fed 0). The turn loop has exactly one a turn, the last
@@ -121,6 +135,15 @@
 //     read-only and writable. A slot is a word offset in a launch's
 //     constants, not a binding offset: a storage binding's offset must be a
 //     multiple of 256 bytes, which a slot need not be.
+//   - The readouts run only at the prompt's end. A head product reads the
+//     320 MiB embedding, so 25 more in every decode step would make a reply
+//     many times slower; a step that ends the prompt pays them once a run
+//     or inspection: 25 sets of a norm, three head launches, three selection
+//     passes and a copy, about 200 dispatches. Their time is not measured.
+//     They write only `normed`'s last row after the layer's Q, K and V have
+//     read it, and `logits`, the selection's partials and `candidates`,
+//     which the step's own output rewrites, so what the model computes is
+//     unchanged (the replay scenario holds replies to it).
 //   - Cost, counted for Gemma 3 1B (not measured):
 //       - The step that ends the prompt: the neurons' 26 copies, 702 KiB;
 //         Q's 26, 104 KiB; the norms' writes, 351 KiB; the scores' and
@@ -190,6 +213,9 @@
 
 namespace frizzle::capture {
 
+// A layer's readout: the selection's candidates, two words a pair.
+inline constexpr std::uint32_t kReadoutWords = 2 * residency::kCandidates;
+
 // A range of the store, in 32-bit words.
 struct Slot {
   std::uint32_t first;
@@ -205,6 +231,7 @@ struct LayerSlots {
   Slot query;            // query heads × head dimension; head h at h × d
   Slot weights;          // query heads × keys; head h, key i at h × keys + i
   Slot stats;            // query heads × 2; head h's m at 2h, its l at 2h + 1
+  Slot readout;          // kReadoutWords: pair i's logit at 2i, token at 2i + 1
   std::uint32_t keys;    // min(attention_window, trained_context)
   std::uint32_t query_heads;
   std::uint32_t window;  // attention_window, in tokens
@@ -222,5 +249,9 @@ struct Layout {
 [[nodiscard]] kernels::Launch capture_launch(
     const residency::BufferRange& source, const residency::BufferRange& store,
     Slot slot);
+
+[[nodiscard]] kernels::Launch readout_launch(
+    const residency::BufferRange& candidates,
+    const residency::BufferRange& store, Slot slot);
 
 }  // namespace frizzle::capture

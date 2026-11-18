@@ -12,10 +12,8 @@
 //     adapter, or "failed" with the browser's or the engine's words.
 //   - model: "idle" until load(); "starting" until the worker's first
 //     progress; "downloading" or "loading" with bytes done and total, as
-//     the worker reports them; then "ready", with the
-//     context in tokens and `downloaded`, the bytes this load downloaded
-//     (null when the file was already kept), or "failed" with the
-//     failure's stage and message.
+//     the worker reports them; then "ready", with the context in tokens,
+//     or "failed" with the failure's stage and message.
 //   - load(): only from "idle" or "failed", once the device is ready;
 //     otherwise it throws, a page bug, never a state.
 //   - pins: the edit set held for the next run, at most one edit a neuron,
@@ -163,7 +161,6 @@ export type ModelState =
   | {
       readonly kind: "ready";
       readonly contextTokens: number;
-      readonly downloaded: number | null;
     }
   | { readonly kind: "failed"; readonly failure: Failure };
 
@@ -271,11 +268,9 @@ export class Session {
         `load() with the device ${device.kind} and the model ${model.kind}`,
       );
     }
-    let downloaded: number | null = null;
     this.#set({ model: { kind: "starting" } });
     this.#client
       .load(({ phase, done, total }) => {
-        if (phase === "download") downloaded = done;
         this.#setModel({
           kind: phase === "download" ? "downloading" : "loading",
           done,
@@ -283,8 +278,7 @@ export class Session {
         });
       })
       .then(
-        ({ contextTokens }) =>
-          this.#setModel({ kind: "ready", contextTokens, downloaded }),
+        ({ contextTokens }) => this.#setModel({ kind: "ready", contextTokens }),
         (error: unknown) =>
           this.#setModel({ kind: "failed", failure: failureOf(error) }),
       );

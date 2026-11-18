@@ -44,16 +44,18 @@ namespace frizzle::kernels {
 //     (format.h), which reads no binding, so it composes beside an unpack.
 //   - Geometry: a launch runs a fixed number of invocations for each row it
 //     covers — every token of the step, or only its last, which is all the
-//     final norm and the output head need — in workgroups of a size the
+//     final norm and the output head need, or its last in the step that
+//     ends the prompt alone, which is when the layers' readouts run
+//     (capture/capture.h) — in workgroups of a size the
 //     launcher chooses and gives the kernel as an override constant, so the
 //     size is stated once. The program works out each step's workgroups from
 //     its position and token count with workgroups_for below. Workgroup size
 //     belongs to each kernel: the right value differs per kernel, and a shared
 //     constant would couple them. A launch that covers only the last token is
-//     one row's workgroups, and the program sets its override constant
-//     `last_token` to true; a kernel that can cover only the last token
-//     declares `override last_token: bool = false;` and then works on row
-//     tokens - 1 of each buffer. Rows alone decides both, so they cannot
+//     one row's workgroups (PromptEnd's too), and the program sets its
+//     override constant `last_token` to true; a kernel that can cover only the
+//     last token declares `override last_token: bool = false;` and then works
+//     on row tokens - 1 of each buffer. Rows alone decides both, so they cannot
 //     disagree. A launch may instead cover tiles of rows — attention's
 //     query tiles — and may multiply its workgroups by the step's key
 //     chunks or run only when the step splits them, and may run in one
@@ -204,7 +206,9 @@ struct Binding {
 // The rows a launch covers.
 enum class Rows : std::uint8_t {
   EveryToken,
-  LastToken,
+  LastToken,  // in a step that asks for logits
+  PromptEnd,  // the last token, in the step that ends the prompt alone:
+              // logits asked for, the tokens given, not fed
 };
 
 // The positions a step may reach: position + tokens <= 2^24. Rope forms a
@@ -273,20 +277,22 @@ struct Geometry {
 
 // The workgroups a launch of `workgroup_size` runs in a step of `tokens`
 // from `position`; 0 when it does not run: in a step outside its token
-// range, over the last token alone in a step that asks for no `logits`, or
-// a combine when the step does not split. A split runs its rows' or
-// tiles' workgroups once for each chunk, each a whole number of
-// workgroups. Preconditions: tokens >= 1; workgroup_size >= 1; a key
-// split's window >= 1; position + tokens <= kMaxPositions.
-// The step's position and tokens in the order key_chunks takes them (above).
+// range, over the last token alone in a step that asks for no `logits`,
+// over the prompt's end in a step that does not end the prompt (a decode
+// step's logits are not it), or a combine when the step does not split. A split
+// runs its rows' or tiles' workgroups once for each chunk, each a whole number
+// of workgroups. Preconditions: tokens >= 1; workgroup_size >= 1; a key split's
+// window >= 1; position + tokens <= kMaxPositions. The step's position and
+// tokens in the order key_chunks takes them (above).
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 [[nodiscard]] constexpr std::uint64_t workgroups_for(
     const Geometry& g, std::uint32_t workgroup_size, std::uint32_t position,
-    std::uint32_t tokens, bool logits) noexcept {
+    std::uint32_t tokens, bool logits, bool ends_prompt) noexcept {
   // NOLINTEND(bugprone-easily-swappable-parameters)
   if (tokens < g.tokens.least || tokens > g.tokens.most) return 0;
   if (g.rows == Rows::LastToken && !logits) return 0;
-  const std::uint64_t rows = g.rows == Rows::LastToken ? 1 : tokens;
+  if (g.rows == Rows::PromptEnd && !ends_prompt) return 0;
+  const std::uint64_t rows = g.rows == Rows::EveryToken ? tokens : 1;
   const std::uint64_t covered =
       g.rows_per_tile == 0 ? rows * g.invocations_per_row
                            : (rows + g.rows_per_tile - 1) / g.rows_per_tile *

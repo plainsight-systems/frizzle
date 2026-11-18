@@ -9,6 +9,7 @@
 
 #include "core/runtime/engine.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -111,6 +112,10 @@ struct GenerateCall {
   std::vector<tokenizer::TokenType> input_types;
   std::string text_pool;
   std::vector<std::uint32_t> text_offsets;
+  // Each layer's most likely next tokens and their texts (Captured).
+  std::vector<tokenizer::TokenId> guesses;
+  std::string guess_pool;
+  std::vector<std::uint32_t> guess_offsets;
 };
 
 // --- Names, for refusals and failures ------------------------------------
@@ -441,6 +446,23 @@ void on_captures_read(residency::Mapped outcome, std::span<const float> words,
     captured.input_types = call->input_types;
     captured.text_pool = call->text_pool;
     captured.text_offsets = call->text_offsets;
+    // Each guess's text alone: a stream of its own, since these tokens do
+    // not follow one another.
+    call->guess_offsets.push_back(0);
+    std::vector<std::uint32_t> one;
+    for (const capture::LayerSlots& l : s.layout.layers) {
+      for (std::size_t i = 0; i < kGuesses; ++i) {
+        const auto token = static_cast<tokenizer::TokenId>(
+            std::bit_cast<std::uint32_t>(words[l.readout.first + (2 * i) + 1]));
+        call->guesses.push_back(token);
+        tokenizer::texts(tokenizer, std::span(&token, 1), call->guess_pool,
+                         one);
+        call->guess_offsets.push_back(one.back());
+      }
+    }
+    captured.guesses = call->guesses;
+    captured.guess_pool = call->guess_pool;
+    captured.guess_offsets = call->guess_offsets;
   }
   call->result.message = call->message;
   call->result.tail = call->tail;

@@ -38,8 +38,10 @@ namespace frizzle::kernels {
 //     output is the same bits for any tiling and run to run, given the same
 //     logits. The same holds across GPUs by that argument; it is not
 //     verified.
-//   - Every pass covers the last token alone (Rows::LastToken), so it runs
-//     only in a step that asks for logits (kernels/interface.h).
+//   - Every pass covers the last token alone, `rows`: LastToken for the
+//     draw's selection, which runs in a step that asks for logits; PromptEnd
+//     for a layer's readout, which runs only in the step that ends the
+//     prompt (kernels/interface.h, capture/capture.h).
 //   - Preconditions, stated, not checked: vocabulary >= kCandidates, which
 //     the graph refuses otherwise (graph/graph.cpp, output); `partials_a`
 //     holds n₁ = 64 × ceil(vocabulary / 1,024) pairs and `partials_b`
@@ -177,11 +179,11 @@ inline constexpr std::uint32_t kCandidates = residency::kCandidates;
 // vocabulary >= kCandidates; `partials_a` holds n₁ = 64 × ceil(vocabulary /
 // 1,024) pairs and `partials_b` 64 × ceil(n₁ / 1,024), as the graph sizes
 // them; each later pass writes fewer than the one two before; `candidates`
-// holds kCandidates.
+// holds kCandidates; `rows` is LastToken or PromptEnd.
 [[nodiscard]] std::vector<Launch> topk_launches(
     const residency::BufferRange& logits, std::uint32_t vocabulary,
     const residency::BufferRange& partials_a,
     const residency::BufferRange& partials_b,
-    const residency::BufferRange& candidates);
+    const residency::BufferRange& candidates, Rows rows = Rows::LastToken);
 
 }  // namespace frizzle::kernels

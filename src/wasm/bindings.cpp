@@ -57,8 +57,9 @@
 //     the engine's Captured (runtime/engine.h), as it gave it:
 //       {"status": "taken", "words", "position", "layers": [{"neurons",
 //         "residual", "attentionAdded", "mlpAdded", "query", "weights",
-//         "stats", "keys", "queryHeads", "window", "full"}, ...], "input":
-//         [[id, "type", "text"], ...]}: one object a layer, in layer order,
+//         "stats", "readout", "keys", "queryHeads", "window", "full"}, ...],
+//         "input": [[id, "type", "text"], ...], "guesses": [[[id, "text"],
+//         ...], ...]}: one object a layer, in layer order,
 //         each slot a pair [first, width] in 32-bit words, exactly
 //         capture::layout()'s (capture/capture.h), "window" its attention
 //         window in tokens and "full" true or false, whether it is full
@@ -67,7 +68,9 @@
 //         position + 1 tokens, in order, each its identifier, its type
 //         ("normal", "unknown", "control", "user-defined", "unused", "byte"
 //         or "undefined", vocabulary.h's) and its text (runtime/engine.h,
-//         Captured), escaped. The store itself crosses whole in the
+//         Captured), escaped; "guesses", a list a layer, its most likely
+//         next tokens, best first, each with its text as a token alone.
+//         The store itself crosses whole in the
 //         same call as the answer: frizzleOnAnswer(request, answer, words),
 //         `words` a Float32Array of every word of the store, bit for bit;
 //       {"status": "not-taken"}: the turn was cancelled, so there are none;
@@ -102,7 +105,7 @@
 //     token but its text and identifier. The reply's identifiers in the
 //     answer, about six bytes a token in JSON: a 4,000-token reply is about
 //     24 KB, once.
-//   - The store, 865,744 words, 3.3 MiB, for Gemma 3 1B, crosses once a
+//   - The store, 869,072 words, 3.3 MiB, for Gemma 3 1B, crosses once a
 //     run and once an inspection, in the answer's own call (WASM.2): the
 //     engine's span is valid only during its callback, so it is copied out
 //     of the heap there, by a slice of a view made at that moment and not
@@ -423,6 +426,23 @@ std::string input_json(const runtime::Captured& captured) {
   return out + "]";
 }
 
+// The captures' "guesses": a list a layer of [id, "text"] pairs.
+std::string guesses_json(const runtime::Captured& captured) {
+  std::string out = "[";
+  for (std::size_t i = 0; i < captured.guesses.size(); ++i) {
+    if (i % runtime::kGuesses == 0)
+      out += i == 0 ? "[" : "],[";
+    else
+      out += ',';
+    const std::uint32_t from = captured.guess_offsets[i];
+    const std::uint32_t to = captured.guess_offsets[i + 1];
+    out += "[" +
+           std::to_string(static_cast<std::uint32_t>(captured.guesses[i])) +
+           "," + quoted(captured.guess_pool.substr(from, to - from)) + "]";
+  }
+  return out + "]]";
+}
+
 // The answer's "captures" (the header's frizzle_generate).
 std::string captures_json(const runtime::Captured& captured) {
   switch (captured.status) {
@@ -437,6 +457,7 @@ std::string captures_json(const runtime::Captured& captured) {
                   ",\"query\":" + slot_json(l.query) +
                   ",\"weights\":" + slot_json(l.weights) +
                   ",\"stats\":" + slot_json(l.stats) +
+                  ",\"readout\":" + slot_json(l.readout) +
                   ",\"keys\":" + std::to_string(l.keys) +
                   ",\"queryHeads\":" + std::to_string(l.query_heads) +
                   ",\"window\":" + std::to_string(l.window) +
@@ -446,7 +467,7 @@ std::string captures_json(const runtime::Captured& captured) {
              std::to_string(captured.words.size()) +
              ",\"position\":" + std::to_string(captured.position) +
              ",\"layers\":[" + layers + "],\"input\":" + input_json(captured) +
-             "}";
+             ",\"guesses\":" + guesses_json(captured) + "}";
     }
     case runtime::CaptureStatus::NotTaken:
       return "{\"status\":\"not-taken\"}";

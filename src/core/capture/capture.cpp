@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/residency/plan.h"
 #include "frizzle/shaders_generated.h"
 
 namespace frizzle::capture {
@@ -69,6 +70,7 @@ Layout layout(const model::ModelDescription& model) {
     s.query = take(std::uint64_t{l.query_heads} * l.head_dimension);
     s.weights = take(std::uint64_t{l.query_heads} * s.keys);
     s.stats = take(std::uint64_t{l.query_heads} * 2);
+    s.readout = take(kReadoutWords);
   }
   out.words = first;
   return out;
@@ -87,6 +89,21 @@ kernels::Launch capture_launch(const residency::BufferRange& activation,
                          kWorkgroup,
                          kernels::Rows::LastToken,
                          {}};
+}
+
+kernels::Launch readout_launch(const residency::BufferRange& candidates,
+                               const residency::BufferRange& store, Slot slot) {
+  const Constants constants{slot.first, slot.width};
+  std::vector<std::byte> bytes(sizeof constants);
+  std::memcpy(bytes.data(), &constants, sizeof constants);
+  return kernels::Launch{shaders::capture,
+                         nullptr,
+                         std::move(bytes),
+                         {whole(candidates), whole(store)},
+                         kWorkgroup,
+                         kWorkgroup,
+                         kernels::Rows::PromptEnd,
+                         {{"first_row", 1.0}}};
 }
 
 }  // namespace frizzle::capture

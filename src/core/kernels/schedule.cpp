@@ -22,7 +22,7 @@ Schedules::Schedules(std::span<const Geometry> launches) {
   std::sort(bounds_.begin(), bounds_.end());
   bounds_.erase(std::unique(bounds_.begin(), bounds_.end()), bounds_.end());
 
-  lists_.resize(2 * bounds_.size());
+  lists_.resize(3 * bounds_.size());
   for (std::size_t i = 0; i < bounds_.size(); ++i) {
     // Within an interval every launch runs at all of it or at none, so
     // its least token count stands for it.
@@ -30,17 +30,19 @@ Schedules::Schedules(std::span<const Geometry> launches) {
     for (std::uint32_t k = 0; k < launches.size(); ++k) {
       const Geometry& g = launches[k];
       if (tokens < g.tokens.least || tokens > g.tokens.most) continue;
-      if (g.rows != Rows::LastToken) lists_[2 * i].push_back(k);
-      lists_[2 * i + 1].push_back(k);
+      if (g.rows == Rows::EveryToken) lists_[3 * i].push_back(k);
+      if (g.rows != Rows::PromptEnd) lists_[3 * i + 1].push_back(k);
+      lists_[3 * i + 2].push_back(k);
     }
   }
 }
 
-std::span<const std::uint32_t> Schedules::of(std::uint32_t tokens,
-                                             bool logits) const noexcept {
+std::span<const std::uint32_t> Schedules::of(std::uint32_t tokens, bool logits,
+                                             bool ends_prompt) const noexcept {
   const auto above = std::upper_bound(bounds_.begin(), bounds_.end(), tokens);
   const auto interval = static_cast<std::size_t>(above - bounds_.begin()) - 1;
-  return lists_[2 * interval + (logits ? 1 : 0)];
+  const std::size_t kind = ends_prompt ? 2 : (logits ? 1 : 0);
+  return lists_[3 * interval + kind];
 }
 
 }  // namespace frizzle::kernels

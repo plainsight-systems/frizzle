@@ -304,7 +304,7 @@ using Constants = std::vector<std::pair<std::string_view, double>>;
 Constants constants_of(const Launch& launch) {
   Constants c;
   c.emplace_back("workgroup_size", launch.workgroup_size);
-  if (launch.rows == Rows::LastToken) c.emplace_back("last_token", 1.0);
+  if (launch.rows != Rows::EveryToken) c.emplace_back("last_token", 1.0);
   for (const Override& o : launch.overrides) c.emplace_back(o.name, o.value);
   std::sort(c.begin(), c.end());
   return c;
@@ -415,10 +415,10 @@ void Program::build(const residency::Upload& upload,
       return;
     }
     if (launch.rows_per_tile != 0 &&
-        (launch.rows == Rows::LastToken || std::uint64_t{launch.rows_per_tile} *
-                                                   launch.invocations_per_row %
-                                                   launch.workgroup_size !=
-                                               0)) {
+        (launch.rows != Rows::EveryToken ||
+         std::uint64_t{launch.rows_per_tile} * launch.invocations_per_row %
+                 launch.workgroup_size !=
+             0)) {
       done(nullptr, ProgramError::Build,
            at + "a tile is not a whole number of workgroups of every token",
            userdata);
@@ -773,15 +773,17 @@ void begin_step(Program::State& s, const std::shared_ptr<Program::State>& self,
           wgpuCommandEncoderBeginComputePass(encoder.get(), nullptr));
 #endif
       std::size_t current = s.pipelines.size();
+      // The step that ends the prompt (capture/capture.h).
+      const bool ends_prompt = step.logits != 0 && step.fed == 0;
       for (const std::uint32_t index :
-           s.schedules.of(step.tokens, step.logits != 0)) {
+           s.schedules.of(step.tokens, step.logits != 0, ends_prompt)) {
 #if FRIZZLE_DIAGNOSTICS_ENABLED
         if (index >= limit) break;  // a prefix ends here; indices ascend
 #endif
         const State::Bound& launch = s.launches[index];
-        const std::uint64_t workgroups =
-            workgroups_for(launch.geometry, launch.workgroup_size,
-                           step.position, step.tokens, step.logits != 0);
+        const std::uint64_t workgroups = workgroups_for(
+            launch.geometry, launch.workgroup_size, step.position, step.tokens,
+            step.logits != 0, ends_prompt);
         if (workgroups == 0) continue;  // a combine, the step unsplit
         if (workgroups > s.max_workgroups) {
           fits = false;

@@ -30,7 +30,8 @@ std::vector<Launch> topk_launches(const residency::BufferRange& logits,
                                   std::uint32_t vocabulary,
                                   const residency::BufferRange& partials_a,
                                   const residency::BufferRange& partials_b,
-                                  const residency::BufferRange& candidates) {
+                                  const residency::BufferRange& candidates,
+                                  Rows rows) {
   std::vector<Launch> out;
   residency::BufferRange input = logits;
   std::uint32_t count = vocabulary;
@@ -47,10 +48,14 @@ std::vector<Launch> topk_launches(const residency::BufferRange& logits,
     const Constants constants{count};
     std::vector<std::byte> bytes(sizeof constants);
     std::memcpy(bytes.data(), &constants, sizeof constants);
-    Launch pass{shaders::topk,          nullptr,
-                std::move(bytes),       {whole(input), whole(output)},
-                tiles * kWorkgroupSize, kWorkgroupSize,
-                Rows::LastToken,        {}};
+    Launch pass{shaders::topk,
+                nullptr,
+                std::move(bytes),
+                {whole(input), whole(output)},
+                tiles * kWorkgroupSize,
+                kWorkgroupSize,
+                rows,
+                {}};
     pass.entry_point = first ? "first" : "merge";
     out.push_back(std::move(pass));
     if (tiles == 1) break;

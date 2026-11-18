@@ -40,6 +40,11 @@
 //      compared the neurons alone).
 //   8. A kept identifier past the vocabulary is refused at once, Kept,
 //      naming its index; nothing runs.
+//   9. Every layer's readout (capture/capture.h) is 64 different tokens,
+//      best first, its first three the guesses the engine names; the last
+//      layer's holds the token the reply began with; and a pin at layer L
+//      leaves the readouts below L bit for bit and changes L's own, so each
+//      reads the residual stream where its layer leaves it.
 //
 // Inputs: the pinned model file (scripts/fetch_model.py); a missing file
 // fails the test. The message is wrapped as Gemma 3's chat template renders
@@ -59,6 +64,7 @@
 #include <doctest/doctest.h>
 #include <webgpu/webgpu.h>
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -70,6 +76,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/capture/capture.h"
 #include "core/edit/edit.h"
 #include "core/gguf/byte_source.h"
 #include "core/gpu/device.h"
@@ -108,9 +115,12 @@ Edit E(std::uint32_t layer, std::uint32_t neuron, EditKind kind, float value,
 // A reply and how it ended: everything the engine reports of it.
 struct Reply {
   std::string text;
-  std::vector<TokenId> tokens;       // as emitted, one callback each
-  std::vector<std::uint32_t> store;  // the captures' bits, when taken
-  std::uint32_t position = 0;        // the captures' position
+  std::vector<TokenId> tokens;               // as emitted, one callback each
+  std::vector<std::uint32_t> store;          // the captures' bits, when taken
+  std::vector<frz::capture::Slot> readouts;  // each layer's, in the store
+  std::vector<TokenId> guesses;              // kGuesses a layer
+  std::vector<std::string> guess_texts;
+  std::uint32_t position = 0;  // the captures' position
   frz::runtime::CaptureStatus captured{};
   frz::runtime::TurnFailure failure{};
   frz::runtime::TurnEnd end{};
@@ -222,6 +232,19 @@ class Loaded {
             r.store.push_back(std::bit_cast<std::uint32_t>(w));
           }
           r.position = captured.position;
+          r.readouts.clear();
+          r.guesses.assign(captured.guesses.begin(), captured.guesses.end());
+          r.guess_texts.clear();
+          if (captured.layout != nullptr) {
+            for (const frz::capture::LayerSlots& l : captured.layout->layers) {
+              r.readouts.push_back(l.readout);
+            }
+            for (std::size_t i = 0; i < captured.guesses.size(); ++i) {
+              r.guess_texts.emplace_back(captured.guess_pool.substr(
+                  captured.guess_offsets[i],
+                  captured.guess_offsets[i + 1] - captured.guess_offsets[i]));
+            }
+          }
           r.text += result.tail;
           r.failure = result.failure;
           r.end = result.end;
@@ -361,6 +384,50 @@ TEST_CASE("replay and edits") {
   const frz::runtime::OperationStart no = engine->refused(prompt, bad);
   CHECK(no.error == frz::runtime::OperationError::Kept);
   CHECK(no.start.kept_out_of_vocabulary == std::optional<std::size_t>{1});
+
+  // 9. The readouts: well formed, the last the model's own candidates, and
+  // each reading the stream where its layer leaves it.
+  REQUIRE(original.captured == frz::runtime::CaptureStatus::Taken);
+  REQUIRE(edited.captured == frz::runtime::CaptureStatus::Taken);
+  REQUIRE(original.readouts.size() == 26);
+  REQUIRE(original.guesses.size() == 26 * frz::runtime::kGuesses);
+  const auto words = [](const Reply& r, std::size_t layer) {
+    const frz::capture::Slot s = r.readouts.at(layer);
+    return std::span(r.store).subspan(s.first, s.width);
+  };
+  const auto token_at = [](std::span<const std::uint32_t> w, std::size_t i) {
+    return static_cast<TokenId>(w[(2 * i) + 1]);
+  };
+  for (std::size_t l = 0; l < 26; ++l) {
+    const std::span<const std::uint32_t> w = words(original, l);
+    std::vector<std::uint32_t> tokens;
+    for (std::size_t i = 0; i < 64; ++i) {
+      tokens.push_back(w[(2 * i) + 1]);
+      if (i > 0) {
+        CHECK(std::bit_cast<float>(w[2 * (i - 1)]) >=
+              std::bit_cast<float>(w[2 * i]));
+      }
+    }
+    std::sort(tokens.begin(), tokens.end());
+    CHECK(std::adjacent_find(tokens.begin(), tokens.end()) == tokens.end());
+    for (std::size_t g = 0; g < frz::runtime::kGuesses; ++g) {
+      CHECK(original.guesses.at((l * frz::runtime::kGuesses) + g) ==
+            token_at(w, g));
+    }
+  }
+  bool first_is_candidate = false;
+  for (std::size_t i = 0; i < 64; ++i) {
+    first_is_candidate = first_is_candidate ||
+                         token_at(words(original, 25), i) == original.tokens[0];
+  }
+  CHECK(first_is_candidate);
+  const auto same = [&](std::size_t l) {
+    const std::span<const std::uint32_t> a = words(original, l);
+    const std::span<const std::uint32_t> b = words(edited, l);
+    return std::equal(a.begin(), a.end(), b.begin(), b.end());
+  };
+  for (std::size_t l = 0; l < 12; ++l) CHECK(same(l));
+  CHECK_FALSE(same(12));
 
   // 4 and 6 again, on fresh engines: nothing held from before changes them.
   engine.reset();

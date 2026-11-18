@@ -18,13 +18,13 @@ approved concepts in `docs/design/concepts/`.
 │ words; the branch point marked,  │ the kept text faded,              │
 │ the text past it faded           │ its own text after it             │
 │ Running / Done / Failed          │ Waiting / Not steered / …         │
-│ [Neurons in the reply]           │ [Accept] [Neurons in the steered] │
+│ [Ride the reply]                 │ [Accept] [Ride the steered]       │
 └──────────────────────────────────┴───────────────────────────────────┘
 
 ┌─ the workbench, a layer over the whole window ───────────────────────┐
-│ ← Close  prompt › where   View: (Deck) Map   pins as chips    [Run]  │
+│ ← Close  prompt › where   View: (Ride) Deck  pins as chips    [Run]  │
 ├──────────────────────────────────────────┬───────────────────────────┤
-│ the layer deck, or the Map               │ the inspector             │
+│ the Ride, or the layer deck              │ the inspector             │
 │ one card per layer, front card = layer l │ Neurons from: Reply or    │
 │ 96 × 72 neurons, heat by size            │   Steered                 │
 │ legend: the front layer's scale          │ the strongest in layer l  │
@@ -104,32 +104,20 @@ flowchart TD
 | A pinned cell on the reply's card shows the value it will send | A pin answers on the grid at once; the steered reply's card shows what its run used |
 | Sizes in megabytes, values rounded for reading | Human units; the exact value is in the inspector's data |
 
-## The Map
+## The Ride
 
-The workbench's other view, in the deck's place, beside the inspector: every
-layer at the branch point, one row a layer, from the same captures as the
-deck.
-
-```text
-            Residual in   Attention added   MLP neurons, 6,912     MLP added
-            0 ▬▬▬▬ s      0 ▬▬▬▬ s          0 ▬▬▬▬▬▬▬▬▬▬ s          0 ▬▬▬▬ s
-Layer 0     ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
-Layer 1 ●2  ▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮          ▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮▮      ▮▮▮▮▮▮▮▮
-…           a mark a group, each group sized so every mark has a pixel
-Layer 25
-```
+The workbench's main view, beside the inspector: a drive through the layers
+at the branch point, one glass pane a layer.
 
 | Rule | Why |
 | --- | --- |
-| Columns in the order a layer computes them; the residual is the stream coming in, layer 0's the embedding | What is captured, named as it is |
-| A mark a group, the group's strongest value, either sign | Every mark is one value the run made, chosen, never summed or averaged; the reading names its index |
-| Each column's group the smallest that gives every mark a physical pixel, stated under its heading | A stretched strip with more marks than pixels drops some, the strongest among them; a finer screen shows more |
-| Heat by size, the deck's ramp | A hot mark on the Map is a hot neuron on the deck |
-| One scale a column across all layers, its 99th-percentile magnitude, in the column's legend | The Map compares layers; each column its own, since the residual's sizes are not the neurons' |
-| Click a neuron mark to select it; click elsewhere in a row for its layer | The inspector beside shows it; residual dimensions are not editable |
-| No pin preview | Every mark is a captured value |
+| Each pane shows the most likely next word if the model stopped after that layer, read through the model's final norm and output weights | It shows the answer forming, the thing a person came to see |
+| A sign reads out each layer's top guess; no percentages | A readout is a side reading: only the last layer's is what the model computes |
+| A word glows when the reply goes on to write it | The eye goes to the words that matter |
+| Each pane's lights are that layer's six strongest neurons, where they sit on the deck's grid; clicking one selects it | The way from the ride to a pin |
+| Riding with pins runs them and stays here; the road forks at the first layer whose best guess changes | The edit's effect, at the place it starts |
 
-The deck, the Map and the inspector read the same snapshot as the
+The Ride, the deck and the inspector read the same snapshot as the
 conversation; the only thing they change in the session is the pins held
 for the next run.
 The workbench gives the deck the focus on opening, so the wheel and keys

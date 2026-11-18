@@ -28,12 +28,13 @@
 //     broken module, at stage "generate", rather than resolving with
 //     captures that are not there, when: no words came; their count is not
 //     the answer's "words"; it has no layers or no position; a layer lacks
-//     one of its seven slots, its keys or query heads (whole numbers), its
+//     one of its eight slots, its keys or query heads (whole numbers), its
 //     window (a whole number of at least 1), or its kind (true or false); a slot is not
 //     whole numbers or ends past the words; the input is not position + 1
 //     tokens; or a token is not [identifier, type, text], its identifier a
 //     whole number, its type one of messages.ts's TokenType, its text a
-//     string. Rejects
+//     string; or the guesses are not a non-empty list of [identifier, text]
+//     for each layer. Rejects
 //     with its refusal or failure otherwise. One turn at a time, as the
 //     engine allows.
 //   - cancel(): the running turn ends, answered "cancelled".
@@ -77,6 +78,7 @@ import type { Edit, RangedEdit } from "../../engine/edits.ts";
 import type {
   Captures,
   Generated,
+  Guess,
   InputToken,
   LayerSlots,
   Slot,
@@ -368,6 +370,7 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
         position?: unknown;
         layers?: unknown;
         input?: unknown;
+        guesses?: unknown;
         reason?: string;
       }
     | undefined;
@@ -397,7 +400,8 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
         layerOf(layer, words.length, (why) => broken(`layer ${l} ${why}`)),
       );
       const input = inputOf(c.input, position, broken);
-      return { kind: "taken", layers, words, position, input };
+      const guesses = guessesOf(c.guesses, layers.length, broken);
+      return { kind: "taken", layers, words, position, input, guesses };
     }
     default:
       throw new EngineError(
@@ -407,7 +411,7 @@ function capturesOf(field: unknown, words: Float32Array | undefined): Captures {
   }
 }
 
-// One layer of the answer's "captures": its seven slots, each a pair
+// One layer of the answer's "captures": its eight slots, each a pair
 // [first, width] of whole numbers ending within the store's `size` words;
 // its keys and query heads, whole numbers; its window, a whole number of at
 // least 1; its kind, true or false. Anything else is `broken`.
@@ -448,6 +452,7 @@ function layerOf(
     query: slot("query"),
     weights: slot("weights"),
     stats: slot("stats"),
+    readout: slot("readout"),
     keys: count("keys"),
     queryHeads: count("queryHeads"),
     window: count("window", 1),
@@ -489,6 +494,30 @@ function inputOf(
       throw broken(`sent input token ${i} that is not [id, type, text]`);
     }
     return { id, type: type as TokenType, text };
+  });
+}
+
+// The answer's "guesses": for each layer, a non-empty list of [identifier,
+// text]; anything else is `broken`.
+function guessesOf(
+  field: unknown,
+  layers: number,
+  broken: (why: string) => EngineError,
+): readonly (readonly Guess[])[] {
+  if (!Array.isArray(field) || field.length !== layers) {
+    throw broken(`sent no guesses for its ${layers} layers`);
+  }
+  return field.map((list: unknown, l) => {
+    if (!Array.isArray(list) || list.length === 0) {
+      throw broken(`sent no guesses for layer ${l}`);
+    }
+    return list.map((guess: unknown): Guess => {
+      const [id, text] = Array.isArray(guess) ? (guess as unknown[]) : [];
+      if (!isWhole(id) || typeof text !== "string") {
+        throw broken(`sent a guess for layer ${l} that is not [id, text]`);
+      }
+      return { id, text };
+    });
   });
 }
 

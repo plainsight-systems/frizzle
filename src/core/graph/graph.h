@@ -101,8 +101,9 @@ namespace frizzle::graph {
 //     "attention.rope", "attention.capture", "attention.scores",
 //     "attention.combine",
 //     "attention.weights", "attention.output"; "ffn.norm", "ffn.gate_up",
-//     "ffn.edit", "ffn.capture", "ffn.down"; and "output.norm", "output.head",
-//     "output.select", "output.draw", which belong to no layer.
+//     "ffn.edit", "ffn.capture", "ffn.down"; "readout", the layer it reads;
+//     and "output.norm", "output.head", "output.select", "output.readout",
+//     "output.draw", which belong to no layer.
 //   - Determinism (GDSA.2): every kernel the blocks launch is
 //     batch-invariant — the gather, norms and rope work a row alone,
 //     attention folds chunks fixed by position, each matrix product adds in
@@ -123,6 +124,12 @@ namespace frizzle::graph {
 //          into the last layer's mlp_added slot.
 //       2. Q, K and V from `normed`: the plan's group as one product into
 //          `query`, `key` and `value` (kernels/matmul/matmul.h).
+//      2a. From layer 1 on, the last layer's readout, at the prompt's end
+//          alone (Rows::PromptEnd, capture/capture.h): `hidden` through the
+//          final norm into `normed`'s last row, the head into `logits`,
+//          top-k into `candidates`, and those into the last layer's readout
+//          slot. Here because `normed` has just been read for the last time
+//          this block, so nothing else is disturbed.
 //       3. QK-norm, RoPE, and the key and value
 //          appended to the layer's cache (kernels/rope/rope.h).
 //      3a. The capture: `query`'s last row into the layer's query slot of
@@ -154,7 +161,8 @@ namespace frizzle::graph {
 //     them; top-k selection, `logits` to `candidates` (kernels/topk/topk.h);
 //     and the draw, `candidates` to the record in `sampled`
 //     (sampler/sampler.h). All cover the step's last token only, and run
-//     only in a step that asks for logits.
+//     only in a step that asks for logits. After top-k, at the prompt's
+//     end, `candidates` into the last layer's readout slot.
 //   A matrix product is all its launcher's launches — a decode launch and
 //   one a prefill tile width, for each piece — and attention its main launch
 //   and its combine; the program dispatches those a step's token count,
@@ -332,6 +340,8 @@ class Builder {
   void product(const residency::WeightView& weight,
                const residency::BufferRange& input,
                const residency::BufferRange& output, kernels::Rows rows);
+  // Layer `layer`'s readout, from `hidden` as it leaves that layer.
+  void readout(std::uint32_t layer);
 
   const model::ModelDescription* model_;
   const residency::ResidencyPlan* plan_;

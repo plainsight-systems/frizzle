@@ -3,12 +3,14 @@
 // The copy kernel (capture/capture.h): one row of a source buffer at the
 // last prompt position, copied into a slot of the store. The graph uses it
 // for a layer's neurons, after the layer's edits and before its down
-// projection.
+// projection; with first_row, for a layer's readout, the one row of the
+// selection's candidates.
 //
 // Contract
 //   - In the step that ends the prompt (step.fed 0; the program runs this
 //     launch only in steps that ask for logits), copies the
-//     source's last row, `width` words, to store[first ..], word for word.
+//     source's last row (its first, with first_row), `width` words, to
+//     store[first ..], word for word.
 //   - In a fed step, a decode step, writes nothing.
 //   - Writes nothing outside the slot.
 //   - Preconditions: first + width is within the store; the source's rows
@@ -17,7 +19,7 @@
 // Algorithm, one workgroup of workgroup_size (256)
 //   1. If step.fed is 1, return.
 //   2. Invocation j copies words j, j + 256, ... below width, from row
-//      tokens − 1.
+//      tokens − 1, or row 0 with first_row.
 //
 // Design and cost
 //   - Both buffers are bound as array<u32>: the copy moves bits, never
@@ -36,6 +38,7 @@ struct CaptureLaunch {
 
 override workgroup_size: u32 = 256;
 override last_token: bool = false;     // set by the program; see above
+override first_row: bool = false;      // a source of one row, not a token's
 
 @group(0) @binding(1) var<uniform> launch: CaptureLaunch;
 @group(0) @binding(2) var<storage, read> activation: array<u32>;
@@ -46,7 +49,7 @@ fn main(@builtin(local_invocation_index) index: u32) {
     if (step.fed == 1u) {
         return;
     }
-    let row = (step.tokens - 1u) * launch.width;
+    let row = select((step.tokens - 1u) * launch.width, 0u, first_row);
     for (var i = index; i < launch.width; i += workgroup_size) {
         store[launch.first + i] = activation[row + i];
     }

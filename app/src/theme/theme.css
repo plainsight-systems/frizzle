@@ -33,11 +33,10 @@
  *     replies (each word a button set in the text as text, underlined on
  *     hover, the pressed one ringed; the branch point a bar in --accent;
  *     the text past it, and a steered reply's kept text, faded; a word
- *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the Map's
- *     reading, headings, legends and rows (two columns under 900px), the
- *     workbench's view switch, the pass map's head, reading, scene on
- *     --night, stage and key labels and legend, the inspector's segmented
- *     choice, ranked list, neuron card and Go to.
+ *     quoted in a heading as written), the deck and its zoom, strip, legend and tip, the
+ *     workbench's view switch, the Ride's scene on --night, sign, reply,
+ *     reading, controls and route, the inspector's segmented choice, ranked
+ *     list, neuron card and Go to.
  *   - Contrast: --ink and --muted on --page and --panel meet WCAG AA for
  *     body text (4.5:1); --muted is not used below 12px.
  *   - Reduced motion: no transition here moves anything; the deck's slide
@@ -465,6 +464,7 @@ fieldset > div {
   }
   .workbench-body {
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;
     overflow: auto;
   }
   .deck {
@@ -580,8 +580,7 @@ fieldset > div {
   border-radius: 2px;
 }
 
-/* The Map (views/deck/LayerMap.tsx), after the concept's
-   (docs/design/concepts/explore.html) */
+/* The workbench's view switch */
 .view-switch {
   flex: none;
   border: 1px solid var(--rule);
@@ -589,178 +588,212 @@ fieldset > div {
 .view-switch label {
   padding: 4px 12px;
 }
-.map-column h2 output {
-  margin-left: 0.75rem;
-  font-size: 11px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.map-reading {
-  margin: 0 0 8px;
-  min-height: 1.6em;
-  font: 12px var(--mono);
-}
-.map-heads,
-.map-row {
-  display: grid;
-  grid-template-columns:
-    130px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 4fr)
-    minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-}
-.map-heads {
-  padding: 0 6px;
-  font: 10px var(--mono);
-  color: var(--muted);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.map-legend {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.map-legend .ramp {
-  flex: 1;
-  min-width: 24px;
-  height: 6px;
-  border-radius: 2px;
-}
-/* The column's group, a line of its own under the ramp. */
-.map-legend .map-group {
-  flex-basis: 100%;
-  white-space: nowrap;
-}
-.map-rows {
-  margin-top: 6px;
-}
-.map-row {
-  padding: 3px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.map-row:hover {
-  background: var(--panel);
-}
-.map-row.front {
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.map-row button {
-  padding: 2px 6px;
-  text-align: left;
-  font: 12px var(--mono);
-  border-color: transparent;
-  background: none;
-}
-.map-pinned {
-  color: var(--edit);
-}
-.map-row canvas {
-  display: block;
-  width: 100%;
-  height: 16px;
-  image-rendering: pixelated;
-  border-radius: 2px;
-}
-@media (max-width: 900px) {
-  .map-heads,
-  .map-row {
-    grid-template-columns: 90px minmax(0, 1fr);
-  }
-  /* As specific as .map-row canvas, which it must override. */
-  .map-heads .map-wide,
-  .map-row .map-wide {
-    display: none;
-  }
-}
 
-/* The pass map (views/pass-map/PassMap.tsx), after the concept's
-   (docs/design/concepts/matrices.html) */
-.pass-column {
+/* The Ride (views/ride/Ride.tsx) */
+.ride-column {
   display: flex;
   flex-direction: column;
+  padding: 0;
 }
-.pass-column h2 output {
-  margin-left: 0.75rem;
-  font-size: 11px;
-  letter-spacing: 0;
-  text-transform: none;
+.ride-why {
+  position: absolute;
+  top: 14px;
+  left: 20px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 3px;
+  background: var(--page);
 }
-.pass-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  font: 12px var(--mono);
-}
-.pass-head button {
-  padding: 2px 10px;
-  font: 13px var(--mono);
-}
-.pass-layer {
-  min-width: 5.5em;
-  text-align: center;
-  font: 15px var(--serif);
-}
-.pass-reading {
-  margin: 8px 0;
-  min-height: 1.6em;
-  font: 12px var(--mono);
-}
-.pass-scene {
+.ride-scene {
   position: relative;
   flex: 1;
-  min-height: 420px;
+  min-height: 300px;
   overflow: hidden;
-  user-select: none;
   background: var(--night);
-  border-radius: 4px;
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
-.pass-scene:focus-visible {
+.ride-scene:focus-visible {
   outline: 2px solid var(--accent);
 }
-.pass-labels {
+.ride-scene canvas {
   position: absolute;
   inset: 0;
-  pointer-events: none;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: pan-x;
 }
-.pass-label,
-.pass-key {
+.ride-sign {
   position: absolute;
-  white-space: nowrap;
-  font: 11px/1.3 var(--mono);
-  color: var(--muted);
-}
-.pass-label {
-  transform: translate(-50%, 0);
+  top: 14px;
+  right: 16px;
+  min-width: 132px;
+  max-width: 190px;
+  padding: 7px 13px 8px;
+  border: 2px solid #f3f0e2;
+  border-radius: 6px;
+  background: #1d5a43;
+  color: #f3f0e2;
   text-align: center;
+  box-shadow: 0 5px 18px #0009;
 }
-.pass-label b {
-  font-weight: 500;
-  color: var(--ink);
+.ride-sign.there {
+  background: #7b5a17;
+  box-shadow: 0 0 28px #f2b54f77;
 }
-.pass-label.not b {
-  color: var(--muted);
+.ride-sign small {
+  display: block;
+  font: 11px var(--mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
-.pass-key {
-  transform: translate(0, -50%);
-  color: var(--ink);
+.ride-sign b {
+  display: block;
+  font: 500 20px/1.2 var(--serif);
 }
-.pass-key.control {
-  color: var(--muted);
+.ride-sign i {
+  font: normal 12px var(--mono);
 }
-/* A stage's scale in the legend, never split across lines. */
-.pass-scale {
+.ride-read {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 20px;
+  align-items: start;
+  padding: 12px 20px 6px;
+  border-top: 1px solid var(--rule);
+}
+/* The reply, read like a subtitle under the picture. */
+.ride-sentence {
+  position: relative;
+  max-height: 30vh;
+  margin: 0 0 3px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  font: 21px/1.4 var(--serif);
+}
+.ride-word {
   white-space: nowrap;
 }
-.pass-scale b {
+.ride-sentence button {
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+.ride-sentence button:hover:not(:disabled) {
+  background: #26324a;
+}
+.ride-sentence button:disabled {
+  cursor: default;
+}
+.ride-sentence .later {
+  color: var(--muted);
+}
+.ride-sentence .now {
+  color: var(--edit);
   font-weight: 500;
+}
+.ride-blank {
+  display: inline-block;
+  width: 3em;
+  height: 1em;
+  margin-left: 0.25em;
+  border-bottom: 2px dashed var(--accent);
+  vertical-align: -0.12em;
+}
+.ride-back {
+  margin-left: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ride-more {
+  margin: 0;
+  color: var(--muted);
+  font: 12px/1.6 var(--mono);
+}
+.ride-note {
+  flex: none;
+  padding: 0 20px 10px;
+}
+.ride-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.ride-route {
+  flex: none;
+  padding: 0 20px 2px;
+  overflow-x: auto;
+}
+.ride-route svg {
+  display: block;
+  width: 100%;
+  min-width: 620px;
+  height: auto;
+  max-height: 88px;
+}
+.ride-route path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.ride-route path.other {
+  stroke: #7c8798;
+  stroke-width: 2;
+}
+.ride-route circle {
+  fill: #39465c;
+}
+.ride-route circle.past {
+  fill: var(--accent);
+}
+.ride-route circle.at {
+  fill: var(--edit);
+  stroke: var(--night);
+}
+.ride-route rect {
+  fill: transparent;
+  cursor: pointer;
+}
+.ride-route text {
+  fill: var(--muted);
+  font: 11px var(--mono);
+}
+.ride-route text.lit {
+  fill: var(--edit);
+}
+/* Stacked over the inspector: the Ride takes its full height, and the
+   workbench's body scrolls. */
+@media (max-width: 900px) {
+  .ride-column {
+    overflow: visible;
+  }
+  .ride-scene {
+    flex: none;
+    height: 56vh;
+  }
+}
+@media (max-width: 680px) {
+  .ride-sentence {
+    font-size: 19px;
+  }
+  .ride-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ride-controls {
+    justify-content: flex-start;
+  }
 }
 
 /* The inspector */

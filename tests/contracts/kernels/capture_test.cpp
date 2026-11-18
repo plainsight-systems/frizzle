@@ -10,12 +10,13 @@
 // back through the reader, whose words are the store's bits. layout() puts
 // every layer's neurons first, each layer's after the earlier layers', its
 // own width long; then each layer's residual, two additions, query (query
-// heads × head dimension), weights and stats in that order, the weights
-// min(window, trained context) keys a head; and states each layer's window
-// and whether it is full attention, its window at least the trained
-// context (changed in slice 4, step 5, and slice 5, step 1, with the
-// store's contract). The copy is the one launch the graph uses for both
-// the neurons and Q; only the source differs.
+// heads × head dimension), weights, stats and readout in that order, the
+// weights min(window, trained context) keys a head; and states each layer's
+// window and whether it is full attention, its window at least the trained
+// context (changed with the store's contract). The copy is the one launch
+// the graph uses for both the neurons and Q; only the source differs. The
+// readout's launch copies the first row of its source, whatever the step's
+// token count, and is dispatched in the step that ends the prompt alone.
 //
 // What it does not check, and what does:
 //   - That the graph places the launch after the edit launch, so a pinned
@@ -35,11 +36,11 @@
 // 136 and 264, an embedding width of 8, 2 query heads of dimension 4,
 // windows 16, 64 and 16 and a trained context of 40, so the middle layer's
 // keys are the trained context's and it is full attention; an activation of
-// 3 rows of layer 1's 136 words; a store of layout()'s 852 words, filled first
-// with a pattern that no activation word shares; a program of one launch, layer
-// 1's, over a plan of those two working buffers. The activation holds a NaN
-// with a payload, both infinities, a negative zero and a subnormal in its last
-// row. No model file.
+// 3 rows of layer 1's 136 words; a store of layout()'s 1,236 words, filled
+// first with a pattern that no activation word shares; a program of one launch,
+// layer 1's, over a plan of those two working buffers. The activation holds a
+// NaN with a payload, both infinities, a negative zero and a subnormal in its
+// last row. No model file.
 //
 // Corpus guidance
 //   C++ Core Guidelines
@@ -154,7 +155,9 @@ std::vector<std::uint32_t> activation() {
 // capture launch, and the reader over the store.
 class Harness {
  public:
-  Harness()
+  // The neurons' copy, or with `readout` layer 1's readout launch over the
+  // same source.
+  explicit Harness(bool readout = false)
       : instance_(wgpuCreateInstance(nullptr)),
         device_(frz::testing::acquire(instance_.get())),
         layout_(frz::capture::layout(description())) {
@@ -198,8 +201,11 @@ class Harness {
     activation_ = plan.scratch.at(0).range;
     store_ = plan.scratch.at(1).range;
     std::vector<frz::kernels::Launch> launches;
-    launches.push_back(frz::capture::capture_launch(
-        activation_, store_, layout_.layers.at(kLayer).neurons));
+    const frz::capture::LayerSlots& slots = layout_.layers.at(kLayer);
+    launches.push_back(
+        readout
+            ? frz::capture::readout_launch(activation_, store_, slots.readout)
+            : frz::capture::capture_launch(activation_, store_, slots.neurons));
     struct Built {
       std::unique_ptr<frz::kernels::Program> program;
       std::string message;
@@ -360,25 +366,28 @@ TEST_CASE("layout puts every layer's neurons first, then each layer's rest") {
   CHECK(l.neuron_words == 600);
   // Region 2, a layer at a time: residual, the two additions (the
   // embedding width each), query (heads × head dimension), weights (heads ×
-  // keys), stats (heads × 2).
+  // keys), stats (heads × 2), readout (two words a candidate).
   slot(at(0).residual, 600, 8);
   slot(at(0).attention_added, 608, 8);
   slot(at(0).mlp_added, 616, 8);
   slot(at(0).query, 624, 8);
   slot(at(0).weights, 632, 32);
   slot(at(0).stats, 664, 4);
-  slot(at(1).residual, 668, 8);
-  slot(at(1).attention_added, 676, 8);
-  slot(at(1).mlp_added, 684, 8);
-  slot(at(1).query, 692, 8);
-  slot(at(1).weights, 700, 80);  // keys: the trained context's 40, not 64
-  slot(at(1).stats, 780, 4);
-  slot(at(2).residual, 784, 8);
-  slot(at(2).attention_added, 792, 8);
-  slot(at(2).mlp_added, 800, 8);
-  slot(at(2).query, 808, 8);
-  slot(at(2).weights, 816, 32);
-  slot(at(2).stats, 848, 4);
+  slot(at(0).readout, 668, 128);
+  slot(at(1).residual, 796, 8);
+  slot(at(1).attention_added, 804, 8);
+  slot(at(1).mlp_added, 812, 8);
+  slot(at(1).query, 820, 8);
+  slot(at(1).weights, 828, 80);  // keys: the trained context's 40, not 64
+  slot(at(1).stats, 908, 4);
+  slot(at(1).readout, 912, 128);
+  slot(at(2).residual, 1040, 8);
+  slot(at(2).attention_added, 1048, 8);
+  slot(at(2).mlp_added, 1056, 8);
+  slot(at(2).query, 1064, 8);
+  slot(at(2).weights, 1072, 32);
+  slot(at(2).stats, 1104, 4);
+  slot(at(2).readout, 1108, 128);
   CHECK(at(0).keys == 16);
   CHECK(at(1).keys == 40);
   CHECK(at(2).keys == 16);
@@ -391,7 +400,7 @@ TEST_CASE("layout puts every layer's neurons first, then each layer's rest") {
   CHECK_FALSE(at(0).full_attention);
   CHECK(at(1).full_attention);
   CHECK_FALSE(at(2).full_attention);
-  CHECK(l.words == 852);
+  CHECK(l.words == 1236);
 }
 
 TEST_CASE("a prefill step that ends the prompt copies its last row") {
@@ -422,4 +431,22 @@ TEST_CASE("a prefill step that does not end the prompt changes nothing") {
   Harness h;
   const std::vector<std::uint32_t> before = pattern(h.layout().words);
   same_words(h.run(kRows, false, false, activation(), before), before);
+}
+
+TEST_CASE("the readout copies its source's first row, whatever the step") {
+  Harness h(true);
+  const std::vector<std::uint32_t> a = activation();
+  const std::vector<std::uint32_t> before = pattern(h.layout().words);
+  const frz::capture::Slot slot = h.layout().layers.at(kLayer).readout;
+  same_words(
+      h.run(kRows, true, false, a, before),
+      copied(before, slot, std::span(a).first(frz::capture::kReadoutWords)));
+}
+
+TEST_CASE("the readout is not dispatched outside the step ending the prompt") {
+  Harness h(true);
+  const std::vector<std::uint32_t> a = activation();
+  const std::vector<std::uint32_t> before = pattern(h.layout().words);
+  same_words(h.run(1, true, true, a, before), before);
+  same_words(h.run(kRows, false, false, a, before), before);
 }
