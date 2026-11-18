@@ -1,0 +1,7 @@
+{{- /* Axis W (site): the page a missing address gets: says so, and offers Home and the app. */ -}}
+{{ define "main" }}
+<article class="article">
+  <h1>Not here</h1>
+  <p>Nothing lives at this address. <a href="{{ site.Home.RelPermalink }}">Home</a> says what Frizzle is, and <a href="{{ "app/" | relURL }}">Open Frizzle</a> starts it.</p>
+</article>
+{{ end }}

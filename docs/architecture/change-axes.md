@@ -41,7 +41,8 @@ flowchart TB
 ```
 
 U (build and pins) and V (tests and references) sit beside all of it: U
-builds it, V checks it.
+builds it, V checks it. W, the site, sits outside it and serves the built
+app.
 
 ## Inside a layer: who owns what
 
@@ -81,6 +82,7 @@ flowchart LR
 | **T** Chat template | A template feature, or how a conversation is rendered | Jinja rendering, in the worker |
 | **U** Build | A toolchain pin or build preset | CMake presets, shader embedding, pins, the npm lockfile |
 | **V** Evidence | A new contract to guard, or a new reference | Tests, the frozen llama.cpp reference, fixtures, the native tool |
+| **W** Site | The site's pages, shell or address | `web/`: Hugo's configuration, layouts, content and stylesheet; it hosts the built app and changes none of it |
 
 H is a family, as E is: one member per reason the app changes.
 

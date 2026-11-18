@@ -1,0 +1,11 @@
+{{- /*
+Axis W (site): the share image, 1200 × 630, made from the README banner by
+Hugo's own image processing: the banner fitted to 1200 wide, then padded
+top and bottom with the masthead's navy to 630, so nothing of it is
+cropped. Returns the image resource.
+*/ -}}
+{{- $banner := resources.Get "banner/frizzle-readme.png" }}
+{{- $fitted := $banner.Resize "1200x" }}
+{{- $pad := div (sub 630 $fitted.Height) 2 }}
+{{- $padded := $fitted.Filter (images.Padding $pad 0 (sub (sub 630 $fitted.Height) $pad) 0 "#0e1524") }}
+{{- return $padded.Process "jpg q85" }}

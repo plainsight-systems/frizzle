@@ -1,0 +1,49 @@
+# Axis W (site): the project site's identity and what Hugo reads.
+#
+# Contract
+#   - The site is three pages, Home, About and the 404 page, with the
+#     sitemap and robots.txt Hugo writes; no sections, taxonomies or feeds
+#     (nothing is written to list yet).
+#   - baseURL is the production address; scripts/site.py serve gives Hugo
+#     its loopback address instead, and site.py build --base-url another.
+#   - The mounts read files where they live, never copies: the app's fonts
+#     and the README banner (both also used by the app and README), and the
+#     app as `npm run build` left it in app/dist/, served at /app/.
+#     Declaring a mount for a component replaces Hugo's default for it, so
+#     content, layouts and assets are mounted by name as well; static has
+#     only the mounts here (web/ has no static/ of its own).
+baseURL = 'https://frizzle.plainsight-systems.com/'
+title = 'Frizzle'
+languageCode = 'en-us'
+timeZone = 'UTC'
+# Processed images outside the tree (scripts/site.py).
+resourceDir = '../.cache/site/resources'
+disableKinds = ['taxonomy', 'term', 'RSS', 'section']
+enableRobotsTXT = true
+
+[params]
+description = 'Run a language model in your browser, reach inside any of its layers, pin neurons to values of your choosing, and read the reply it writes instead.'
+repository = 'https://github.com/plainsight-systems/frizzle'
+owner = 'Plainsight Systems LLC'
+
+[module]
+[[module.mounts]]
+source = 'content'
+target = 'content'
+[[module.mounts]]
+source = 'layouts'
+target = 'layouts'
+[[module.mounts]]
+source = 'assets'
+target = 'assets'
+[[module.mounts]]
+source = '../docs/assets'
+target = 'assets/banner'
+includeFiles = 'frizzle-readme.png'
+[[module.mounts]]
+source = '../app/src/theme/fonts'
+target = 'static/fonts'
+includeFiles = ['*.woff2', 'LICENSE.txt']
+[[module.mounts]]
+source = '../app/dist'
+target = 'static/app'

@@ -131,11 +131,12 @@ Two Vite entries, the page and the worker. `worker/delivery/` reads
 | Path | Axis | What it holds |
 | --- | --- | --- |
 | `CMakeLists.txt`, `CMakePresets.json`, `cmake/` | U | Native and browser presets, shader embedding, the Dawn pin |
-| `app/package.json`, lockfile, Vite config | U | Exact npm versions |
+| `app/package.json`, lockfile, Vite config | U | Exact npm versions; the app's relative base, so the site can serve it at `app/` |
+| `web/` | W | The project site in Hugo: configuration and mounts, layouts, content, stylesheet ([web/README.md](../../web/README.md)) |
 | `tools/frizzle/` | V | The native tool: the reply to a prompt, and the edited reply beside it |
 | `tools/reference_logits/` | V | Makes llama.cpp's logits, the frozen reference, again; its own build against llama.cpp |
-| `scripts/` | U, V | Python: checks, fetching Dawn and the pinned model, the mechanical port, the test fixtures |
-| `tests/integration/<scenario>/` | V | One directory per scenario: `reference-logits`, `replay` ([inventory](../../tests/README.md)) |
+| `scripts/` | U, V | Python: checks, building and serving the site, fetching Dawn and the pinned model, the mechanical port, the test fixtures |
+| `tests/integration/<scenario>/` | V | One directory per scenario: `reference-logits`, `replay`, `site` ([inventory](../../tests/README.md)) |
 | `tests/contracts/<suite>/` | V | One per suite in the inventory |
 | `tests/fixtures/` | V | Small inputs and frozen references |
 | `tests/support/` | V | What the tests share: reading files, driving the GPU, doctest's main |

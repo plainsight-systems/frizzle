@@ -1,0 +1,41 @@
+{{- /*
+Axis W (site): Home, after the concept (docs/design/concepts/transition.html):
+the banner on navy under the masthead, then the eyebrow, "Frizzle", the
+page's lede (params.lede) and its note with the way into the app, then the
+page's own text in the reading column.
+
+Contract
+  - The banner: the README's, at 640, 1280 and 2171 pixels wide as WebP in
+    one srcset, the 1280 the fallback, with its width, height and alt text
+    (partials/banner-alt.html), so the page does not shift as it loads.
+  - "Open Frizzle" links the app (app/).
+*/ -}}
+{{ define "main" }}
+{{- $banner := resources.Get "banner/frizzle-readme.png" }}
+{{- $small := $banner.Resize "640x webp q82" }}
+{{- $medium := $banner.Resize "1280x webp q82" }}
+{{- $large := $banner.Resize (printf "%dx webp q82" $banner.Width) }}
+<div class="hero">
+  <img src="{{ $medium.RelPermalink }}"
+       srcset="{{ $small.RelPermalink }} {{ $small.Width }}w, {{ $medium.RelPermalink }} {{ $medium.Width }}w, {{ $large.RelPermalink }} {{ $large.Width }}w"
+       sizes="(min-width: 1260px) 1260px, 100vw"
+       width="{{ $medium.Width }}" height="{{ $medium.Height }}"
+       alt="{{ partial "banner-alt.html" . }}">
+</div>
+<div class="wrap">
+  <div class="intro">
+    <div>
+      <p class="eyebrow">Plainsight Systems · tech demo</p>
+      <h1>Frizzle</h1>
+      <p class="lede">{{ .Params.lede }}</p>
+    </div>
+    <div class="note">
+      <p>{{ .Params.note }}</p>
+      <a class="try" href="{{ "app/" | relURL }}">Open Frizzle</a>
+    </div>
+  </div>
+</div>
+<article class="article">
+{{ .Content }}
+</article>
+{{ end }}

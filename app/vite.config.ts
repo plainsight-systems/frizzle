@@ -1,7 +1,8 @@
 // Axis U: the app's build. Two entries, the page (index.html) and the
 // engine's worker (src/worker/worker.ts, which the page starts), bundled as
-// ES modules. The site's base path is slice 6's. React's plugin compiles
-// JSX and gives the dev server fast refresh.
+// ES modules, with a relative base ("./"), so the built app works wherever
+// it is served: the site serves it at app/ (web/hugo.toml), under any base
+// path. React's plugin compiles JSX and gives the dev server fast refresh.
 //
 // "@frizzle/engine" is the engine's browser module, built by CMake's
 // wasm-release preset into build/wasm-release/web/ (frizzle.mjs and its
@@ -16,6 +17,7 @@ import { defineConfig } from "vite";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 export default defineConfig({
+  base: "./",
   plugins: [react()],
   resolve: {
     alias: {

@@ -1,4 +1,25 @@
 # web
 
-The project site, built with Hugo in the Plainsight family shell. It hosts the
-built app from `../app/`. Not scaffolded yet.
+The project site, in Hugo, in the Plainsight family shell (the concepts in
+`../docs/design/concepts/themes.html` and `transition.html`). It hosts the
+built app from `../app/` at `app/`.
+
+```sh
+python3 scripts/site.py build   # from the repository root
+python3 scripts/site.py serve
+```
+
+[scripts/README.md](../scripts/README.md#the-site) says what each does and
+what they need.
+
+- `hugo.toml`: the address, the site's description, and the mounts: the
+  app's fonts (`../app/src/theme/fonts/`), the README banner
+  (`../docs/assets/`) and the built app (`../app/dist/`), read where they
+  live, never copied.
+- `content/`: Home (`_index.md`) and About.
+- `layouts/`: the shell (`_default/baseof.html`), Home, the reading page,
+  the 404 page, and the share image made from the banner.
+- `assets/site.css`: the site's look.
+
+Everything under `content/`, `layouts/` and `assets/` is public. The site
+has no client-side script of its own, no analytics and no cookies.

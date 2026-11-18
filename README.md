@@ -12,7 +12,8 @@ have written.
 The model is Gemma 3 1B, running entirely on your device through WebGPU, with
 an engine in C++ compiled to WebAssembly. Nothing runs on a server.
 
-**Status:** working, run locally; not yet hosted. The engine runs Gemma 3 1B
+**Status:** working, run locally; the site that will host it builds
+locally and is not yet published. The engine runs Gemma 3 1B
 in the browser through WebGPU. The app writes a reply, opens a workbench of
 every layer's MLP neurons, pins the ones you choose, and writes the steered
 reply beside it from the same seed, steering from any word of the reply.
@@ -36,7 +37,7 @@ under Plainsight Systems LLC.
 | --- | --- |
 | `src/` | The C++ engine, compiled to WebAssembly for the browser and natively for tests |
 | `app/` | The interface: React, react-three-fiber, TypeScript and Vite |
-| `web/` | The project site, which will host the app (not yet built) |
+| `web/` | The project site in Hugo, hosting the built app at `app/` |
 | `config/model.json` | The one pinned model file |
 | `tests/` | The tests, and the inventory of what each one guards |
 | `tools/`, `scripts/` | Reference and fixture generators; checks and pinned tooling |

@@ -20,6 +20,8 @@ SEPARATE_BUILDS = ('tools/reference_logits',)
 BROWSER_ONLY = ('src/wasm',)
 # The container the browser build runs in (CMakePresets.json, wasm-release).
 EMSDK = 'emscripten/emsdk:6.0.8'
+# The site's generator (web/), extended for its image processing.
+HUGO_VERSION = '0.154.2'
 
 
 def find_tool(name):
@@ -58,3 +60,14 @@ def format_sources(fix=False):
     flags = ['-i'] if fix else ['--dry-run', '--Werror']
     subprocess.run([find_tool('clang-format'), '--style=file', *flags, *map(str, files)], cwd=ROOT, check=True)
     print(f'Google formatting: {len(files)} files {"formatted" if fix else "clean"}; LLVM {LLVM_VERSION}', flush=True)
+
+
+def find_hugo():
+    """Hugo at HUGO_VERSION, extended: HUGO selects it, else PATH. Never installs or substitutes."""
+    binary = shutil.which(os.environ.get('HUGO') or 'hugo')
+    if binary:
+        result = subprocess.run([binary, 'version'], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if result.returncode == 0 and re.search(r'\bv' + re.escape(HUGO_VERSION) + r'\+extended\b', result.stdout):
+            return binary
+    raise ValueError(f'Hugo {HUGO_VERSION} extended is required; select it with HUGO. '
+                     'No tool was installed or substituted.')

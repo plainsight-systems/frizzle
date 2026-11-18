@@ -1,0 +1,269 @@
+/* Axis W (site): the site's look, the family shell, direction A of
+ * docs/design/concepts/themes.html and the site side of transition.html.
+ *
+ * Contract
+ *   - Colours, as tokens:
+ *       --ivory  #fafaf5  the reading page
+ *       --ink    #222826  text on ivory
+ *       --muted  #5b6059  eyebrows and the secondary on ivory
+ *       --rule   #d4d0ca  lines on ivory
+ *       --link   #79551b  links on ivory (copper)
+ *       --night  #0e1524  masthead, banner and footer
+ *       --cream  #f1ebdc  text on night
+ *       --brass  #d4ad5a  the current page and hover on night
+ *     The masthead's navy is the share image's padding
+ *     (layouts/partials/share-image.html).
+ *   - Type: IBM Plex Serif for text, Plex Mono for the masthead, eyebrows
+ *     and the button, from fonts/ beside this sheet at the site's root (the
+ *     app's files, mounted by hugo.toml), so a base with a path works.
+ *   - Layout: masthead and content 1180px at most with a 28px gutter
+ *     (16px under 600px); reading text starts at that same left edge, its
+ *     lines 664px at most; Home's intro two columns, one under 820px. No horizontal scroll at 320px.
+ *   - Contrast: --ink, --muted and --link on --ivory, and --cream and
+ *     --brass on --night, meet WCAG AA for body text (4.5:1).
+ *   - Focus is visible on every link: a brass outline on night, copper on
+ *     ivory.
+ *   - Light only: the site's pages are ivory by the family's design; the
+ *     app is the night.
+ */
+
+@font-face {
+  font-family: "Plex Serif";
+  src: url("fonts/IBMPlexSerif-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plex Serif";
+  src: url("fonts/IBMPlexSerif-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --ivory: #fafaf5;
+  --ink: #222826;
+  --muted: #5b6059;
+  --rule: #d4d0ca;
+  --link: #79551b;
+  --night: #0e1524;
+  --cream: #f1ebdc;
+  --brass: #d4ad5a;
+  --serif: "Plex Serif", Georgia, serif;
+  --mono: "Plex Mono", ui-monospace, monospace;
+  --gutter: 28px;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  color-scheme: light;
+}
+body {
+  margin: 0;
+  background: var(--ivory);
+  color: var(--ink);
+  font: 18px/1.75 var(--serif);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+main {
+  flex: 1;
+}
+a {
+  color: var(--link);
+  text-underline-offset: 0.2em;
+}
+a:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 3px;
+}
+
+/* The masthead */
+.masthead {
+  background: var(--night);
+  color: var(--cream);
+}
+.mast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 28px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 12px var(--gutter);
+  min-height: 72px;
+}
+.brand {
+  color: inherit;
+  text-decoration: none;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+.mast nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 28px;
+  font: 12px var(--mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+.mast nav a {
+  color: inherit;
+  text-decoration: none;
+  padding: 8px 0;
+}
+.mast nav a[aria-current="page"] {
+  text-decoration: underline;
+  text-underline-offset: 0.5em;
+  text-decoration-color: var(--brass);
+}
+.mast a:hover {
+  color: var(--brass);
+}
+.masthead a:focus-visible,
+.footer a:focus-visible {
+  outline-color: var(--brass);
+}
+
+/* Home */
+.hero {
+  background: var(--night);
+}
+.hero img {
+  display: block;
+  width: 100%;
+  max-width: 1260px;
+  height: auto;
+  margin: 0 auto;
+}
+.wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+.intro {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 40px;
+  padding: 44px 0 40px;
+  border-bottom: 1px solid var(--rule);
+}
+.eyebrow {
+  margin: 0;
+  font: 12px/1.7 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.intro h1 {
+  font-size: 84px;
+  font-weight: 500;
+  letter-spacing: -0.06em;
+  line-height: 1;
+  margin: 6px 0 14px;
+}
+.lede {
+  font-size: 23px;
+  line-height: 1.5;
+  max-width: 30ch;
+  margin: 0;
+}
+.note {
+  align-self: end;
+  font-size: 17px;
+  line-height: 1.7;
+}
+.note p {
+  margin: 0 0 16px;
+}
+.try {
+  display: inline-block;
+  font: 13px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: var(--night);
+  color: var(--cream);
+  padding: 12px 18px;
+}
+.try:hover {
+  color: var(--brass);
+}
+
+/* Reading pages */
+.article {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 40px var(--gutter) 64px;
+}
+.article > * {
+  max-width: 664px;
+}
+.article h1 {
+  font-size: 48px;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+  margin: 0 0 24px;
+}
+.article h2 {
+  font-size: 30px;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin: 40px 0 14px;
+}
+.article p,
+.article ul {
+  margin: 0 0 18px;
+}
+.article li {
+  margin-bottom: 8px;
+}
+
+/* The footer */
+.footer {
+  background: var(--night);
+  color: var(--cream);
+  font: 13px/1.7 var(--mono);
+  padding: 28px 0;
+}
+.footer p {
+  margin: 0 0 6px;
+}
+.footer a {
+  color: var(--brass);
+}
+
+@media (max-width: 820px) {
+  .intro {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .intro h1 {
+    font-size: 60px;
+  }
+}
+@media (max-width: 600px) {
+  :root {
+    --gutter: 16px;
+  }
+  body {
+    font-size: 17px;
+  }
+  .article h1 {
+    font-size: 38px;
+  }
+}

@@ -19,7 +19,10 @@ python3 scripts/check.py all
   do/while in its assertion macros (`tests/.clang-tidy`).
 - `test` builds and runs the contract suites (`frizzle_tests`) through CTest.
   The llama.cpp oracle is not part of it ([tests](../tests/README.md)).
-- `all` runs all three. The site check joins it when the site exists.
+- `site` runs the Site build scenario (`tests/integration/site/`): it builds
+  the engine in the pinned container, the app and the site, and checks the
+  output. It needs Docker, Node with the app's packages, and Hugo.
+- `all` runs all of them, in that order.
 
 ## Pinned tools
 
@@ -82,6 +85,24 @@ docker run --rm -v "$PWD":/src -w /src emscripten/emsdk:6.0.8 emcmake cmake --pr
 checks its SHA-256 and unpacks it into ignored `.cache/dawn/`; an archive
 that does not match is not unpacked. CMake refuses any native compiler but
 LLVM clang 21.1.8 and any Emscripten but 6.0.8, rather than substituting one.
+
+## The site
+
+```sh
+python3 scripts/site.py build
+python3 scripts/site.py serve
+```
+
+`site.py build` builds the engine's module (wasm-release, in the pinned
+container), the app (`npm run build`) and the site (Hugo over `web/`, which
+mounts `app/dist/` at `app/`), into ignored `.cache/site/public/`; the last
+good site is replaced only once Hugo succeeds. `--base-url` replaces the
+production address, `--out` writes elsewhere. `serve` runs Hugo's server at
+`http://localhost:1313/` (`--port`), listening on loopback only, with the
+app as last built, and refuses when
+there is none. Hugo is pinned to **0.154.2 extended** in `tooling.py`; `HUGO`
+selects an executable, and a wrong version fails rather than being
+substituted.
 
 ## The native tool
 

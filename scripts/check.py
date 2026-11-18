@@ -2,9 +2,10 @@
 """One check entry point. Installs nothing, downloads nothing.
 
 Adapted from Bullet Witch. `format` (clang-format, and Prettier for the app),
-`boundaries` (the import rules of docs/architecture/file-mapping.md), `tidy`
-and `test` (the routine suite, tests/README.md, and the app's type check)
-work today; the site check joins `all` when the site exists.
+`boundaries` (the import rules of docs/architecture/file-mapping.md), `tidy`,
+`test` (the routine suite, tests/README.md, and the app's type check) and
+`site` (the Site build scenario, which builds the engine, the app and the
+site: tests/integration/site/).
 The llama.cpp oracle is not a check here: it runs when the inference path
 changes (AGENTS.md, Checks).
 """
@@ -22,7 +23,7 @@ import tidy
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('format', 'boundaries', 'tidy', 'test', 'all'))
+    parser.add_argument('action', choices=('format', 'boundaries', 'tidy', 'test', 'site', 'all'))
     parser.add_argument('--fix', action='store_true', help='format action only: apply Google formatting and Prettier')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/native-debug',
                         help='native build whose compile_commands.json clang-tidy reads, and whose tests run')
@@ -47,6 +48,9 @@ def main():
         subprocess.run(['ctest', '--test-dir', str(build), '--output-on-failure'], check=True)
         app.typecheck()
         app.suites()
+    if args.action in ('site', 'all'):
+        subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', str(ROOT / 'tests/integration/site'),
+                        '-p', 'test_*.py', '-v'], check=True)
 
 
 if __name__ == '__main__':
