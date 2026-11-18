@@ -232,6 +232,45 @@ a:focus-visible {
 .article li {
   margin-bottom: 8px;
 }
+.article strong {
+  font-weight: 500;
+}
+.article pre {
+  padding: 12px 16px;
+  overflow-x: auto;
+  background: var(--night);
+  color: var(--cream);
+  font: 15px/1.5 var(--mono);
+}
+.article code {
+  font: 0.86em var(--mono);
+}
+.article pre code {
+  font: inherit;
+}
+.article blockquote {
+  margin: 0 0 18px;
+  padding-left: 18px;
+  border-left: 3px solid var(--brass);
+}
+/* A screenshot may run wider than the text, up to its own width. */
+.article > .shot {
+  max-width: 800px;
+  margin: 24px 0 28px;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--night);
+}
+.shot figcaption {
+  max-width: 664px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+}
 
 /* The footer */
 .footer {

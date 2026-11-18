@@ -3,15 +3,15 @@
 Contract locked (scripts/site.py, web/): from this checkout, `site.py build`
 builds the engine, the app and the site, and the site it writes, under a
 base URL with a path (https://example.test/frizzle/), holds:
-  - exactly the pages Home, About and the 404 page, beside the app's own
-    index at app/;
+  - exactly the pages Home, the tutorial, About and the 404 page, beside
+    the app's own index at app/;
   - nothing it names missing: every link, image, srcset entry, stylesheet
-    and script of those four pages, every url() in the stylesheets, and
+    and script of those pages and the app's, every url() in the stylesheets, and
     every `new URL("…", import.meta.url)` in the app's scripts (its worker,
     the engine's module), resolves to a file inside the output, under the
     base's path;
   - the engine's module the wasm-release build made, the same bytes, once;
-  - on each of the three pages, a title, a description, the canonical URL
+  - on each of those pages, a title, a description, the canonical URL
     of the page itself, and a share image that is a 1200 × 630 JPEG inside
     the output, with its alt text.
 
@@ -45,7 +45,7 @@ site_build = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(site_build)
 
 BASE = 'https://example.test/frizzle/'
-PAGES = {'index.html', 'about/index.html', '404.html'}
+PAGES = {'index.html', 'tutorial/index.html', 'about/index.html', '404.html'}
 
 
 class _References(HTMLParser):

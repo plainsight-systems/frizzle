@@ -18,6 +18,8 @@ model first wrote. Every difference between the two is yours.
 For a closer look, the Deck lays out all 6,912 neurons of every layer as
 cards you can flip through.
 
+New here? [Take the ride](tutorial/): one question, from Paris to Berlin.
+
 ## What it needs
 
 - A browser with WebGPU. Frizzle is built and tried in Chrome on a Mac;

@@ -1,0 +1,11 @@
+{{- /*
+Axis W (site): a screenshot in a written page: `src` under assets/, its `alt`
+text, and the inner text as its caption. A missing image stops the build.
+*/ -}}
+{{- $path := .Get "src" }}
+{{- $image := resources.Get $path }}
+{{- if not $image }}{{ errorf "shot: no image %q (%s)" $path .Position }}{{ end -}}
+<figure class="shot">
+  <img src="{{ $image.RelPermalink }}" width="{{ $image.Width }}" height="{{ $image.Height }}" alt="{{ .Get "alt" }}" loading="lazy">
+  <figcaption>{{ .Inner | markdownify }}</figcaption>
+</figure>

@@ -1,7 +1,7 @@
 # Axis W (site): the project site's identity and what Hugo reads.
 #
 # Contract
-#   - The site is three pages, Home, About and the 404 page, with the
+#   - The site is four pages, Home, the Tutorial, About and the 404 page, with the
 #     sitemap and robots.txt Hugo writes; no sections, taxonomies or feeds
 #     (nothing is written to list yet).
 #   - baseURL is the production address; scripts/site.py serve gives Hugo

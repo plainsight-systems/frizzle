@@ -16,9 +16,12 @@ what they need.
   app's fonts (`../app/src/theme/fonts/`), the README banner
   (`../docs/assets/`) and the built app (`../app/dist/`), read where they
   live, never copied.
-- `content/`: Home (`_index.md`) and About.
+- `content/`: Home (`_index.md`), the tutorial and About.
+- `assets/tutorial/`: the tutorial's screenshots, taken from the app on the
+  pinned model; retake them when the Ride or Deck changes how they look.
 - `layouts/`: the shell (`_default/baseof.html`), Home, the reading page,
-  the 404 page, and the share image made from the banner.
+  the 404 page, the share image made from the banner, and the `shot`
+  shortcode for a screenshot with its caption.
 - `assets/site.css`: the site's look.
 
 Everything under `content/`, `layouts/` and `assets/` is public. The site
