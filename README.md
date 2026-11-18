@@ -12,11 +12,12 @@ have written.
 The model is Gemma 3 1B, running entirely on your device through WebGPU, with
 an engine in C++ compiled to WebAssembly. Nothing runs on a server.
 
-**Status:** working, run locally; the site that will host it builds
-locally and is not yet published. The engine runs Gemma 3 1B
-in the browser through WebGPU. The app writes a reply, opens a workbench of
-every layer's MLP neurons, pins the ones you choose, and writes the steered
-reply beside it from the same seed, steering from any word of the reply.
+**Status:** live at <https://frizzle.plainsight-systems.com/>, with a
+[tutorial](https://frizzle.plainsight-systems.com/tutorial/). The engine runs
+Gemma 3 1B in the browser through WebGPU. The app writes a reply and lets you
+ride through its layers from any word, watching the next word form. Pin the
+neurons you choose, on the ride or the deck, and it writes the steered reply
+beside the original from the same seed.
 
 ## Why Frizzle
 
