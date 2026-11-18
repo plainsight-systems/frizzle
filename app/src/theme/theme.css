@@ -11,6 +11,8 @@
  *       --ink      #eee6d3  text
  *       --muted    #9aa0a8  labels and secondary text
  *       --accent   #e2b866  focus, the chosen option
+ *       --mast, --mast-ink, --mast-accent  #0e1524, #f1ebdc, #d4ad5a  the
+ *                  family masthead, the site's colours
  *       --edit     #ffcf73  what an edit changed: the steered reply, a pin
  *       --cool     #9fc0e8  negative values in text
  *       --serif    "Plex Serif", Georgia, serif
@@ -85,6 +87,9 @@
   --ink: #eee6d3;
   --muted: #9aa0a8;
   --accent: #e2b866;
+  --mast: #0e1524;
+  --mast-ink: #f1ebdc;
+  --mast-accent: #d4ad5a;
   --edit: #ffcf73;
   --cool: #9fc0e8;
   --serif: "Plex Serif", Georgia, serif;
@@ -201,19 +206,70 @@ fieldset > div {
 }
 
 /* The frame */
-.masthead {
+/* The family masthead (index.html): the same size and place as the site's
+   (web/assets/site.css), so it stays still through the hand-over. */
+.family-masthead {
+  background: var(--mast);
+  color: var(--mast-ink);
+  view-transition-name: masthead;
+}
+.family-mast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 28px;
+  max-width: 1180px;
+  min-height: 72px;
+  margin: 0 auto;
+  padding: 12px 28px;
+}
+.family-brand {
+  color: inherit;
+  font: 500 28px/1 var(--serif);
+  letter-spacing: -0.05em;
+  text-decoration: none;
+}
+.family-mast nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 28px;
+  font: 12px var(--mono);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+.family-mast nav a {
+  padding: 8px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.family-mast nav a[aria-current="page"] {
+  text-decoration: underline;
+  text-decoration-color: var(--mast-accent);
+  text-underline-offset: 0.5em;
+}
+.family-mast a:hover {
+  color: var(--mast-accent);
+}
+.family-mast a:focus-visible {
+  outline: 2px solid var(--mast-accent);
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .family-mast {
+    padding-inline: 16px;
+  }
+}
+
+.status-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 1.5rem;
-  padding: 10px 24px;
+  padding: 8px 24px;
   border-bottom: 1px solid var(--rule);
   font: 12px var(--mono);
   color: var(--muted);
-}
-.wordmark {
-  font: 500 19px var(--serif);
-  color: var(--ink);
-  margin-right: auto;
 }
 .pill::before {
   content: "●";
@@ -225,7 +281,7 @@ fieldset > div {
   color: var(--ink);
   margin-left: 4px;
 }
-.masthead progress {
+.status-bar progress {
   width: 120px;
   height: 4px;
   margin-left: 10px;

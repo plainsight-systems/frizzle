@@ -25,6 +25,11 @@
  *     ivory.
  *   - Light only: the site's pages are ivory by the family's design; the
  *     app is the night.
+ *   - Moving between pages is a cross-document view transition unless less
+ *     motion is asked for: the masthead (also the app's) stays put and the
+ *     rest crossfades. The banner has a name of its own for the app's
+ *     hand-over, whose animation is in the app's index.html, the page being
+ *     entered.
  */
 
 @font-face {
@@ -60,6 +65,12 @@
   --gutter: 28px;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -91,6 +102,7 @@ a:focus-visible {
 .masthead {
   background: var(--night);
   color: var(--cream);
+  view-transition-name: masthead;
 }
 .mast {
   display: flex;
@@ -142,6 +154,7 @@ a:focus-visible {
   background: var(--night);
 }
 .hero img {
+  view-transition-name: banner;
   display: block;
   width: 100%;
   max-width: 1260px;

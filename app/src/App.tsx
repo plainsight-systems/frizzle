@@ -4,8 +4,9 @@
 //
 // Contract
 //   - App({session}): renders, on night glass (theme/), for that session:
-//       header   "Frizzle"; status "WebGPU" and status "Model" (their words
-//                below), the model's with a progress bar while it loads.
+//       header   status "WebGPU" and status "Model" (their words below),
+//                the model's with a progress bar while it loads, under the
+//                family masthead, which is the page's own (index.html).
 //                Load model itself is on the prompt (views/prompt/), where
 //                the person starts.
 //       page     the conversation (views/prompt/): the prompt, then the
@@ -14,7 +15,8 @@
 //                window, opened from the prompt's "Open neurons" or a
 //                reply's "Ride" button, at the branch point, on the Ride
 //                or the layer deck.
-//                While it is open the page behind it is inert. Close or Esc
+//                While it is open the page behind it, the family masthead
+//                included, is inert. Close or Esc
 //                closes it; its Run runs and closes it, so the replies show
 //                as they stream; the Ride's steer runs and leaves it open.
 //   - status "WebGPU": "Waiting for the GPU" | "Ready: {adapter}" |
@@ -42,7 +44,7 @@
 //     side by side each was too narrow. The workbench is drawn only while
 //     open, so the GPU does not draw the deck behind the replies.
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import pin from "../../config/model.json" with { type: "json" };
 import type { Edit } from "./engine/edits.ts";
@@ -78,6 +80,10 @@ export function App({ session }: { readonly session: Session }) {
   const [view, setView] = useState<View>("ride");
   const [front, setFront] = useState(0);
   const [selection, setSelection] = useState<Selection | null>(null);
+  // The masthead is index.html's, outside React's tree.
+  useEffect(() => {
+    document.querySelector(".family-masthead")?.toggleAttribute("inert", open);
+  }, [open]);
   const { device, model } = state;
   const canLoad =
     device.kind === "ready" &&
@@ -103,8 +109,7 @@ export function App({ session }: { readonly session: Session }) {
   return (
     <div className="frame">
       <div className="page" inert={open}>
-        <header className="masthead">
-          <b className="wordmark">Frizzle</b>
+        <header className="status-bar">
           <span className="pill">
             WebGPU <output aria-label="WebGPU">{deviceText(device)}</output>
           </span>

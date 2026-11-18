@@ -11,6 +11,9 @@ base URL with a path (https://example.test/frizzle/), holds:
     the engine's module), resolves to a file inside the output, under the
     base's path;
   - the engine's module the wasm-release build made, the same bytes, once;
+  - the hand-over into the app in place: the site's stylesheet and the app's
+    index opt in to view transitions, both name the masthead, the app's index
+    holds that masthead and animates the banner the site names;
   - on each of those pages, a title, a description, the canonical URL
     of the page itself, and a share image that is a 1200 × 630 JPEG inside
     the output, with its alt text.
@@ -161,6 +164,18 @@ class SiteBuild(unittest.TestCase):
         self.assertEqual(len(modules), 1, modules)
         built = ROOT / 'build' / 'wasm-release' / 'web' / 'frizzle.wasm'
         self.assertEqual(modules[0].read_bytes(), built.read_bytes())
+
+    def test_the_hand_over_into_the_app_is_in_place(self):
+        site = ''.join(p.read_text() for p in self.out.glob('*.css'))
+        app = ''.join(p.read_text() for p in (self.out / 'app').rglob('*.css'))
+        index = (self.out / 'app' / 'index.html').read_text()
+        for text in (site, index):
+            self.assertRegex(text, r'@view-transition\s*\{\s*navigation:\s*auto')
+        for sheet in (site, app):
+            self.assertRegex(sheet, r'view-transition-name:\s*masthead')
+        self.assertRegex(site, r'view-transition-name:\s*banner')
+        self.assertIn('::view-transition-old(banner)', index)
+        self.assertIn('family-masthead', index)
 
     def test_every_page_carries_its_metadata_and_share_image(self):
         for page in sorted(PAGES):

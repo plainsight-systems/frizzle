@@ -27,5 +27,10 @@ what they need.
 `.github/workflows/site.yml` builds and checks the site on every pull request
 and publishes it to GitHub Pages from `main`, at the address in `hugo.toml`.
 
+Going from Home into the app is a view transition: the masthead stays, the
+banner zooms into its lit pane, and the ivory gives way to the app's night.
+The site's stylesheet names the parts; the animation is in the app's
+(`../app/index.html`), since the page being entered styles it.
+
 Everything under `content/`, `layouts/` and `assets/` is public. The site
 has no client-side script of its own, no analytics and no cookies.
